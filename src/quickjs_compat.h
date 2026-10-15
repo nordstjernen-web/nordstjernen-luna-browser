@@ -22,6 +22,13 @@ JSClassID ns_new_class_id(JSClassID *pclass_id);
 JSContext *ns_quickjs_new_context(JSRuntime *rt);
 #define JS_NewContext(rt) ns_quickjs_new_context(rt)
 
+#define ns_js_set_interrupt_handler(rt, ctx_cb, rt_cb, opaque)          \
+    JS_SetInterruptHandler((rt),                                       \
+        _Generic((JSInterruptHandler *)0,                              \
+                 int (*)(JSContext *, void *): (ctx_cb),               \
+                 default: (rt_cb)),                                    \
+        (opaque))
+
 #ifdef NS_QUICKJS_ORIGINAL
 
 #define NS_QUICKJS_ENGINE_NAME "QuickJS"

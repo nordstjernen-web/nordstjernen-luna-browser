@@ -183,7 +183,7 @@ browser engine (no Gecko, WebKit, or Blink). It is the GPL edition of the
 | Component | Role |
 |-----------|------|
 | [lexbor](https://github.com/lexbor/lexbor) v3.0.1 | HTML5 → DOM parser and the WHATWG URL module |
-| [quickjs-ng](https://github.com/quickjs-ng/quickjs) v0.17.0 | JavaScript engine — no JIT |
+| [quickjs-ng](https://github.com/quickjs-ng/quickjs) 0.17.0+ (master `9b06171`) | JavaScript engine — no JIT |
 | [QuickJS](https://github.com/bellard/quickjs) 2026-06-04 | The original JavaScript engine, used instead of quickjs-ng with `-Djs_engine=quickjs` |
 | [ns-pango](https://github.com/nordstjernen-web/ns-pango) | Text itemization, shaping and line breaking — a Pango fork with a cross-layout shaping cache |
 

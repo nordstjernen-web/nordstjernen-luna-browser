@@ -47,6 +47,45 @@ Significant changes in each release:
     inside a frame from another site was treated as same-origin with the
     top page and could read its DOM. A frame's embedder is now the
     document that contains its element.
+* JavaScript passes every test262 test that quickjs-ng's own
+  `test262.conf` enables: 0 failures in 82,220 runs, against 49 on
+  v0.17.0. quickjs-ng moves from the v0.17.0 release to master
+  `9b06171`, the newest code (no newer release exists), which already
+  fixes the evaluation order of computed-property and destructuring
+  assignments, `Reflect.set` with an undefined receiver and template
+  literal substitution. A new wrap patch,
+  `quickjs-ng-test262.patch`, fixes the rest:
+  - `f() = 1`, `f()++` and `for (f() in o)` in sloppy code throw a
+    ReferenceError when they run, as browsers do, instead of failing to
+    parse; a tagged template there is still a SyntaxError.
+  - `a + [] = 0` and `#x in {} = 0` are SyntaxErrors. A `{…}` or `[…]`
+    followed by `=` was taken as a destructuring assignment anywhere,
+    even as the right operand of another operator.
+  - A computed object-literal key is converted to a property key before
+    its value is evaluated.
+  - `get` or `set` followed by a generator on the next line, and
+    `static` followed by `=` or `;` on the next line, are class fields.
+  - Inside `with`, reading and writing a binding asks the object again
+    whether it still has the property, and `var` destructuring resolves
+    the target before it reads the source property.
+  - `"NaN"` is a canonical numeric string, so assigning to it through a
+    typed array on the prototype chain defines nothing.
+  - A sync iterator wrapped for `for await` or `yield*` is closed when
+    the value it yields is a rejected promise, and a `for await` loop
+    no longer calls `return()` when `next()` itself throws or rejects.
+  - A module that re-exports a namespace it imported, through `export *`
+    from two modules, is no longer ambiguous.
+  - A module-level `using` declaration can be exported.
+  - A module without top-level await that finished as part of an async
+    graph is marked done, so a later `import()` of a module that depends
+    on it no longer waits forever; an async module rejects its own
+    promise before its importers'.
+  The interrupt callback now receives the context rather than the
+  runtime, the cached bytecode format version moves on, and a wasm
+  import that fails without an exception of its own throws a
+  `WebAssembly.RuntimeError`, since quickjs-ng now makes `InternalError`
+  uncatchable. Bellard's QuickJS stays on its 2026-06-04 release: its
+  newer commits are unreleased.
 * Google Maps loads its full interface: the place card, sign-in button,
   layer switcher, zoom and location controls, Street View bar, footer and
   scale. Two engine gaps stopped its start-up half way and showed "an

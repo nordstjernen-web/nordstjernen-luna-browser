@@ -1165,7 +1165,8 @@ ns_wasm_native_fail(JSContext *ctx, ns_wasm_instance *wi,
                     wasm_module_inst_t inst, const char *msg)
 {
     if (!JS_HasException(ctx))
-        JS_ThrowInternalError(ctx, "%s", msg ? msg : "wasm import failed");
+        ns_wasm_throw_named(ctx, "RuntimeError",
+                            msg ? msg : "wasm import failed");
     JSValue exc = JS_GetException(ctx);
     if (wi && !wi->has_pending) {
         wi->pending_exc = exc;

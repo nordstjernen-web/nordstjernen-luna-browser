@@ -1,5 +1,5 @@
 [wrap-git]
 url = https://github.com/quickjs-ng/quickjs.git
-revision = v0.17.0
+revision = 9b061718955874e648d8c2bf2910a717aac8fa63
 depth = 1
-diff_files = quickjs-ng-windows-link.patch
+diff_files = quickjs-ng-windows-link.patch, quickjs-ng-test262.patch

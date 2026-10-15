@@ -173,17 +173,21 @@ meson compile -C builddir
 
 The JavaScript engine is
 [quickjs-ng](https://github.com/quickjs-ng/quickjs), consumed as an
-**upstream meson subproject** pinned to a release
-(`subprojects/quickjs-ng.wrap`, currently v0.17.0) — no in-tree fork;
-the wrap's one patch (`subprojects/packagefiles/`) only changes how it
-links on Windows. `meson setup` uses a system quickjs-ng when it finds
+**upstream meson subproject** pinned to a commit
+(`subprojects/quickjs-ng.wrap`, currently master `9b06171`, after
+v0.17.0) — no in-tree fork. The wrap carries two patches
+(`subprojects/packagefiles/`): one changes how it links on Windows, and
+`quickjs-ng-test262.patch` fixes the test262 failures upstream still has,
+so the engine passes every test its own `test262.conf` enables. Keep that
+patch small and send its fixes upstream; when the pin moves, drop the
+hunks upstream has taken. `meson setup` uses a system quickjs-ng when it finds
 one, and otherwise fetches it and exposes it as the `libquickjs`
 dependency. The browser includes only the public `<quickjs.h>`. A
 few browser-side entry points that stock quickjs-ng does not expose —
 caller/function realm lookup, in-place ArrayBuffer repointing,
 `JS_EvalThis2` and `JS_ThrowDOMException` — are provided as thin compatibility shims over
 the public API in `src/quickjs_compat.c` (`src/quickjs_compat.h`), so
-the tree carries no patched engine. The shims degrade gracefully
+the browser's own needs patch nothing in the engine. The shims degrade gracefully
 (e.g. realm lookups resolve to the current realm), which suits this
 single-realm, no-JIT edition.
 
