@@ -143,7 +143,7 @@ QuickJS rows below) and ns-pango — and exposes them as the `liblexbor` /
 | Dependency | Pinned to | Resolution |
 |------------|-----------|------------|
 | [lexbor](https://github.com/lexbor/lexbor) — HTML parser and WHATWG URL module | `v3.0.1` | A system lexbor ≥ 3.0.0 is used when `pkg-config` or CMake finds one; otherwise the wrap is cloned and its static library built through meson's CMake module. |
-| [quickjs-ng](https://github.com/quickjs-ng/quickjs) — JavaScript | `v0.17.0` | A system quickjs-ng first, of any version; the wrap as fallback. |
+| [quickjs-ng](https://github.com/quickjs-ng/quickjs) — JavaScript | master commit `9b06171` | A system quickjs-ng first, of any version; the wrap as fallback. |
 | [QuickJS](https://github.com/bellard/quickjs) — JavaScript, with `-Djs_engine=quickjs` | the `2026-06-04` release commit | Always the subproject, built by the meson file in `subprojects/packagefiles/quickjs/`; upstream ships none. See [quickjs.md](quickjs.md). |
 | [ns-pango](https://github.com/nordstjernen-web/ns-pango) — text itemization, shaping, line breaking | commit `a28a7de` | Always the subproject. There is no system copy to find: the fork renames every symbol precisely so it can coexist with the system Pango that GTK loads. |
 

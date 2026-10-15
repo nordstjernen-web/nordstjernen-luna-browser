@@ -537,9 +537,8 @@ ns_js_eval_budget_us(void)
 #define NS_JS_MONITOR_LIMIT_US (60LL * 1000000LL)
 
 static int
-ns_js_interrupt_cb(JSRuntime *rt, void *opaque)
+ns_js_interrupt(void *opaque)
 {
-    (void)rt;
     ns_js *js = opaque;
     if (!js) return 0;
     if (js->halted) return 1;
@@ -556,6 +555,20 @@ ns_js_interrupt_cb(JSRuntime *rt, void *opaque)
     }
     if (js->eval_deadline_us == 0) return 0;
     return now > js->eval_deadline_us ? 1 : 0;
+}
+
+static int
+ns_js_interrupt_ctx_cb(JSContext *ctx, void *opaque)
+{
+    (void)ctx;
+    return ns_js_interrupt(opaque);
+}
+
+static int
+ns_js_interrupt_rt_cb(JSRuntime *rt, void *opaque)
+{
+    (void)rt;
+    return ns_js_interrupt(opaque);
 }
 
 gboolean
@@ -22362,7 +22375,8 @@ ns_worker_js_new(ns_worker_host *host)
     int mb = c ? c->js_memory_cap_mb : 256;
     if (mb <= 0) mb = 256;
     if (mb > 512) mb = 512;
-    JS_SetInterruptHandler(js->rt, ns_js_interrupt_cb, js);
+    ns_js_set_interrupt_handler(js->rt, ns_js_interrupt_ctx_cb,
+                                ns_js_interrupt_rt_cb, js);
     JS_SetMemoryLimit(js->rt, (size_t)mb * 1024 * 1024);
     JS_SetHostPromiseRejectionTracker(js->rt, ns_worker_promise_rejection_tracker, NULL);
     JS_SetMaxStackSize(js->rt, (size_t)5 * 1024 * 1024);
@@ -49031,7 +49045,8 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
         const ns_config *c = ns_config_get();
         int mb = c ? c->js_memory_cap_mb : 2048;
         if (mb <= 0) mb = 2048;
-        JS_SetInterruptHandler(js->rt, ns_js_interrupt_cb, js);
+        ns_js_set_interrupt_handler(js->rt, ns_js_interrupt_ctx_cb,
+                                    ns_js_interrupt_rt_cb, js);
         JS_SetMemoryLimit(js->rt, (size_t)mb * 1024 * 1024);
         JS_SetHostPromiseRejectionTracker(
             js->rt, ns_js_promise_rejection_tracker, NULL);
