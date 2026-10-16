@@ -5583,13 +5583,11 @@
             typeof global.CSSStyleSheet.prototype.replaceSync === 'function')
             return;
 
-        var hostSeq = 0;
         function isIdentChar(c) {
             return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
                    c >= '0' && c <= '9' || c === '_' || c === '-';
         }
-        function rewriteHostTokens(css, id) {
-            var marker = '[data-nd-host="' + id + '"]';
+        function rewriteHostTokens(css, marker) {
             var out = '';
             for (var i = 0; i < css.length;) {
                 if (css.substr(i, 10).toLowerCase() === '::slotted(') {
@@ -5675,14 +5673,14 @@
             res.push(s.slice(start));
             return res;
         }
-        function scopeSelector(sel, id, marker) {
+        function scopeSelector(sel, marker) {
             sel = sel.replace(/^\s+|\s+$/g, '');
             if (!sel) return '';
             if (sel.indexOf(':host') >= 0 || sel.indexOf('::slotted') >= 0)
-                return rewriteHostTokens(sel, id);
+                return rewriteHostTokens(sel, marker);
             return marker + ' ' + sel;
         }
-        function scopeRuleList(css, start, end, id, marker) {
+        function scopeRuleList(css, start, end, marker) {
             var out = '', i = start;
             while (i < end) {
                 while (i < end && /\s/.test(css[i])) i++;
@@ -5696,7 +5694,7 @@
                     if (term === '{') {
                         var be = skipBlock(css, seg, end);
                         if (/^@(media|supports|container|layer|scope)\b/i.test(prelude))
-                            out += prelude + '{' + scopeRuleList(css, seg + 1, be - 1, id, marker) + '}';
+                            out += prelude + '{' + scopeRuleList(css, seg + 1, be - 1, marker) + '}';
                         else out += css.slice(i, be);
                         i = be;
                     } else { out += prelude; if (term === ';') { out += ';'; i = seg + 1; } else i = seg; }
@@ -5707,7 +5705,7 @@
                 var be2 = skipBlock(css, seg2, end);
                 var parts = splitTopComma(css.slice(i, seg2)), scoped = [];
                 for (var k = 0; k < parts.length; k++) {
-                    var sc = scopeSelector(parts[k], id, marker);
+                    var sc = scopeSelector(parts[k], marker);
                     if (sc) scoped.push(sc);
                 }
                 out += scoped.join(', ') + '{' + css.slice(seg2 + 1, be2 > seg2 ? be2 - 1 : seg2) + '}';
@@ -5715,25 +5713,20 @@
             }
             return out;
         }
-        function scopeCss(css, id) {
-            if (!id) return css;
-            return scopeRuleList(css, 0, css.length, id, '[data-nd-host="' + id + '"]');
+        function scopeCss(css, token) {
+            if (!token) return css;
+            return scopeRuleList(css, 0, css.length,
+                                 '[data-nd-adopt~="' + token + '"]');
         }
-        function hostScopeId(host) {
-            if (!host || typeof host.getAttribute !== 'function') return null;
-            var existing = host.getAttribute('data-nd-host');
-            if (existing) return existing;
-            var id = 'a' + (++hostSeq);
-            try { host.setAttribute('data-nd-host', id); } catch (e) { return null; }
-            return id;
-        }
+
+        var sheetSeq = 0;
 
         function applyText(sheet) {
             var nodes = sheet.__nodes;
             for (var i = 0; i < nodes.length; i++) {
                 try {
                     nodes[i].textContent =
-                        scopeCss(sheet.__cssText || '', nodes[i].__ndScopeId);
+                        scopeCss(sheet.__cssText || '', nodes[i].__ndAdoptToken);
                 } catch (e) {}
             }
         }
@@ -5741,6 +5734,8 @@
         function CSSStyleSheet(options) {
             this.__cssText = '';
             this.__nodes = [];
+            this.__ndToken = 's' + (++sheetSeq);
+            this.__ndShared = null;
             this.__mediaText = (options && options.media) || '';
             this.title = null;
             this.ownerNode = null;
@@ -5774,19 +5769,48 @@
             configurable: true, enumerable: false
         });
 
-        function materialize(target, sheets) {
-            var scopeId = (target === doc) ? null : hostScopeId(target.host);
+        function styleContainer() {
             var container = doc.head || doc.documentElement || doc.body;
+            return container && typeof container.appendChild === 'function'
+                ? container : null;
+        }
+
+        function sharedNode(sheet) {
+            var el = sheet.__ndShared;
+            if (el && el.parentNode) return el;
+            var container = styleContainer();
+            if (!container) return null;
+            el = doc.createElement('style');
+            el.setAttribute('data-adopted', '');
+            el.__ndAdoptToken = sheet.__ndToken;
+            el.textContent = scopeCss(sheet.__cssText || '', sheet.__ndToken);
+            container.appendChild(el);
+            if (sheet.__nodes.indexOf(el) < 0) sheet.__nodes.push(el);
+            sheet.__ndShared = el;
+            return el;
+        }
+
+        function adoptIntoHost(root, sheets) {
+            var tokens = [];
+            for (var i = 0; i < sheets.length; i++) {
+                var s = sheets[i];
+                if (!s || !(s instanceof CSSStyleSheet) || s.disabled) continue;
+                if (sharedNode(s)) tokens.push(s.__ndToken);
+            }
+            if (root.host && typeof global.__ndHostAdopt === 'function')
+                global.__ndHostAdopt(root.host, tokens.join(' '));
+        }
+
+        function materializeDocument(sheets) {
+            var container = styleContainer();
             var live = [];
-            if (!container || typeof container.appendChild !== 'function')
-                return live;
+            if (!container) return live;
             for (var i = 0; i < sheets.length; i++) {
                 var s = sheets[i];
                 if (!s || !(s instanceof CSSStyleSheet) || s.disabled) continue;
                 var el = doc.createElement('style');
                 el.setAttribute('data-adopted', '');
-                el.__ndScopeId = scopeId;
-                el.textContent = scopeCss(s.__cssText || '', scopeId);
+                el.textContent = s.__cssText || '';
                 container.appendChild(el);
                 s.__nodes.push(el);
                 live.push({ sheet: s, node: el });
@@ -5797,22 +5821,45 @@
         function defineAdopted(target) {
             if (!target) return;
             var store = [];
+            var view = null;
             var live = [];
+            function apply() {
+                if (target !== doc) {
+                    adoptIntoHost(target, store);
+                    return;
+                }
+                for (var i = 0; i < live.length; i++) {
+                    var ent = live[i];
+                    var idx = ent.sheet.__nodes.indexOf(ent.node);
+                    if (idx >= 0) ent.sheet.__nodes.splice(idx, 1);
+                    if (ent.node.parentNode)
+                        ent.node.parentNode.removeChild(ent.node);
+                }
+                live = materializeDocument(store);
+            }
+            function observe(arr) {
+                store = arr;
+                view = typeof Proxy === 'function' ? new Proxy(store, {
+                    set: function (t, k, v) {
+                        t[k] = v;
+                        apply();
+                        return true;
+                    },
+                    deleteProperty: function (t, k) {
+                        delete t[k];
+                        apply();
+                        return true;
+                    }
+                }) : store;
+            }
+            observe([]);
             try {
                 Object.defineProperty(target, 'adoptedStyleSheets', {
                     configurable: true, enumerable: true,
-                    get: function () { return store; },
+                    get: function () { return view; },
                     set: function (v) {
-                        var arr = v ? Array.prototype.slice.call(v) : [];
-                        for (var i = 0; i < live.length; i++) {
-                            var ent = live[i];
-                            var idx = ent.sheet.__nodes.indexOf(ent.node);
-                            if (idx >= 0) ent.sheet.__nodes.splice(idx, 1);
-                            if (ent.node.parentNode)
-                                ent.node.parentNode.removeChild(ent.node);
-                        }
-                        live = materialize(target, arr);
-                        store = arr;
+                        observe(v ? Array.prototype.slice.call(v) : []);
+                        apply();
                     }
                 });
             } catch (e) {}
