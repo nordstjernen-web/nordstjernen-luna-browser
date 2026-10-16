@@ -6,9 +6,10 @@
 # at /src. GitHub's JavaScript actions cannot run in a 32-bit
 # container, so the workflow starts this script with `docker run`:
 #
-#   docker run --rm --platform linux/386 --security-opt seccomp=unconfined \
-#       -v "$PWD:/src" -w /src \
-#       public.ecr.aws/docker/library/debian:trixie bash scripts/ci-linux-i386.sh
+#   bash scripts/ci-pull-image.sh debian:trixie linux/386
+#   docker run --rm --pull=never --platform linux/386 \
+#       --security-opt seccomp=unconfined -v "$PWD:/src" -w /src \
+#       debian:trixie bash scripts/ci-linux-i386.sh
 #
 # Set CCACHE_DIR to a mounted directory to keep ccache across runs.
 set -euo pipefail

@@ -1,11 +1,19 @@
 param(
     [string]$Url = "about:start",
     [int]$Seconds = 5,
-    [string]$MingwBin = "C:\msys64\mingw64\bin",
+    [string]$MingwBin = "",
     [string]$Exe = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $MingwBin) {
+    $MingwBin = "C:\msys64\ucrt64\bin"
+    if (-not (Test-Path -LiteralPath "$MingwBin\libgtk-4-1.dll") -and
+        (Test-Path -LiteralPath "C:\msys64\mingw64\bin\libgtk-4-1.dll")) {
+        $MingwBin = "C:\msys64\mingw64\bin"
+    }
+}
 
 if (-not $Exe) {
     $root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -17,7 +25,7 @@ if (-not (Test-Path -LiteralPath $Exe)) {
 }
 
 if (-not (Test-Path -LiteralPath $MingwBin)) {
-    throw "MSYS2 MINGW64 bin directory not found: $MingwBin"
+    throw "MSYS2 bin directory not found: $MingwBin"
 }
 
 Add-Type -TypeDefinition @"

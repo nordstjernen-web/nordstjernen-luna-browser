@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # _msys_wpt.sh: run a WPT directory in parallel through the headless browser from an MSYS2 shell and print pass counts.
 # Usage: _msys_wpt.sh [--bin=EXE] [--jobs=N] [--timeout-ms=N] [--out=FILE] WPT-RELATIVE-PATH...
-export MSYSTEM=MINGW64
-export PATH="/mingw64/bin:$PATH"
+. "$(dirname "$0")/_msys_env.sh"
 export NS_ALLOW_ROOT=1
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 wpt="${NS_WPT_ROOT:-/c/dev/wpt}"
