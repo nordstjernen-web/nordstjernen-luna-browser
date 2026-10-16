@@ -47,6 +47,14 @@ Significant changes in each release:
     inside a frame from another site was treated as same-origin with the
     top page and could read its DOM. A frame's embedder is now the
     document that contains its element.
+* A table caption's and a table cell's `::before` and `::after` are
+  built as boxes the way a block's are. A caption turned every
+  pseudo-element into inline text, so a floated one took no room (a
+  `float: left; width: 40px` `::before` did not push the caption's text
+  aside), a `display: block` one with empty content made no block, and
+  an absolutely positioned one was never laid out. A cell dropped its
+  pseudo-elements altogether, so `td::before { content: attr(data-label) }`
+  showed nothing.
 * `<link rel="preload" as="style">` (and `as="script"`) fetches its
   resource and fires `load` or `error` when the fetch ends, and a
   `<link>` whose `rel`, `href` or `as` changes is processed again: one

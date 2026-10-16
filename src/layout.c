@@ -1051,6 +1051,12 @@ static void inline_atomic_prepare(ns_box *ab, const ns_style *parent_style);
 static double pango_layout_line_top(NsPangoLayout *layout, int line_index);
 static ns_box *build_pseudo_inline_for(const ns_style *ps, const ns_node *host);
 static ns_box *build_pseudo_block_for(const ns_style *ps, const ns_node *host);
+static void append_generated_flow(ns_box *box, const ns_node *n,
+                                  GHashTable *styles);
+static void append_flow_children(ns_box *block, const ns_node *n,
+                                 GHashTable *styles,
+                                 gboolean blockify_children,
+                                 ns_box **pending_before);
 static void register_abs_pseudo(const ns_node *host, const ns_style *ps);
 static ns_box *build_blockified_inline_item(const ns_node *n, GHashTable *styles,
                                             ns_box **pending_before);
@@ -1365,22 +1371,7 @@ build_cell(const ns_node *n, GHashTable *styles)
     if (cs_attr) cell->colspan = ns_parse_int(cs_attr, 1, 1, 100);
     const char *rs_attr = ns_element_get_attr(n, "rowspan");
     if (rs_attr) cell->rowspan = ns_parse_int(rs_attr, 1, 1, 100);
-    const ns_node *c = n->first_child;
-    while (c) {
-        if (is_inline_dom(c, styles)) {
-            const ns_node *start = c;
-            while (c && continues_inline_run(c, styles)) c = c->next_sibling;
-            ns_box *run = build_inline_run(start, c, styles);
-            if (run->text && run->text[0] != '\0')
-                box_append_child(cell, run);
-            else
-                ns_box_free(run);
-        } else {
-            ns_box *child = build_block(c, styles);
-            if (child) box_append_child(cell, child);
-            if (c) c = c->next_sibling;
-        }
-    }
+    append_generated_flow(cell, n, styles);
     return cell;
 }
 
@@ -1432,7 +1423,7 @@ build_table_caption(const ns_node *n, GHashTable *styles)
     caption->dom = n;
     caption->style = g_hash_table_lookup(styles, n);
     collect_box_bg_image(caption, caption->style);
-    append_display_contents_children(caption, n, styles, FALSE, NULL);
+    append_generated_flow(caption, n, styles);
     return caption;
 }
 
@@ -4614,6 +4605,60 @@ build_block(const ns_node *n, GHashTable *styles)
     return out;
 }
 
+static void
+append_generated_after(ns_box *block, const ns_node *n, const ns_style *s)
+{
+    ns_box *after_block = (s && s->after)
+        ? build_pseudo_block_for(s->after, n) : NULL;
+    if (after_block) box_append_child(block, after_block);
+
+    if (s && s->after && !after_block &&
+        !style_is_absolute_or_fixed(s->after)) {
+        ns_box *gen = build_pseudo_inline_for(s->after, n);
+        if (gen) {
+            ns_box *last = block->first_child;
+            while (last && last->next_sibling) last = last->next_sibling;
+            if (last && last->kind == NS_BOX_INLINE) {
+                gsize ll = last->text ? strlen(last->text) : 0;
+                gsize gl = gen->text  ? strlen(gen->text)  : 0;
+                if (ll > G_MAXSIZE - gl - 1) { ns_box_free(gen); return; }
+                char *combined = g_malloc(ll + gl + 1);
+                if (ll) memcpy(combined, last->text, ll);
+                if (gl) memcpy(combined + ll, gen->text, gl);
+                combined[ll + gl] = '\0';
+                g_free(last->text);
+                last->text = combined;
+                if (gen->attrs) {
+                    for (guint i = 0; i < gen->attrs->len; i++) {
+                        ns_inline_attr a = g_array_index(gen->attrs, ns_inline_attr, i);
+                        a.start += ll;
+                        if (!last->attrs)
+                            last->attrs = g_array_new(FALSE, FALSE, sizeof(ns_inline_attr));
+                        g_array_append_val(last->attrs, a);
+                    }
+                }
+                if (gen->inline_atomics) {
+                    if (!last->inline_atomics)
+                        last->inline_atomics =
+                            g_array_new(FALSE, FALSE, sizeof(ns_inline_atomic));
+                    for (guint i = 0; i < gen->inline_atomics->len; i++) {
+                        ns_inline_atomic ia = g_array_index(gen->inline_atomics,
+                                                            ns_inline_atomic, i);
+                        ia.byte_off += ll;
+                        if (ia.box) ia.box->parent = last;
+                        g_array_append_val(last->inline_atomics, ia);
+                    }
+                    g_array_free(gen->inline_atomics, TRUE);
+                    gen->inline_atomics = NULL;
+                }
+                ns_box_free(gen);
+            } else {
+                box_append_child(block, gen);
+            }
+        }
+    }
+}
+
 static int g_contents_depth;
 
 static void
@@ -4634,7 +4679,18 @@ append_display_contents_children(ns_box *block, const ns_node *n,
     }
     if (contents_before)
         box_append_child(block, contents_before);
+    append_flow_children(block, n, styles, blockify_children, pending_before);
+    if (s && s->after && !style_is_absolute_or_fixed(s->after)) {
+        ns_box *contents_after = build_pseudo_inline_for(s->after, n);
+        if (contents_after) box_append_child(block, contents_after);
+    }
+    g_contents_depth--;
+}
 
+static void
+append_flow_children(ns_box *block, const ns_node *n, GHashTable *styles,
+                     gboolean blockify_children, ns_box **pending_before)
+{
     const ns_node *c = n->first_child;
     while (c) {
         if (blockify_children) {
@@ -4708,22 +4764,43 @@ append_display_contents_children(ns_box *block, const ns_node *n,
                 c = c->next_sibling;
             }
             ns_box *run = build_inline_run(start, c, styles);
+            if (pending_before && *pending_before) {
+                run = inline_merge_prefix(*pending_before, run);
+                *pending_before = NULL;
+            }
             if (run && run->text && run->text[0])
                 box_append_child(block, run);
             else if (run)
                 ns_box_free(run);
         } else {
+            if (pending_before && *pending_before) {
+                box_append_child(block, *pending_before);
+                *pending_before = NULL;
+            }
             ns_box *child = build_block(c, styles);
             if (child) box_append_child(block, child);
             if (c) c = c->next_sibling;
         }
     }
+}
 
-    if (s && s->after && !style_is_absolute_or_fixed(s->after)) {
-        ns_box *contents_after = build_pseudo_inline_for(s->after, n);
-        if (contents_after) box_append_child(block, contents_after);
+static void
+append_generated_flow(ns_box *box, const ns_node *n, GHashTable *styles)
+{
+    const ns_style *s = box->style;
+    if (s) {
+        register_abs_pseudo(n, s->before);
+        register_abs_pseudo(n, s->after);
     }
-    g_contents_depth--;
+    ns_box *before_block = (s && s->before)
+        ? build_pseudo_block_for(s->before, n) : NULL;
+    if (before_block) box_append_child(box, before_block);
+    ns_box *pending_before = (s && s->before && !before_block &&
+                              !style_is_absolute_or_fixed(s->before))
+        ? build_pseudo_inline_for(s->before, n) : NULL;
+    append_flow_children(box, n, styles, FALSE, &pending_before);
+    if (pending_before) box_append_child(box, pending_before);
+    append_generated_after(box, n, s);
 }
 
 static ns_box *
@@ -5243,55 +5320,7 @@ build_block_impl(const ns_node *n, GHashTable *styles)
         pending_before = NULL;
     }
 
-    ns_box *after_block = (s && s->after)
-        ? build_pseudo_block_for(s->after, n) : NULL;
-    if (after_block) box_append_child(block, after_block);
-
-    if (s && s->after && !after_block &&
-        !style_is_absolute_or_fixed(s->after)) {
-        ns_box *gen = build_pseudo_inline_for(s->after, n);
-        if (gen) {
-            ns_box *last = block->first_child;
-            while (last && last->next_sibling) last = last->next_sibling;
-            if (last && last->kind == NS_BOX_INLINE) {
-                gsize ll = last->text ? strlen(last->text) : 0;
-                gsize gl = gen->text  ? strlen(gen->text)  : 0;
-                if (ll > G_MAXSIZE - gl - 1) { ns_box_free(gen); return block; }
-                char *combined = g_malloc(ll + gl + 1);
-                if (ll) memcpy(combined, last->text, ll);
-                if (gl) memcpy(combined + ll, gen->text, gl);
-                combined[ll + gl] = '\0';
-                g_free(last->text);
-                last->text = combined;
-                if (gen->attrs) {
-                    for (guint i = 0; i < gen->attrs->len; i++) {
-                        ns_inline_attr a = g_array_index(gen->attrs, ns_inline_attr, i);
-                        a.start += ll;
-                        if (!last->attrs)
-                            last->attrs = g_array_new(FALSE, FALSE, sizeof(ns_inline_attr));
-                        g_array_append_val(last->attrs, a);
-                    }
-                }
-                if (gen->inline_atomics) {
-                    if (!last->inline_atomics)
-                        last->inline_atomics =
-                            g_array_new(FALSE, FALSE, sizeof(ns_inline_atomic));
-                    for (guint i = 0; i < gen->inline_atomics->len; i++) {
-                        ns_inline_atomic ia = g_array_index(gen->inline_atomics,
-                                                            ns_inline_atomic, i);
-                        ia.byte_off += ll;
-                        if (ia.box) ia.box->parent = last;
-                        g_array_append_val(last->inline_atomics, ia);
-                    }
-                    g_array_free(gen->inline_atomics, TRUE);
-                    gen->inline_atomics = NULL;
-                }
-                ns_box_free(gen);
-            } else {
-                box_append_child(block, gen);
-            }
-        }
-    }
+    append_generated_after(block, n, s);
     return block;
 }
 
