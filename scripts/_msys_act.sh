@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # _msys_act.sh: run a page headless with an --act script and print the act-eval and click lines.
-export MSYSTEM=MINGW64
-export PATH="/mingw64/bin:$PATH"
+. "$(dirname "$0")/_msys_env.sh"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 bin="${NS_BIN:-$repo/builddir/src/gtk/northstar.exe}"
 page="$1"

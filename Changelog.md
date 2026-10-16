@@ -747,6 +747,14 @@ Significant changes in each release:
   compares each checkout with its pin, and `pack-windows.sh`,
   `pack-linux.sh`, `pack-appimage.sh` and `pack-srpm.sh` run it before
   building.
+* The Windows build moves to MSYS2's UCRT64 environment. MSYS2 no
+  longer publishes GTK 4 for MINGW64, so the Windows CI job stopped
+  before compiling anything. CI now installs the
+  `mingw-w64-ucrt-x86_64-*` packages; the `_msys_*` helper scripts,
+  `run-windows.ps1` and `smoke-windows.ps1` use UCRT64 and fall back to
+  MINGW64 only on a machine where that alone has GTK 4 installed, and
+  `pack-windows.sh` and `pack-windows-installer.sh` look in UCRT64
+  first.
 
 1.0.13:
 =======
