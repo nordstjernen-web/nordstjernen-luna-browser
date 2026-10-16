@@ -378,6 +378,8 @@ verified by running the browser.
 | `nightly.sh`, `nightly-distro-build.sh` | Nightly build orchestration. |
 | `check-subprojects.sh` | Fail when a `subprojects/` checkout is not at the revision its `.wrap` pins; the packaging scripts run it first. |
 | `ci-linux-i386.sh` | The 32-bit x86 CI build and smoke test, run inside a 32-bit Debian 13 container (`debian:trixie` with `--platform linux/386`). |
+| `ci-musl.sh` | The musl CI build and smoke test, run inside an `alpine:3.24` container. |
+| `ci-pull-image.sh` | Pull a Docker official image for CI from Docker Hub, `mirror.gcr.io` or ECR Public, whichever serves it. |
 | `render-screenshots.sh` | Render each URL listed in `data/screenshots/sites.txt` to a PNG beside it. |
 | `speedometer-bench.sh`, `speedometer4-bench.sh`, `sample-profile.sh` | Benchmarks and a sampling profiler. |
 | `gen-architecture.py`, `gen-badge.sh`, `gen-splash.py`, `gen-splash.sh`, `gen-windows-icon.py` | Regenerate the architecture diagram, the badge, the splash and the Windows icon. |
