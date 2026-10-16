@@ -150,8 +150,8 @@ async function ndMain(){
     }
     NDLOG("NS_BENCH DONE " + suite.name + " | total=" + suiteTotal.toFixed(2) + " | " + parts.join(" ") + " | domNodes=" + document.getElementsByTagName('*').length);
 }
-if (document.readyState === "complete" || document.readyState === "interactive") requestAnimationFrame(() => ndMain());
-else window.addEventListener("DOMContentLoaded", () => requestAnimationFrame(() => ndMain()));
+if (document.readyState === "complete") requestAnimationFrame(() => ndMain());
+else window.addEventListener("load", () => requestAnimationFrame(() => ndMain()));
 '''
 
 out = "(function(){\n" + harness + "\n/* translations */\n" + tr + "\n/* suites (from Speedometer tests.mjs) */\n" + tests + "\n/* bootstrap */\n" + bootstrap + "\n})();\n"
