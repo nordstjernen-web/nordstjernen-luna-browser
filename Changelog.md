@@ -78,6 +78,11 @@ Significant changes in each release:
     document settled on and repeats only when they change, so every
     TodoMVC page, whose "What needs to be done?" placeholder is 22
     characters against the default 20, lays out once per frame.
+  - A plain CSS time such as `130ms` or `.2s` is read directly instead
+    of through the `calc()` evaluator, which copied the text, printed the
+    number back out and parsed it again under the C library's locale
+    lock. Elements with transitions read their durations and delays on
+    every relayout, and Spectrum gives thousands of them one.
 * JavaScript passes every test262 test that quickjs-ng's own
   `test262.conf` enables: 0 failures in 82,220 runs, against 49 on
   v0.17.0. quickjs-ng moves from the v0.17.0 release to master

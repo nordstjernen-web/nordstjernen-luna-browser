@@ -12044,8 +12044,50 @@ static gboolean is_font_feature_settings_value(const char *s);
 static gboolean is_font_variation_settings_value(const char *s);
 
 static gboolean
+css_time_plain(const char *s, const char *e, double *out_ms)
+{
+    static const double pow10[] = {
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+        1e12, 1e13, 1e14, 1e15,
+    };
+    while (s < e && is_ws(*s)) s++;
+    while (e > s && is_ws(e[-1])) e--;
+    gboolean negative = FALSE;
+    if (s < e && (*s == '+' || *s == '-')) negative = *s++ == '-';
+    guint64 mantissa = 0;
+    int digits = 0, frac = 0;
+    while (s < e && g_ascii_isdigit(*s)) {
+        mantissa = mantissa * 10 + (guint64)(*s++ - '0');
+        digits++;
+    }
+    if (s < e && *s == '.') {
+        s++;
+        while (s < e && g_ascii_isdigit(*s)) {
+            mantissa = mantissa * 10 + (guint64)(*s++ - '0');
+            digits++;
+            frac++;
+        }
+        if (frac == 0) return FALSE;
+    }
+    if (digits == 0 || digits > 15) return FALSE;
+    double scale;
+    if (e - s == 2 && g_ascii_strncasecmp(s, "ms", 2) == 0) scale = 1.0;
+    else if (e - s == 1 && (*s == 's' || *s == 'S')) scale = 1000.0;
+    else return FALSE;
+    double v = (double)mantissa / pow10[frac];
+    if (negative) v = -v;
+    *out_ms = v * scale;
+    return TRUE;
+}
+
+static gboolean
 css_time_value(const char *s, const char *e, double *out_ms)
 {
+    double plain;
+    if (css_time_plain(s, e, &plain)) {
+        if (out_ms) *out_ms = plain;
+        return TRUE;
+    }
     char *text = g_strndup(s, (gsize)(e - s));
     g_strstrip(text);
     ns_calc_term t;
