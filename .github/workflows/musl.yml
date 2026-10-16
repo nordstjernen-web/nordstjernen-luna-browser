@@ -25,51 +25,31 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-26.04
-    container: public.ecr.aws/docker/library/alpine:3.24
     timeout-minutes: 40
     steps:
-      - name: Install build dependencies (musl)
-        run: |
-          apk add --no-cache \
-            build-base clang ccache pkgconf meson ninja git cmake python3 \
-            gtk4.0-dev curl-dev openssl-dev uchardet-dev libpsl-dev \
-            harfbuzz-dev fribidi-dev cairo-dev fontconfig-dev freetype-dev \
-            sqlite-dev libavif-dev sdl2-dev libseccomp-dev \
-            opusfile-dev libvorbis-dev enchant2-dev \
-            fontconfig font-dejavu ca-certificates file
-
       - uses: actions/checkout@v7
 
       - name: Restore ccache
         uses: actions/cache@v6
         with:
-          path: /root/.cache/ccache
+          path: .ccache
           key: ccache-musl-${{ github.sha }}
           restore-keys: |
             ccache-musl-
 
-      - name: Configure ccache
-        run: |
-          ccache --max-size=200M
-          ccache --zero-stats
+      # A job container is pulled from one registry, and the job fails when
+      # that registry throttles GitHub's shared runners (Docker Hub with 429
+      # Too Many Requests, ECR Public with "Data limit exceeded"), so the
+      # image is pulled from whichever mirror serves it and run by hand.
+      - name: Pull the Alpine 3.24 image
+        run: bash scripts/ci-pull-image.sh alpine:3.24
 
-      - name: Build (musl libc, no LTO)
+      - name: Build and smoke-test in an Alpine 3.24 container (musl libc)
         run: |
-          export CC="ccache clang"
-          meson setup builddir -Db_lto=false
-          meson compile -C builddir
-          file builddir/src/gtk/northstar
+          docker run --rm --pull=never \
+            -v "$PWD:/src" -w /src -e CCACHE_DIR=/src/.ccache \
+            alpine:3.24 sh scripts/ci-musl.sh
 
-      - name: ccache stats
+      - name: Fix ownership of container-written files
         if: always()
-        run: command -v ccache >/dev/null && ccache --show-stats || true
-
-      - name: Headless smoke test (musl, no X server needed)
-        env:
-          NS_ALLOW_ROOT: '1'
-        run: |
-          ldd builddir/src/gtk/northstar | grep -i musl || true
-          ./builddir/src/gtk/northstar \
-            --headless --url=https://example.com --dump=text > smoke.txt
-          head -40 smoke.txt
-          grep -qi example smoke.txt
+        run: sudo chown -R "$(id -u):$(id -g)" .

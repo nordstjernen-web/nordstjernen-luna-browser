@@ -755,6 +755,13 @@ Significant changes in each release:
   MINGW64 only on a machine where that alone has GTK 4 installed, and
   `pack-windows.sh` and `pack-windows-installer.sh` look in UCRT64
   first.
+* The musl and i386 CI jobs no longer fail when one registry throttles
+  GitHub's shared runners. ECR Public, where both images came from since
+  Docker Hub answered 429 Too Many Requests, began refusing them with
+  "Data limit exceeded". `scripts/ci-pull-image.sh` now takes the
+  official image from Docker Hub, `mirror.gcr.io` or ECR Public,
+  whichever serves it, and the musl build runs in that container through
+  `scripts/ci-musl.sh`, as the i386 build already did.
 
 1.0.13:
 =======
