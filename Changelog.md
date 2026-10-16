@@ -104,6 +104,15 @@ Significant changes in each release:
     changes, only its host is restyled. The Lit workload, whose hundred
     `<todo-item>` shadow roots each carry their own `<style>`, restyled
     7,600 elements every time an item was added or removed.
+  - `JSON.parse()` converts a number of up to 15 significant digits
+    without an exponent directly, as the exact quotient of two doubles,
+    and hands anything else to quickjs-ng's own `js_atod()` instead of
+    the C library's `strtod()` (a new wrap patch,
+    `quickjs-ng-json-number.patch`). MinGW's `strtod()` takes a lock and
+    runs gdtoa for every number, a fifth of `JSON.parse()` time in the
+    TodoMVC workloads that keep their list as JSON, and it reads digits
+    by the current `LC_NUMERIC`. Parsing a hundred 13-digit ids is 4x
+    faster; 200,000 random numbers parse bit-identically to `Number()`.
   - A plain CSS time such as `130ms` or `.2s` is read directly instead
     of through the `calc()` evaluator, which copied the text, printed the
     number back out and parsed it again under the C library's locale
