@@ -71,6 +71,13 @@ Significant changes in each release:
     after every dispatch step whether or not any had been removed. With a
     hundred list items carrying a few listeners each, that walk was a
     third of the time Vue spends handling a click.
+  - A page whose text field shows a value or placeholder longer than its
+    `size` laid out the whole document twice on every relayout: once to
+    learn the field's width and again with the column count that width
+    allows. Layout now starts from the counts the previous layout of the
+    document settled on and repeats only when they change, so every
+    TodoMVC page, whose "What needs to be done?" placeholder is 22
+    characters against the default 20, lays out once per frame.
 * JavaScript passes every test262 test that quickjs-ng's own
   `test262.conf` enables: 0 failures in 82,220 runs, against 49 on
   v0.17.0. quickjs-ng moves from the v0.17.0 release to master
