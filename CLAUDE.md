@@ -133,17 +133,18 @@ This repo is driven by Claude in long uninterrupted sessions.
 - **Never ask the user to run the build.** Run it yourself.
 - **Local machine is the build *and* run oracle.** The repo can be
   driven from Linux (GTK 4 / libcurl / meson / clang and an X session at
-  `DISPLAY=:0`), macOS with Homebrew, or Windows 11 via MSYS2 MINGW64.
+  `DISPLAY=:0`), macOS with Homebrew, or Windows 11 via MSYS2 UCRT64.
   All use the same meson/ninja invocation; the Windows binary is
   `./builddir/src/gtk/northstar.exe`. Every commit must pass
   `meson compile -C builddir` locally before pushing. Smoke-launch
   the browser (in the background, then kill it) on material changes
   — that's the per-change correctness gate, not CI.
 - **Windows specifics.** The meson toolchain lives in MSYS2, whose
-  login shell starts in `$HOME` outside the MINGW64 environment, so
-  build through the wrapper, which exports `MSYSTEM`, `USERPROFILE`,
-  `TMPDIR` and the compiler, configures `builddir` on first use and
-  compiles:
+  login shell starts in `$HOME` outside the UCRT64 environment, so
+  build through the wrapper, which selects UCRT64 (MINGW64 only where
+  that alone has GTK 4, which MSYS2 no longer publishes for it),
+  exports `MSYSTEM`, `USERPROFILE`, `TMPDIR` and the compiler,
+  configures `builddir` on first use and compiles:
   `C:/msys64/usr/bin/bash.exe -lc "bash /c/dev/northstar-browser-gpl/scripts/_msys_build.sh"`.
   `git` is not on the MSYS2 PATH — run it from Git Bash or PowerShell.
   A running `northstar.exe` locks the link target and the build fails
@@ -379,7 +380,7 @@ built with quickjs-ng 0.16.1 while `quickjs-ng.wrap` pinned v0.17.0
   AppImage and SRPM builds refuse to package a stale tree. Never bypass
   it, and run it by hand before any build you hand to the user.
 - To repair a stale checkout: delete `subprojects/<name>` and run
-  `meson subprojects download <name>` (from MINGW64 on Windows), which
+  `meson subprojects download <name>` (from UCRT64 on Windows), which
   also re-applies the wrap's `diff_files` patches. Only the patched files
   should then show as modified. Then delete the packaging build directory
   (`builddir-release`, `builddir-msix`) so nothing stale is reused.

@@ -92,12 +92,15 @@ libraries are the `libavif`, `opusfile`, `libvorbis`, `enchant2` and
 
 ## Windows dependencies
 
-Install MSYS2 MINGW64, then install the packages listed by
-`.github/workflows/windows.yml`. Run Meson from the MINGW64 shell so its
-compiler and `pkg-config` resolve the MinGW libraries.
-`scripts/_msys_build.sh` does that from any shell: it sets up the MINGW64
-environment, defaults `CC` to `clang`, configures `builddir` on first use
-and compiles. The binary is `builddir/src/gtk/northstar.exe`.
+Install MSYS2, then install the `mingw-w64-ucrt-x86_64-*` packages
+listed by `.github/workflows/windows.yml` into its UCRT64 environment.
+MSYS2 no longer publishes GTK 4 for the older MINGW64 environment. Run
+Meson from the UCRT64 shell so its compiler and `pkg-config` resolve the
+MinGW libraries. `scripts/_msys_build.sh` does that from any shell: it
+sets up the UCRT64 environment (or MINGW64, on a machine where only that
+one has GTK 4 installed), defaults `CC` to `clang`, configures
+`builddir` on first use and compiles. The binary is
+`builddir/src/gtk/northstar.exe`.
 
 ```sh
 C:/msys64/usr/bin/bash.exe -lc "bash /c/path/to/northstar/scripts/_msys_build.sh"
@@ -112,7 +115,7 @@ A few traps:
   interpreter moved from `wasm_interp_classic.c` to `wasm_interp_fast.c` —
   an existing build directory can fail at `gcc-ar ... libwamr.a: No such
   file or directory`. Delete `builddir/src/wamr/libwamr.a` and rebuild.
-- LTO with clang needs `llvm-ar` (`mingw-w64-x86_64-llvm-tools`);
+- LTO with clang needs `llvm-ar` (`mingw-w64-ucrt-x86_64-llvm-tools`);
   `meson setup` stops without it unless configured with `-Db_lto=false`.
 - The Windows CI job builds with clang and `--werror`, the Linux job with
   GCC and `--werror`. Clang 23, now in MSYS2, adds
@@ -123,8 +126,8 @@ A few traps:
 bundles it with its DLLs and GTK runtime data as a portable zip in
 `dist/`. `scripts/pack-windows-installer.sh` wraps that bundle into a
 per-user NSIS `setup.exe` (no Administrator rights; `makensis` from
-`mingw-w64-x86_64-nsis`). `scripts/pack-msix.sh` stages it as an unsigned
-Microsoft Store MSIX; it needs `rsvg-convert` (`mingw-w64-x86_64-librsvg`)
+`mingw-w64-ucrt-x86_64-nsis`). `scripts/pack-msix.sh` stages it as an unsigned
+Microsoft Store MSIX; it needs `rsvg-convert` (`mingw-w64-ucrt-x86_64-librsvg`)
 and `makeappx.exe` from the Windows SDK, or `makemsix`.
 
 ## Build
@@ -370,7 +373,7 @@ verified by running the browser.
 | Script | Purpose |
 |--------|---------|
 | `wpt-run.sh`, `wpt-local.sh`, `wpt-fast.sh` | Web-platform-tests runners; see [compliance.md](compliance.md). |
-| `_msys_build.sh`, `_msys_eval.sh`, `_msys_act.sh`, `_msys_wpt.sh`, `run-windows.ps1`, `smoke-windows.ps1` | Build, drive and smoke-test the Windows binary. |
+| `_msys_build.sh`, `_msys_env.sh`, `_msys_eval.sh`, `_msys_act.sh`, `_msys_wpt.sh`, `run-windows.ps1`, `smoke-windows.ps1` | Build, drive and smoke-test the Windows binary. |
 | `pack-linux.sh`, `pack-deb.sh`, `pack-rpm.sh`, `pack-srpm.sh`, `pack-appimage.sh`, `pack-bsd.sh`, `pack-windows.sh`, `pack-windows-installer.sh`, `pack-msix.sh` | Release packaging. |
 | `nightly.sh`, `nightly-distro-build.sh` | Nightly build orchestration. |
 | `check-subprojects.sh` | Fail when a `subprojects/` checkout is not at the revision its `.wrap` pins; the packaging scripts run it first. |
