@@ -47,6 +47,14 @@ Significant changes in each release:
     inside a frame from another site was treated as same-origin with the
     top page and could read its DOM. A frame's embedder is now the
     document that contains its element.
+* `<link rel="preload" as="style">` (and `as="script"`) fetches its
+  resource and fires `load` or `error` when the fetch ends, and a
+  `<link>` whose `rel`, `href` or `as` changes is processed again: one
+  that becomes `rel="stylesheet"` applies its sheet and fires `load`,
+  and a stylesheet whose `href` changes loads the new sheet. The common
+  asynchronous CSS pattern `<link rel="preload" as="style"
+  onload="this.rel='stylesheet'">` never fired its handler, so its
+  sheet was never applied.
 * `JSON.parse()` reads decimals correctly when the operating system uses
   a decimal comma. GTK sets every locale category from the environment
   as the window starts, and the JSON parser converts numbers with the C
