@@ -4177,6 +4177,18 @@ css_identifier_hash(char kind, const char *name, gsize len)
     return h;
 }
 
+#define CSS_ATTR_HASH_MAX_VALUE 128
+
+static guint32
+css_attr_value_hash(const char *name, const char *value, gsize value_len)
+{
+    guint32 h = css_identifier_hash('=', name, strlen(name));
+    h = (h ^ (guchar)'=') * 16777619u;
+    for (gsize i = 0; i < value_len; i++)
+        h = (h ^ (guchar)g_ascii_tolower(value[i])) * 16777619u;
+    return h;
+}
+
 static void
 css_selector_add_ancestor_hash(ns_css_selector *sel, guint32 hash)
 {
@@ -4195,6 +4207,17 @@ css_selector_collect_ancestor_hashes(ns_css_selector *sel)
         if (c->id)
             css_selector_add_ancestor_hash(
                 sel, css_identifier_hash('#', c->id, strlen(c->id)));
+        for (guint i = 0; c->attrs && i < c->attrs->len; i++) {
+            const ns_css_attr_pred *a =
+                &g_array_index(c->attrs, ns_css_attr_pred, i);
+            if (a->op != NS_CSS_ATTR_EQ || !a->name || !a->value ||
+                a->namespace_uri || a->namespace_any)
+                continue;
+            gsize vlen = strlen(a->value);
+            if (vlen > CSS_ATTR_HASH_MAX_VALUE) continue;
+            css_selector_add_ancestor_hash(
+                sel, css_attr_value_hash(a->name, a->value, vlen));
+        }
         for (guint i = 0; i < c->classes->len; i++) {
             const char *cls = g_ptr_array_index(c->classes, i);
             css_selector_add_ancestor_hash(
@@ -26502,6 +26525,12 @@ css_ancestor_filter_update(const ns_node *el, int delta)
     for (guint i = 0; i < n; i++)
         css_ancestor_filter_count(
             css_identifier_hash('.', toks[i].p, toks[i].len), delta);
+    for (const ns_attr *a = el->attrs; a; a = a->next) {
+        if (!a->value || a->value_len > CSS_ATTR_HASH_MAX_VALUE) continue;
+        css_ancestor_filter_count(
+            css_attr_value_hash(ns_attr_local_name(a), a->value, a->value_len),
+            delta);
+    }
 }
 
 static gboolean

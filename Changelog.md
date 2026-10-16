@@ -47,6 +47,17 @@ Significant changes in each release:
     inside a frame from another site was treated as same-origin with the
     top page and could read its DOM. A frame's embedder is now the
     document that contains its element.
+* Performance, measured with Speedometer 3.1's TodoMVC workloads
+  (`scripts/speedometer-bench.sh`):
+  - The ancestor filter that lets the cascade skip a descendant
+    selector without walking up the tree also records each ancestor's
+    `[name=value]` attributes, so a selector such as
+    `[data-k="a"] .item` is dismissed at once below every element whose
+    attribute differs. Shadow-root style sheets are scoped to their host
+    that way, so a page with a hundred shadow hosts no longer matches
+    every element against every host's rules: restyling the
+    WebComponents complex-DOM workload after it adds its items drops
+    from 1.8 s to 0.3 s.
 * JavaScript passes every test262 test that quickjs-ng's own
   `test262.conf` enables: 0 failures in 82,220 runs, against 49 on
   v0.17.0. quickjs-ng moves from the v0.17.0 release to master
