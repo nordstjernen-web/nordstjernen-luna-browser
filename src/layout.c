@@ -1659,6 +1659,8 @@ text_input_leading_spaces(const ns_style *s)
 #define NS_TEXT_INPUT_MAX_COLUMNS 4096
 
 static GHashTable *g_input_columns_for_layout;
+static GHashTable *g_input_columns_settled;
+static const ns_node *g_input_columns_settled_doc;
 
 static int
 text_input_size_attr(const ns_node *n)
@@ -13562,6 +13564,24 @@ collect_text_input_columns(const ns_box *b, GHashTable *cols)
     return changed;
 }
 
+static gboolean
+input_columns_equal(GHashTable *a, GHashTable *b)
+{
+    guint na = a ? g_hash_table_size(a) : 0;
+    guint nb = b ? g_hash_table_size(b) : 0;
+    if (na != nb) return FALSE;
+    if (na == 0) return TRUE;
+    GHashTableIter it;
+    gpointer k, v;
+    g_hash_table_iter_init(&it, a);
+    while (g_hash_table_iter_next(&it, &k, &v)) {
+        gpointer other;
+        if (!g_hash_table_lookup_extended(b, k, NULL, &other) || other != v)
+            return FALSE;
+    }
+    return TRUE;
+}
+
 ns_box *
 ns_layout_build(const ns_node *doc, GHashTable *styles, double viewport_width,
                 const ns_node *focused_input, gsize focused_caret_byte,
@@ -13582,17 +13602,25 @@ ns_layout_build(const ns_node *doc, GHashTable *styles, double viewport_width,
     g_base_url_for_layout = base_url;
     ns_image_cache_begin_generation(image_cache);
     g_counters_for_layout = build_counter_snapshots(doc, styles);
+    gboolean outermost = !g_input_columns_for_layout;
+    if (outermost && g_input_columns_settled_doc != doc)
+        g_clear_pointer(&g_input_columns_settled, g_hash_table_destroy);
+    if (outermost) g_input_columns_for_layout = g_input_columns_settled;
     ns_box *root = ns_layout_build_(doc, styles, viewport_width);
-    if (!g_input_columns_for_layout) {
+    if (outermost) {
         GHashTable *cols = g_hash_table_new(g_direct_hash, g_direct_equal);
-        if (collect_text_input_columns(root, cols)) {
+        collect_text_input_columns(root, cols);
+        if (!input_columns_equal(cols, g_input_columns_settled)) {
             g_input_columns_for_layout = cols;
             ns_box_free(root);
             ns_image_cache_begin_generation(image_cache);
             root = ns_layout_build_(doc, styles, viewport_width);
-            g_input_columns_for_layout = NULL;
         }
-        g_hash_table_destroy(cols);
+        g_input_columns_for_layout = NULL;
+        if (g_input_columns_settled)
+            g_hash_table_destroy(g_input_columns_settled);
+        g_input_columns_settled = cols;
+        g_input_columns_settled_doc = doc;
     }
     ns_image_cache_collect(image_cache);
     g_focused_input_for_layout = NULL;
