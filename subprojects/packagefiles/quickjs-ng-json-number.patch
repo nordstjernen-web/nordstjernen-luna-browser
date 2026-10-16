@@ -1,0 +1,71 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -23709,11 +23709,22 @@
+ 
+ static int json_parse_number(JSParseState *s, const uint8_t **pp)
+ {
++    /* up to 15 digits the mantissa and the power of ten are exact doubles,
++       so their quotient is the correctly rounded value */
++    static const double pow10[] = {
++        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7,
++        1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
++    };
+     const uint8_t *p = *pp;
+     const uint8_t *p_start = p;
++    JSATODTempMem atod_mem;
++    uint64_t mantissa = 0;
++    int digits = 0, frac = 0;
++    bool is_neg = false, has_exp = false;
++    double d;
+ 
+     if (*p == '+' || *p == '-')
+-        p++;
++        is_neg = (*p++ == '-');
+ 
+     if (!is_digit(*p))
+         return js_parse_error(s, "Unexpected token '%c'", *p_start);
+@@ -23721,17 +23732,23 @@
+     if (p[0] == '0' && is_digit(p[1]))
+         return json_parse_error(s, p, "Unexpected number");
+ 
+-    while (is_digit(*p))
+-        p++;
++    while (is_digit(*p)) {
++        mantissa = mantissa * 10 + (*p++ - '0');
++        digits++;
++    }
+ 
+     if (*p == '.') {
+         p++;
+         if (!is_digit(*p))
+             return json_parse_error(s, p, "Unterminated fractional number");
+-        while (is_digit(*p))
+-            p++;
++        while (is_digit(*p)) {
++            mantissa = mantissa * 10 + (*p++ - '0');
++            digits++;
++            frac++;
++        }
+     }
+     if (*p == 'e' || *p == 'E') {
++        has_exp = true;
+         p++;
+         if (*p == '+' || *p == '-')
+             p++;
+@@ -23740,8 +23757,15 @@
+         while (is_digit(*p))
+             p++;
+     }
++    if (!has_exp && digits <= 15) {
++        d = (double)mantissa / pow10[frac];
++        if (is_neg)
++            d = -d;
++    } else {
++        d = js_atod((const char *)p_start, NULL, 10, 0, &atod_mem);
++    }
+     s->token.val = TOK_NUMBER;
+-    s->token.u.num.val = js_float64(strtod((const char *)p_start, NULL));
++    s->token.u.num.val = js_float64(d);
+     *pp = p;
+     return 0;
+ }
