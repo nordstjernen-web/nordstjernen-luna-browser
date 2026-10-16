@@ -104,6 +104,13 @@ Significant changes in each release:
     changes, only its host is restyled. The Lit workload, whose hundred
     `<todo-item>` shadow roots each carry their own `<style>`, restyled
     7,600 elements every time an item was added or removed.
+  - A regular-expression search tries a match only at positions holding
+    a character the pattern can start with, when every alternative
+    begins with a literal (`quickjs-ng-regexp-first-char.patch`). The
+    engine used to push a backtracking state at every character of the
+    subject: jQuery's `/<script|<style|<link/i` test of a 23 KB list
+    took 1.6 ms and now takes 0.14 ms, and the jQuery TodoMVC runs about
+    30% faster.
   - `JSON.parse()` converts a number of up to 15 significant digits
     without an exponent directly, as the exact quotient of two doubles,
     and hands anything else to quickjs-ng's own `js_atod()` instead of

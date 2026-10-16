@@ -1,0 +1,147 @@
+--- a/libregexp.c
++++ b/libregexp.c
+@@ -3383,6 +3383,98 @@
+ /* Return 1 if match, 0 if not match or < 0 if error (see LRE_RET_x). cindex is the
+    starting position of the match and must be such as 0 <= cindex <=
+    clen. */
++/* Set of characters that can start a match: a bitmap for ASCII and a
++   few other code units. Used to skip the start positions where a
++   non-sticky search cannot succeed instead of trying each of them. */
++typedef struct {
++    uint32_t ascii[4];
++    uint16_t other[4];
++    int other_count;
++} REFirstChars;
++
++static bool re_first_add(REFirstChars *fc, uint32_t val, bool ignore_case,
++                         bool is_unicode)
++{
++    uint32_t c;
++
++    if (!ignore_case) {
++        if (val < 128) {
++            fc->ascii[val >> 5] |= 1u << (val & 31);
++            return true;
++        }
++        if (val >= 0xd800 && val <= 0xdfff)
++            return false;
++        if (val > 0xffff || fc->other_count == countof(fc->other))
++            return false;
++        fc->other[fc->other_count++] = val;
++        return true;
++    }
++    /* other code points can fold to an ASCII letter in unicode mode */
++    if (val >= 128 ||
++        (is_unicode && ((val | 0x20) >= 'a' && (val | 0x20) <= 'z')))
++        return false;
++    for(c = 0; c < 128; c++) {
++        if (lre_canonicalize(c, is_unicode) == val)
++            fc->ascii[c >> 5] |= 1u << (c & 31);
++    }
++    return true;
++}
++
++static bool re_first_chars(REFirstChars *fc, const uint8_t *pc,
++                           const uint8_t *pc_end, bool is_unicode, int depth)
++{
++    int steps;
++
++    if (depth > 8)
++        return false;
++    for(steps = 0; steps < 64 && pc < pc_end; steps++) {
++        switch(*pc) {
++        case REOP_save_start:
++        case REOP_save_end:
++            pc += 2;
++            break;
++        case REOP_save_reset:
++            pc += 3;
++            break;
++        case REOP_char:
++        case REOP_char_i:
++            return re_first_add(fc, get_u16(pc + 1), *pc == REOP_char_i,
++                                is_unicode);
++        case REOP_char32:
++        case REOP_char32_i:
++            return re_first_add(fc, get_u32(pc + 1), *pc == REOP_char32_i,
++                                is_unicode);
++        case REOP_goto:
++            pc += 5 + (int)get_u32(pc + 1);
++            break;
++        case REOP_split_goto_first:
++        case REOP_split_next_first:
++            return re_first_chars(fc, pc + 5, pc_end, is_unicode, depth + 1) &&
++                re_first_chars(fc, pc + 5 + (int)get_u32(pc + 1), pc_end,
++                               is_unicode, depth + 1);
++        default:
++            return false;
++        }
++    }
++    return false;
++}
++
++static inline bool re_first_test(const REFirstChars *fc, uint32_t c)
++{
++    int i;
++
++    if (c < 128)
++        return (fc->ascii[c >> 5] >> (c & 31)) & 1;
++    for(i = 0; i < fc->other_count; i++) {
++        if (fc->other[i] == c)
++            return true;
++    }
++    return false;
++}
++
++/* length of the 'iterate thru all positions' prefix of a non-sticky regexp */
++#define RE_SEARCH_PREFIX_LEN 11
++
+ int lre_exec(uint8_t **capture,
+              const uint8_t *bc_buf, const uint8_t *cbuf, int cindex, int clen,
+              int cbuf_type, void *opaque)
+@@ -3390,6 +3482,7 @@
+     REExecContext s_s, *s = &s_s;
+     int re_flags, i, ret;
+     const uint8_t *cptr;
++    bool searched;
+ 
+     re_flags = lre_get_flags(bc_buf);
+     s->is_unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
+@@ -3416,7 +3509,36 @@
+         }
+     }
+ 
+-    ret = lre_exec_backtrack(s, capture, bc_buf + RE_HEADER_LEN, cptr);
++    searched = false;
++    if (!(re_flags & LRE_FLAG_STICKY)) {
++        const uint8_t *body = bc_buf + RE_HEADER_LEN + RE_SEARCH_PREFIX_LEN;
++        const uint8_t *body_end = bc_buf + RE_HEADER_LEN +
++            get_u32(bc_buf + RE_HEADER_BYTECODE_LEN);
++        REFirstChars fc;
++
++        memset(&fc, 0, sizeof(fc));
++        if (re_first_chars(&fc, body, body_end, s->is_unicode, 0)) {
++            int pos;
++
++            searched = true;
++            ret = 0;
++            for(pos = cptr == cbuf + (cindex << cbuf_type) ? cindex : cindex - 1;
++                pos < clen; pos++) {
++                uint32_t c = cbuf_type == 0 ? cbuf[pos] :
++                    ((const uint16_t *)cbuf)[pos];
++                if (!re_first_test(&fc, c))
++                    continue;
++                for(i = 0; i < s->capture_count * 2; i++)
++                    capture[i] = NULL;
++                ret = lre_exec_backtrack(s, capture, body,
++                                         cbuf + (pos << cbuf_type));
++                if (ret != 0)
++                    break;
++            }
++        }
++    }
++    if (!searched)
++        ret = lre_exec_backtrack(s, capture, bc_buf + RE_HEADER_LEN, cptr);
+ 
+     if (s->stack_buf != s->static_stack_buf)
+         lre_realloc(s->opaque, s->stack_buf, 0);
