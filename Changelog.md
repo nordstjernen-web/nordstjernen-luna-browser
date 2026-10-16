@@ -2,6 +2,9 @@ Changelog:
 =========
 Significant changes in each release:
 
+1.0.15:
+=======
+
 1.0.14:
 =======
 * Security: fixes from a source-wide review on 2026-10-10. Each was
