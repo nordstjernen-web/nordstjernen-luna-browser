@@ -64,6 +64,13 @@ Significant changes in each release:
     with hundreds of custom properties, as Spectrum's are, built keys
     tens of kilobytes long field by field: the Lit and WebComponents
     workloads run 35-45% faster.
+  - Event listeners are indexed by their target. Adding, removing and
+    dispatching to a listener used to walk every listener on the page,
+    reading each one's `signal.aborted` from script on every
+    `addEventListener()`, and the pass that frees removed listeners ran
+    after every dispatch step whether or not any had been removed. With a
+    hundred list items carrying a few listeners each, that walk was a
+    third of the time Vue spends handling a click.
 * JavaScript passes every test262 test that quickjs-ng's own
   `test262.conf` enables: 0 failures in 82,220 runs, against 49 on
   v0.17.0. quickjs-ng moves from the v0.17.0 release to master
