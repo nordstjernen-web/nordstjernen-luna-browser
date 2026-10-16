@@ -47,6 +47,14 @@ Significant changes in each release:
     inside a frame from another site was treated as same-origin with the
     top page and could read its DOM. A frame's embedder is now the
     document that contains its element.
+* `JSON.parse()` reads decimals correctly when the operating system uses
+  a decimal comma. GTK sets every locale category from the environment
+  as the window starts, and the JSON parser converts numbers with the C
+  library's `strtod()`, which follows `LC_NUMERIC`: under a Norwegian,
+  German or French locale `JSON.parse("[1.5, 2.25e1]")` gave `[1, 2]`
+  in the browser window (headless runs never set the locale and were
+  unaffected). The window now puts `LC_NUMERIC` back to `"C"` after GTK
+  starts.
 * Performance, measured with Speedometer 3.1's TodoMVC workloads
   (`scripts/speedometer-bench.sh`):
   - The ancestor filter that lets the cascade skip a descendant
