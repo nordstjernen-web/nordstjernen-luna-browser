@@ -273,6 +273,9 @@ static void ns_js_flush_style(ns_js *js);
 static void ns_js_drain_deferred_scripts(ns_js *js);
 static void ns_js_drain_async_script_roots(ns_js *js);
 static void ns_js_schedule_pending_script_drain(ns_js *js);
+static void ns_js_link_attr_changed(ns_js *js, ns_node *link, const char *attr,
+                                    const char *old_value,
+                                    const char *new_value);
 static void ns_js_run_inserted_scripts(ns_js *js, ns_node *root);
 static void ns_js_script_needs_prepare(ns_js *js, ns_node *script);
 static void ns_subtree_scan_special(const ns_node *n, int depth,
@@ -47328,6 +47331,8 @@ ns_ce_attr_changed(ns_js *js, ns_node *node, const char *attr,
         ns_popover_attr_changed(js, node, attr, old_value, new_value);
     if (js && node && attr && ns_node_is_media_element(node))
         ns_media_attr_changed(js, node, attr);
+    if (js && node && attr && !js->halted)
+        ns_js_link_attr_changed(js, node, attr, old_value, new_value);
     if (!js || !node || !node->js_wrapper || !attr) return;
     if (js->ce_in_attr_callback) return;
     JSContext *ctx = js->ctx;
@@ -53463,6 +53468,7 @@ ns_js_reset_runtime_state(ns_js *js)
     }
     js->draining_microtasks = FALSE;
     ns_message_tasks_clear(js);
+    js->link_rescan_pending = FALSE;
     if (js->async_script_roots)
         g_ptr_array_set_size(js->async_script_roots, 0);
     if (js->deferred_iframe_loads)
@@ -55773,29 +55779,50 @@ ns_subtree_has_pending_script(const ns_node *n)
     return ns_subtree_has_pending_script_rec(n, 0);
 }
 
-static gboolean
-ns_link_is_loadable_stylesheet(const ns_node *n)
+typedef enum {
+    NS_LINK_FETCH_NONE,
+    NS_LINK_FETCH_STYLESHEET,
+    NS_LINK_FETCH_PRELOAD_STYLE,
+    NS_LINK_FETCH_PRELOAD_SCRIPT,
+} ns_link_fetch_kind;
+
+static ns_link_fetch_kind
+ns_link_fetch_kind_of(const ns_node *n)
 {
-    if (!ns_node_is_element_named(n, "link")) return FALSE;
-    if (n->flags & NS_NODE_LINK_LOAD_FIRED) return FALSE;
+    if (!ns_node_is_element_named(n, "link")) return NS_LINK_FETCH_NONE;
     const char *rel = ns_element_get_attr(n, "rel");
     const char *href = ns_element_get_attr(n, "href");
-    if (!href || !*href || !rel) return FALSE;
+    if (!href || !*href || !rel) return NS_LINK_FETCH_NONE;
     gchar **parts = g_strsplit_set(rel, " \t\r\n\f", -1);
-    gboolean is_sheet = FALSE, is_alt = FALSE;
+    gboolean is_sheet = FALSE, is_alt = FALSE, is_preload = FALSE;
     for (gchar **p = parts; *p; p++) {
         if (g_ascii_strcasecmp(*p, "stylesheet") == 0) is_sheet = TRUE;
         else if (g_ascii_strcasecmp(*p, "alternate") == 0) is_alt = TRUE;
+        else if (g_ascii_strcasecmp(*p, "preload") == 0) is_preload = TRUE;
     }
     g_strfreev(parts);
-    return is_sheet && !is_alt;
+    if (is_sheet && !is_alt) return NS_LINK_FETCH_STYLESHEET;
+    if (!is_preload) return NS_LINK_FETCH_NONE;
+    const char *as = ns_element_get_attr(n, "as");
+    if (as && g_ascii_strcasecmp(as, "style") == 0)
+        return NS_LINK_FETCH_PRELOAD_STYLE;
+    if (as && g_ascii_strcasecmp(as, "script") == 0)
+        return NS_LINK_FETCH_PRELOAD_SCRIPT;
+    return NS_LINK_FETCH_NONE;
+}
+
+static gboolean
+ns_link_needs_load(const ns_node *n)
+{
+    if (n->flags & NS_NODE_LINK_LOAD_FIRED) return FALSE;
+    return ns_link_fetch_kind_of(n) != NS_LINK_FETCH_NONE;
 }
 
 static void
 ns_js_collect_pending_stylesheets_rec(ns_node *n, GPtrArray *out, int depth)
 {
     if (!n || depth >= 512) return;
-    if (ns_link_is_loadable_stylesheet(n)) {
+    if (ns_link_needs_load(n)) {
         g_ptr_array_add(out, n);
         return;
     }
@@ -55811,10 +55838,12 @@ ns_js_collect_pending_stylesheets(ns_node *n, GPtrArray *out)
 }
 
 static void
-ns_js_load_stylesheet_element(ns_js *js, ns_node *n, const char *origin)
+ns_js_load_link_element(ns_js *js, ns_node *n, const char *origin)
 {
     if (!js || !n || (n->flags & NS_NODE_LINK_LOAD_FIRED)) return;
     n->flags |= NS_NODE_LINK_LOAD_FIRED;
+    gboolean is_script =
+        ns_link_fetch_kind_of(n) == NS_LINK_FETCH_PRELOAD_SCRIPT;
     const char *href = ns_element_get_attr(n, "href");
     if (!href || !*href) {
         ns_js_dispatch_resource_event(js, n, "error");
@@ -55831,16 +55860,22 @@ ns_js_load_stylesheet_element(ns_js *js, ns_node *n, const char *origin)
     }
     gboolean loaded = FALSE;
     const ns_csp *link_csp = ns_js_csp_for_node(js, n);
-    if (link_csp && !ns_csp_allows(link_csp, NS_CSP_STYLE, abs_url, origin)) {
+    if (link_csp && !ns_csp_allows(link_csp,
+                                   is_script ? NS_CSP_SCRIPT : NS_CSP_STYLE,
+                                   abs_url, origin)) {
         if (js->log_cb) {
-            char *line = g_strdup_printf("CSP blocked: stylesheet %s", abs_url);
+            char *line = g_strdup_printf("CSP blocked: %s %s",
+                                         is_script ? "script" : "stylesheet",
+                                         abs_url);
             js->log_cb(line, js->log_user_data);
             g_free(line);
         }
     } else {
         GError *err = NULL;
         ns_response *resp = ns_js_fetch_resource(js, abs_url, origin, NULL,
-                                                 NS_FETCH_DEST_STYLE,
+                                                 is_script
+                                                     ? NS_FETCH_DEST_SCRIPT
+                                                     : NS_FETCH_DEST_STYLE,
                                                  ns_js_fetch_policy(js, n),
                                                  &err);
         if (resp && resp->status == 200)
@@ -55849,7 +55884,9 @@ ns_js_load_stylesheet_element(ns_js *js, ns_node *n, const char *origin)
             const char *why = err ? err->message :
                 (resp && resp->error ? resp->error :
                  (resp ? "non-200 status" : "fetch failed"));
-            char *line = g_strdup_printf("stylesheet %s: %s", abs_url, why);
+            char *line = g_strdup_printf("%s %s: %s",
+                                         is_script ? "script" : "stylesheet",
+                                         abs_url, why);
             js->log_cb(line, js->log_user_data);
             g_free(line);
         }
@@ -55868,9 +55905,56 @@ ns_js_load_document_stylesheets(ns_js *js, ns_node *doc)
     for (guint i = 0; i < sheets->len && !js->halted; i++) {
         ns_node *sheet = g_ptr_array_index(sheets, i);
         g_autofree char *base = ns_js_node_document_base_url(js, sheet);
-        ns_js_load_stylesheet_element(js, sheet, base ? base : "inline");
+        ns_js_load_link_element(js, sheet, base ? base : "inline");
     }
     g_ptr_array_free(sheets, TRUE);
+}
+
+static gboolean
+ns_link_rel_is_stylesheet(const char *rel)
+{
+    if (!rel) return FALSE;
+    gchar **parts = g_strsplit_set(rel, " \t\r\n\f", -1);
+    gboolean found = FALSE;
+    for (gchar **p = parts; *p && !found; p++)
+        found = g_ascii_strcasecmp(*p, "stylesheet") == 0;
+    g_strfreev(parts);
+    return found;
+}
+
+static void
+ns_js_link_attr_changed(ns_js *js, ns_node *link, const char *attr,
+                        const char *old_value, const char *new_value)
+{
+    if (!js || !link || !attr || !ns_node_is_element_named(link, "link"))
+        return;
+    if (g_ascii_strcasecmp(attr, "rel") != 0 &&
+        g_ascii_strcasecmp(attr, "href") != 0 &&
+        g_ascii_strcasecmp(attr, "as") != 0)
+        return;
+    if (g_strcmp0(old_value, new_value) == 0) return;
+    link->flags &= ~NS_NODE_LINK_LOAD_FIRED;
+    if (!ns_js_node_in_page(js, link)) return;
+    const char *rel = ns_element_get_attr(link, "rel");
+    gboolean was_sheet = g_ascii_strcasecmp(attr, "rel") == 0
+        ? ns_link_rel_is_stylesheet(old_value)
+        : ns_link_rel_is_stylesheet(rel);
+    if (was_sheet || ns_link_rel_is_stylesheet(rel)) {
+        ns_css_mark_restyle_dirty(link->parent ? link->parent : link);
+        ns_js_note_layout_unscoped(js, "link stylesheet changed");
+    }
+    if (ns_link_fetch_kind_of(link) == NS_LINK_FETCH_NONE) return;
+    js->link_rescan_pending = TRUE;
+    ns_js_schedule_pending_script_drain(js);
+}
+
+static void
+ns_js_load_pending_links(ns_js *js)
+{
+    if (!js || !js->link_rescan_pending || js->halted) return;
+    js->link_rescan_pending = FALSE;
+    if (js->current_doc)
+        ns_js_load_document_stylesheets(js, js->current_doc);
 }
 
 static gboolean
@@ -55900,6 +55984,7 @@ ns_js_async_script_timer(gpointer data)
         ns_js_schedule_pending_script_drain(js);
         return G_SOURCE_REMOVE;
     }
+    ns_js_load_pending_links(js);
     ns_js_drain_deferred_scripts(js);
     ns_js_drain_async_script_roots(js);
     ns_js_schedule_pending_script_drain(js);
@@ -55910,7 +55995,7 @@ static void
 ns_js_schedule_pending_script_drain(ns_js *js)
 {
     if (!js || js->async_script_source) return;
-    gboolean pending =
+    gboolean pending = js->link_rescan_pending ||
         (js->deferred_script_roots && js->deferred_script_roots->len > 0) ||
         (js->async_script_roots && js->async_script_roots->len > 0);
     if (pending)
@@ -56025,7 +56110,7 @@ ns_js_run_inserted_scripts(ns_js *js, ns_node *root)
         ns_js_schedule_async_script_root(js, root);
     g_array_free(tasks, TRUE);
     for (guint i = 0; i < sheets->len; i++)
-        ns_js_load_stylesheet_element(js, g_ptr_array_index(sheets, i), origin);
+        ns_js_load_link_element(js, g_ptr_array_index(sheets, i), origin);
     g_ptr_array_free(sheets, TRUE);
 }
 
@@ -56055,7 +56140,7 @@ ns_js_drain_deferred_scripts(ns_js *js)
             ns_js_schedule_async_script_root(js, root);
         g_array_free(tasks, TRUE);
         for (guint i = 0; i < sheets->len; i++)
-            ns_js_load_stylesheet_element(js, g_ptr_array_index(sheets, i),
+            ns_js_load_link_element(js, g_ptr_array_index(sheets, i),
                                           origin);
         g_ptr_array_free(sheets, TRUE);
         break;

@@ -225,6 +225,7 @@ struct ns_js {
     GPtrArray    *deferred_script_roots;
     GPtrArray    *async_script_roots;
     guint         async_script_source;
+    gboolean      link_rescan_pending;
     GPtrArray    *pending_iframe_loads;
     GPtrArray    *deferred_iframe_loads;
     GHashTable   *pending_rejections;
