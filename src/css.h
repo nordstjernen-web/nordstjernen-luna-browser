@@ -1055,6 +1055,8 @@ typedef struct ns_css_stylesheet {
     char      *resolved_base;
     struct ns_css_rule_index *index;
     struct ns_css_incr_sheet_keys *incr_keys;
+    char      *host_scope;
+    guint64    host_scope_template;
 } ns_css_stylesheet;
 
 gboolean ns_css_stylesheet_has_container_rules(const ns_css_stylesheet *sh);
@@ -1069,6 +1071,8 @@ gboolean           ns_css_supports_declaration(const char *property,
 gboolean           ns_css_supports_condition(const char *condition,
                                              gboolean allow_bare_declaration);
 ns_css_stylesheet *ns_css_stylesheet_from_style_element_cached(ns_node *style);
+ns_css_stylesheet *ns_css_stylesheet_from_style_text_cached(ns_node *style,
+                                                           const char *css);
 char              *ns_css_style_element_text(ns_node *style);
 ns_css_stylesheet *ns_css_merged_styles_cached(const char *css, gssize len,
                                                const char *base_url);

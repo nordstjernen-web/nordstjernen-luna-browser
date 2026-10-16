@@ -55,6 +55,16 @@ Significant changes in each release:
   in the browser window (headless runs never set the locale and were
   unaffected). The window now puts `LC_NUMERIC` back to `"C"` after GTK
   starts.
+* Constructed style sheets adopted by a shadow root apply again. The
+  `adoptedStyleSheets` polyfill scoped each sheet to its host by giving
+  the host a `data-nd-host` attribute from script, which `setAttribute()`
+  has since refused for engine-internal names, so every adopted sheet
+  matched nothing: the WebComponents TodoMVC rendered as unstyled text.
+  The engine now tags the host itself, and each sheet is materialized
+  once per document and shared by every host that adopts it, so a
+  hundred custom elements adopting the same two sheets parse two sheets,
+  not two hundred. `adoptedStyleSheets.push()` takes effect, as the
+  observable array it is in browsers.
 * Performance, measured with Speedometer 3.1's TodoMVC workloads
   (`scripts/speedometer-bench.sh`):
   - The ancestor filter that lets the cascade skip a descendant
@@ -86,6 +96,14 @@ Significant changes in each release:
     document settled on and repeats only when they change, so every
     TodoMVC page, whose "What needs to be done?" placeholder is 22
     characters against the default 20, lays out once per frame.
+  - Adding or removing a shadow root's style sheets no longer restyles
+    the whole page. Sheets that can only match inside one shadow host
+    are kept apart from the page's sheets, left out of the signature
+    that decides whether the last cascade's styles can be reused, and
+    gathered only for elements inside that host; when one of them
+    changes, only its host is restyled. The Lit workload, whose hundred
+    `<todo-item>` shadow roots each carry their own `<style>`, restyled
+    7,600 elements every time an item was added or removed.
   - A plain CSS time such as `130ms` or `.2s` is read directly instead
     of through the `calc()` evaluator, which copied the text, printed the
     number back out and parsed it again under the C library's locale

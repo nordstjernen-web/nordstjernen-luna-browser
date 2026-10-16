@@ -708,11 +708,13 @@ collect_stylesheets_walk(ns_node *n, const char *base_url,
             if (css_has_viewport_media(css)) cc->media_seen = TRUE;
             if (cc->run_base && cc->run_base != base_url)
                 sheet_run_flush(cc);
-            if (strstr(css, "@import") ||
+            gboolean host_scoped =
+                strstr(css, "[" NS_HOST_SCOPE_ATTR "=\"") != NULL;
+            if (host_scoped || strstr(css, "@import") ||
                 !ns_css_syntax_is_self_contained(css, strlen(css))) {
                 sheet_run_flush(cc);
                 ns_css_stylesheet *sh =
-                    ns_css_stylesheet_from_style_element_cached(n);
+                    ns_css_stylesheet_from_style_text_cached(n, css);
                 if (sh) {
                     GHashTable *seen =
                         g_hash_table_new_full(g_str_hash, g_str_equal,

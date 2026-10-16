@@ -24059,6 +24059,30 @@ ns_js_note_attr_style_change(ns_js *js, const ns_node *n, const char *name,
     }
 }
 
+static JSValue
+ns_window_nd_host_adopt(JSContext *ctx, JSValueConst this_val,
+                        int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    ns_node *host = argc > 1 ? ns_unwrap_element_mut(argv[0]) : NULL;
+    if (!host || host->kind != NS_NODE_ELEMENT) return JS_UNDEFINED;
+    const char *tokens = JS_ToCString(ctx, argv[1]);
+    if (!tokens) return JS_EXCEPTION;
+    const char *old = ns_element_get_attr(host, NS_ADOPT_SCOPE_ATTR);
+    if (old ? strcmp(old, tokens) != 0 : *tokens != '\0') {
+        if (*tokens) ns_element_set_attr(host, NS_ADOPT_SCOPE_ATTR, tokens);
+        else ns_element_remove_attr(host, NS_ADOPT_SCOPE_ATTR);
+        ns_css_mark_restyle_dirty(host);
+        ns_js *js = js_from_ctx(ctx);
+        if (js && ns_js_node_in_page(js, host)) {
+            js->mutated = TRUE;
+            ns_js_note_layout_unscoped(js, "adopted style sheets");
+        }
+    }
+    JS_FreeCString(ctx, tokens);
+    return JS_UNDEFINED;
+}
+
 static void
 ns_js_set_attr_recorded_len(ns_js *js, ns_node *n, const char *name,
                             const char *value, gssize len)
@@ -49652,6 +49676,7 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     ns_bind_fn(ctx, global, "prompt",                ns_window_prompt,                 2);
     ns_bind_fn(ctx, global, "matchMedia",            ns_window_matchMedia,             1);
     ns_bind_fn(ctx, global, "__ndMediaListSerialize", ns_window_nd_media_serialize,    1);
+    ns_bind_fn(ctx, global, "__ndHostAdopt",         ns_window_nd_host_adopt,          2);
     ns_bind_fn(ctx, global, "getComputedStyle",      ns_window_getComputedStyle,       1);
     JS_DefinePropertyValueStr(ctx, global, "__ns_css_supported",
         JS_NewCFunction(ctx, ns_css_supported_property, "__ns_css_supported", 1),
