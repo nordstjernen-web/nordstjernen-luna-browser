@@ -110,7 +110,7 @@ if get_option('b_lto') and cc.get_id() == 'clang' and host_machine.system() == '
                          required: false)
   if not llvm_ar.found()
     error('LTO with clang needs llvm-ar; install it (MSYS2: pacman -S ' +
-          'mingw-w64-x86_64-llvm-tools) or configure with -Db_lto=false')
+          'mingw-w64-ucrt-x86_64-llvm-tools) or configure with -Db_lto=false')
   endif
 endif
 

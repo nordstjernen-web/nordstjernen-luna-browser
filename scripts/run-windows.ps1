@@ -1,8 +1,16 @@
 param(
     [string]$Url = "about:start",
-    [string]$MingwBin = "C:\msys64\mingw64\bin",
+    [string]$MingwBin = "",
     [string]$Exe = ""
 )
+
+if (-not $MingwBin) {
+    $MingwBin = "C:\msys64\ucrt64\bin"
+    if (-not (Test-Path -LiteralPath "$MingwBin\libgtk-4-1.dll") -and
+        (Test-Path -LiteralPath "C:\msys64\mingw64\bin\libgtk-4-1.dll")) {
+        $MingwBin = "C:\msys64\mingw64\bin"
+    }
+}
 
 if (-not $Exe) {
     $root = Resolve-Path (Join-Path $PSScriptRoot "..")

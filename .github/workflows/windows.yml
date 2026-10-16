@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   build:
-    name: msys2/mingw64 on windows-${{ matrix.windows }}
+    name: msys2/ucrt64 on windows-${{ matrix.windows }}
     runs-on: windows-${{ matrix.windows }}
     timeout-minutes: 60
 
@@ -41,38 +41,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up MSYS2 (mingw64)
+      - name: Set up MSYS2 (ucrt64)
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           cache: true
           install: >-
             git
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-lld
-            mingw-w64-x86_64-llvm-tools
-            mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-meson
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-ccache
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-gtk4
-            mingw-w64-x86_64-harfbuzz
-            mingw-w64-x86_64-fribidi
-            mingw-w64-x86_64-cairo
-            mingw-w64-x86_64-fontconfig
-            mingw-w64-x86_64-freetype
-            mingw-w64-x86_64-curl
-            mingw-w64-x86_64-ca-certificates
-            mingw-w64-x86_64-uchardet
-            mingw-w64-x86_64-libpsl
-            mingw-w64-x86_64-sqlite3
-            mingw-w64-x86_64-libavif
-            mingw-w64-x86_64-SDL2
-            mingw-w64-x86_64-opusfile
-            mingw-w64-x86_64-libvorbis
-            mingw-w64-x86_64-enchant
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-llvm-tools
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-harfbuzz
+            mingw-w64-ucrt-x86_64-fribidi
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-fontconfig
+            mingw-w64-ucrt-x86_64-freetype
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-ca-certificates
+            mingw-w64-ucrt-x86_64-uchardet
+            mingw-w64-ucrt-x86_64-libpsl
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-libavif
+            mingw-w64-ucrt-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-opusfile
+            mingw-w64-ucrt-x86_64-libvorbis
+            mingw-w64-ucrt-x86_64-enchant
 
       - name: Restore ccache
         id: ccache-restore
@@ -81,9 +81,9 @@ jobs:
           path: |
             ${{ runner.temp }}\ccache
             ${{ runner.temp }}\thinlto-cache
-          key: ccache-windows-${{ matrix.windows }}-${{ github.sha }}
+          key: ccache-windows-${{ matrix.windows }}-ucrt64-${{ github.sha }}
           restore-keys: |
-            ccache-windows-${{ matrix.windows }}-
+            ccache-windows-${{ matrix.windows }}-ucrt64-
 
       - name: Configure ccache
         run: |
@@ -128,7 +128,7 @@ jobs:
       - name: Upload northstar binary
         uses: actions/upload-artifact@v7
         with:
-          name: northstar-windows-${{ matrix.windows }}-mingw64
+          name: northstar-windows-${{ matrix.windows }}-ucrt64
           path: builddir/src/gtk/northstar.exe
           if-no-files-found: error
           retention-days: 14
@@ -141,4 +141,4 @@ jobs:
           path: |
             ${{ runner.temp }}\ccache
             ${{ runner.temp }}\thinlto-cache
-          key: ccache-windows-${{ matrix.windows }}-${{ github.sha }}
+          key: ccache-windows-${{ matrix.windows }}-ucrt64-${{ github.sha }}
