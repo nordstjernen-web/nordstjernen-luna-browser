@@ -33020,52 +33020,69 @@ ns_style_clone_shared(const ns_style *s)
     return c;
 }
 
+static guint8 *
+share_key_grow(GByteArray *b, guint n_entries, gsize entry_size)
+{
+    guint at = b->len;
+    g_byte_array_set_size(b, at + sizeof(guint) + n_entries * entry_size);
+    memcpy(b->data + at, &n_entries, sizeof n_entries);
+    return b->data + at + sizeof(guint);
+}
+
+static guint8 *
+share_key_put(guint8 *p, const void *src, gsize n)
+{
+    memcpy(p, src, n);
+    return p + n;
+}
+
 static void
 share_key_put_matches(GByteArray *b, const GArray *arr)
 {
+    const gsize order_len = offsetof(match_entry, inline_style) +
+                            sizeof(gboolean);
     guint n = arr ? arr->len : 0;
-    g_byte_array_append(b, (const guint8 *)&n, sizeof n);
+    guint8 *p = share_key_grow(b, n, order_len + sizeof(void *) * 2 +
+                                     sizeof(ns_css_prop));
     for (guint i = 0; i < n; i++) {
         const match_entry *e = &g_array_index((GArray *)arr, match_entry, i);
-        g_byte_array_append(b, (const guint8 *)&e->origin, sizeof(int) * 9);
-        g_byte_array_append(b, (const guint8 *)&e->important, sizeof e->important);
-        g_byte_array_append(b, (const guint8 *)&e->inline_style,
-                            sizeof e->inline_style);
-        g_byte_array_append(b, (const guint8 *)&e->rule, sizeof e->rule);
-        g_byte_array_append(b, (const guint8 *)&e->value, sizeof e->value);
-        g_byte_array_append(b, (const guint8 *)&e->prop, sizeof e->prop);
+        p = share_key_put(p, e, order_len);
+        p = share_key_put(p, &e->rule, sizeof e->rule);
+        p = share_key_put(p, &e->value, sizeof e->value);
+        p = share_key_put(p, &e->prop, sizeof e->prop);
     }
 }
 
 static void
 share_key_put_vars(GByteArray *b, const GArray *arr)
 {
+    const gsize order_len = offsetof(var_match, inline_style) +
+                            sizeof(gboolean);
     guint n = arr ? arr->len : 0;
-    g_byte_array_append(b, (const guint8 *)&n, sizeof n);
+    guint8 *p = share_key_grow(b, n, order_len + sizeof(void *) * 3);
     for (guint i = 0; i < n; i++) {
         const var_match *e = &g_array_index((GArray *)arr, var_match, i);
-        g_byte_array_append(b, (const guint8 *)&e->origin, sizeof(int) * 9);
-        g_byte_array_append(b, (const guint8 *)&e->important, sizeof e->important);
-        g_byte_array_append(b, (const guint8 *)&e->inline_style,
-                            sizeof e->inline_style);
-        g_byte_array_append(b, (const guint8 *)&e->rule, sizeof e->rule);
-        g_byte_array_append(b, (const guint8 *)&e->name, sizeof e->name);
-        g_byte_array_append(b, (const guint8 *)&e->text, sizeof e->text);
+        p = share_key_put(p, e, order_len);
+        p = share_key_put(p, &e->rule, sizeof e->rule);
+        p = share_key_put(p, &e->name, sizeof e->name);
+        p = share_key_put(p, &e->text, sizeof e->text);
     }
 }
 
 static void
 share_key_put_pending(GByteArray *b, const GArray *arr)
 {
+    const gsize order_len = offsetof(pending_match, decl_order_base) +
+                            sizeof(int);
     guint n = arr ? arr->len : 0;
-    g_byte_array_append(b, (const guint8 *)&n, sizeof n);
+    guint8 *p = share_key_grow(b, n, order_len + sizeof(gboolean) +
+                                     sizeof(void *) * 2);
     for (guint i = 0; i < n; i++) {
         const pending_match *e = &g_array_index((GArray *)arr, pending_match, i);
-        g_byte_array_append(b, (const guint8 *)&e->origin, sizeof(int) * 9);
-        g_byte_array_append(b, (const guint8 *)&e->inline_style,
-                            sizeof e->inline_style);
-        g_byte_array_append(b, (const guint8 *)&e->rule, sizeof e->rule);
-        g_byte_array_append(b, (const guint8 *)&e->pd, sizeof e->pd);
+        p = share_key_put(p, e, order_len);
+        p = share_key_put(p, &e->inline_style, sizeof e->inline_style);
+        p = share_key_put(p, &e->rule, sizeof e->rule);
+        p = share_key_put(p, &e->pd, sizeof e->pd);
     }
 }
 

@@ -58,6 +58,12 @@ Significant changes in each release:
     every element against every host's rules: restyling the
     WebComponents complex-DOM workload after it adds its items drops
     from 1.8 s to 0.3 s.
+  - The key that lets elements with the same matched rules share one
+    computed style is written in three copies per declaration instead
+    of six appends, into a buffer sized once. Elements under rule sets
+    with hundreds of custom properties, as Spectrum's are, built keys
+    tens of kilobytes long field by field: the Lit and WebComponents
+    workloads run 35-45% faster.
 * JavaScript passes every test262 test that quickjs-ng's own
   `test262.conf` enables: 0 failures in 82,220 runs, against 49 on
   v0.17.0. quickjs-ng moves from the v0.17.0 release to master
