@@ -236,6 +236,7 @@ gboolean ns_layout_frame_viewport(const ns_node *frame, double *w, double *h);
 
 gboolean ns_layout_reads_label_attr(const ns_node *n, const char *name);
 gboolean ns_overflow_keyword_clips(const char *overflow);
+gboolean ns_style_has_box_paint(const ns_style *s);
 
 typedef struct ns_progress_state {
     gboolean determinate;
