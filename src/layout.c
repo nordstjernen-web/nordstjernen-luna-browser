@@ -457,7 +457,6 @@ text_is_ws_only(const char *text)
     return TRUE;
 }
 
-
 static double
 border_side_width(const ns_style *s, ns_css_prop width_prop,
                   ns_css_prop style_prop)
@@ -5710,7 +5709,6 @@ inline_atomic_outer_height(const ns_box *b)
            b->border.top + b->border.bottom + b->margin.top + b->margin.bottom;
 }
 
-
 static gboolean
 inline_box_has_measure_attrs(const ns_box *box)
 {
@@ -7397,8 +7395,6 @@ inline_atomic_measure_basis(const ns_box *box)
     return basis;
 }
 
-/* Lay out an atomic inline for measurement. Replaced elements arrive with
- * their content size already set, so only their edges need resolving. */
 static void
 inline_atomic_prepare(ns_box *ab, const ns_style *parent_style)
 {
@@ -7458,11 +7454,6 @@ grid_gap_px(const ns_style *s)
     return 0;
 }
 
-/* The intrinsic width of a grid that places its items column by column
- * (grid-auto-flow: column): each run of as many items as there are
- * explicit rows fills a new column, so the columns sit side by side and
- * the width is their sum plus the gaps. Returns -1 when items are placed
- * explicitly, which this does not model. */
 static double
 grid_column_flow_width(ns_box *box, const ns_style *child_style,
                        gboolean min)
@@ -14698,7 +14689,6 @@ process_absolute_boxes(ns_box *root, GHashTable *styles, double viewport_width)
                 paint_parent = anc;
         }
 
-
         int pp_depth = 0;
         for (const ns_box *p = paint_parent; p; p = p->parent)
             if (++pp_depth >= NS_LAYOUT_MAX_DEPTH) break;
@@ -15000,8 +14990,6 @@ restyle_inset_set(const ns_css_value *v)
            (v->kind == NS_CSS_V_LENGTH || v->kind == NS_CSS_V_CALC);
 }
 
-/* How far an absolutely positioned box moves when one inset changes while
- * its opposite stays auto, so its size and everything else hold. */
 static gboolean
 restyle_inset_shift(const ns_style *os, const ns_style *ns, ns_css_prop start,
                     ns_css_prop end, double basis, double *delta)
@@ -15135,10 +15123,6 @@ struct ns_layout_restyle_plan {
     GPtrArray   *changed;
 };
 
-/* The check pass of a restyle: FALSE when a box baked in at build time the
- * values of an old style that change (an inline run's text attributes), or
- * a moved box cannot simply be shifted; otherwise the boxes to patch go to
- * plan in tree order. */
 static gboolean
 restyle_scan(ns_box *b, ns_layout_restyle_plan *plan, int depth)
 {
@@ -15246,8 +15230,6 @@ ns_layout_restyle_apply(ns_layout_restyle_plan *plan)
             b->svg_styles = g_hash_table_ref(rc->styles);
         }
     }
-    /* Paint bounds are vertical: they move only with a box moved down or
-     * up, or a style that makes a box paint anywhere. */
     if (bounds) compute_paint_bounds(plan->root);
 }
 
@@ -16331,7 +16313,6 @@ ns_box_hit_link(const ns_box *root, double x, double y)
 {
     const ns_link_range *r = ns_box_hit_link_range(root, x, y);
     if (!r) return NULL;
-    /* A link's href may change without a relayout while it stays set. */
     const char *live = r->dom ? ns_element_get_attr(r->dom, "href") : NULL;
     return live && *live ? live : r->href;
 }
