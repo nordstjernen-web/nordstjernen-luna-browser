@@ -28255,6 +28255,22 @@ ns_js_fire_img_load_once(ns_js *js, ns_node *node, gboolean failed)
 }
 
 static void
+ns_event_set_mouse_coords(JSContext *ctx, JSValueConst event, double client_x,
+                          double client_y, double page_x, double page_y)
+{
+    const struct { const char *name; double value; } coords[] = {
+        { "clientX", client_x }, { "clientY", client_y },
+        { "x", client_x },       { "y", client_y },
+        { "pageX", page_x },     { "pageY", page_y },
+        { "screenX", client_x }, { "screenY", client_y },
+        { "offsetX", client_x }, { "offsetY", client_y },
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(coords); i++)
+        JS_SetPropertyStr(ctx, event, coords[i].name,
+                          JS_NewFloat64(ctx, coords[i].value));
+}
+
+static void
 ns_js_walk_collect_media_events(const ns_box *b, GPtrArray *imgs,
                                 GArray *img_failed, GPtrArray *videos)
 {
@@ -28363,16 +28379,7 @@ ns_js_dispatch_mouse_event(ns_js *js, const ns_node *target, const char *type,
         JS_SetPropertyStr(ctx, event, "bubbles",    JS_FALSE);
         JS_SetPropertyStr(ctx, event, "cancelable", JS_FALSE);
     }
-    JS_SetPropertyStr(ctx, event, "clientX", JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "clientY", JS_NewFloat64(ctx, client_y));
-    JS_SetPropertyStr(ctx, event, "x",       JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "y",       JS_NewFloat64(ctx, client_y));
-    JS_SetPropertyStr(ctx, event, "pageX",   JS_NewFloat64(ctx, page_x));
-    JS_SetPropertyStr(ctx, event, "pageY",   JS_NewFloat64(ctx, page_y));
-    JS_SetPropertyStr(ctx, event, "screenX", JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "screenY", JS_NewFloat64(ctx, client_y));
-    JS_SetPropertyStr(ctx, event, "offsetX", JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "offsetY", JS_NewFloat64(ctx, client_y));
+    ns_event_set_mouse_coords(ctx, event, client_x, client_y, page_x, page_y);
     int move_x = 0, move_y = 0;
     if (strcmp(type, "mousemove") == 0 || strcmp(type, "pointermove") == 0) {
         int slot = type[0] == 'p' ? 1 : 0;
@@ -28561,16 +28568,7 @@ ns_js_dispatch_drag_event(ns_js *js, ns_js_drag_session *session,
         strcmp(type, "dragover") == 0 ||
         strcmp(type, "drop") == 0;
     JS_SetPropertyStr(ctx, event, "cancelable", cancelable ? JS_TRUE : JS_FALSE);
-    JS_SetPropertyStr(ctx, event, "clientX", JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "clientY", JS_NewFloat64(ctx, client_y));
-    JS_SetPropertyStr(ctx, event, "x",       JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "y",       JS_NewFloat64(ctx, client_y));
-    JS_SetPropertyStr(ctx, event, "pageX",   JS_NewFloat64(ctx, page_x));
-    JS_SetPropertyStr(ctx, event, "pageY",   JS_NewFloat64(ctx, page_y));
-    JS_SetPropertyStr(ctx, event, "screenX", JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "screenY", JS_NewFloat64(ctx, client_y));
-    JS_SetPropertyStr(ctx, event, "offsetX", JS_NewFloat64(ctx, client_x));
-    JS_SetPropertyStr(ctx, event, "offsetY", JS_NewFloat64(ctx, client_y));
+    ns_event_set_mouse_coords(ctx, event, client_x, client_y, page_x, page_y);
     JS_SetPropertyStr(ctx, event, "movementX", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, event, "movementY", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, event, "button",  JS_NewInt32(ctx, button));
@@ -52487,6 +52485,22 @@ ns_release_pinned_wrappers(ns_js *js)
 }
 
 static void
+ns_perf_observers_disconnect_all(ns_js *js)
+{
+    for (guint i = 0; i < js->perf_observers->len; i++) {
+        ns_perf_observer *o = g_ptr_array_index(js->perf_observers, i);
+        if (!o) continue;
+        o->disconnected = TRUE;
+        if (o->records) g_ptr_array_set_size(o->records, 0);
+        if (o->entry_types) g_ptr_array_set_size(o->entry_types, 0);
+        if (o->pinned) {
+            o->pinned = FALSE;
+            JS_FreeValue(js->ctx, o->wrapper);
+        }
+    }
+}
+
+static void
 ns_js_reset_runtime_state(ns_js *js)
 {
     if (!js) return;
@@ -52619,17 +52633,7 @@ ns_js_reset_runtime_state(ns_js *js)
     }
 
     if (js->perf_observers) {
-        for (guint i = 0; i < js->perf_observers->len; i++) {
-            ns_perf_observer *o = g_ptr_array_index(js->perf_observers, i);
-            if (!o) continue;
-            o->disconnected = TRUE;
-            if (o->records) g_ptr_array_set_size(o->records, 0);
-            if (o->entry_types) g_ptr_array_set_size(o->entry_types, 0);
-            if (o->pinned) {
-                o->pinned = FALSE;
-                JS_FreeValue(js->ctx, o->wrapper);
-            }
-        }
+        ns_perf_observers_disconnect_all(js);
     }
     js->perf_drain_scheduled = FALSE;
 
@@ -53210,17 +53214,7 @@ ns_js_free(ns_js *js)
     }
     if (js->perf_entries) g_ptr_array_free(js->perf_entries, TRUE);
     if (js->perf_observers) {
-        for (guint i = 0; i < js->perf_observers->len; i++) {
-            ns_perf_observer *o = g_ptr_array_index(js->perf_observers, i);
-            if (!o) continue;
-            o->disconnected = TRUE;
-            if (o->records) g_ptr_array_set_size(o->records, 0);
-            if (o->entry_types) g_ptr_array_set_size(o->entry_types, 0);
-            if (o->pinned) {
-                o->pinned = FALSE;
-                JS_FreeValue(js->ctx, o->wrapper);
-            }
-        }
+        ns_perf_observers_disconnect_all(js);
         g_ptr_array_free(js->perf_observers, TRUE);
         js->perf_observers = NULL;
     }
