@@ -35,7 +35,6 @@ void ns_paint_3d_invalidate(void);
 gboolean ns_paint_3d_registered(const ns_box *b);
 const ns_box *ns_paint_3d_pick(const ns_box *root3d, double x, double y);
 
-
 void ns_paint_set_search(gboolean case_sensitive, const ns_box *active);
 
 gboolean ns_paint_inline_range_extents(const ns_box *b, gsize start, gsize len,
@@ -49,10 +48,7 @@ gboolean ns_paint_inline_word_range(const ns_box *b, gsize byte,
 gboolean ns_paint_inline_strut_line(const ns_box *b, const ns_style *s,
                                     NsPangoLayout *layout, double *out_offset,
                                     double *out_height, double *out_baseline);
-double ns_paint_inline_y_offset_for_layout(const ns_box *b,
-                                           NsPangoLayout *layout);
 
-NsPangoLayout *ns_paint_build_inline_layout(cairo_t *cr, const ns_box *b);
 void ns_paint_sync_inline_atomic_offsets(ns_box *root);
 
 void ns_paint_register_font_oracle(void);

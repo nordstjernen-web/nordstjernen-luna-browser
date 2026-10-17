@@ -348,7 +348,7 @@ media_notify_playing(ns_media_player *p)
     media_queue_settle(p, NULL, NULL);
 }
 
-char *
+static char *
 ns_media_resolve_src(JSContext *ctx, ns_node *node)
 {
     const char *src = ns_media_select_source(node);
@@ -388,14 +388,6 @@ media_video_failed(ns_media_player *p)
     ns_image *img = ns_image_cache_peek(js->image_cache, p->src);
     return img && (img->failed ||
                    (img->loaded && !ns_image_is_animation(img)));
-}
-
-ns_image *
-ns_media_animation_for(JSContext *ctx, JSValueConst this_val)
-{
-    ns_node *el = (ns_node *)ns_unwrap_element(this_val);
-    ns_media_player *p = media_player_find(js_from_ctx(ctx), el);
-    return p ? media_video_frames(p) : NULL;
 }
 
 static void
@@ -736,10 +728,8 @@ media_internal_pause(ns_media_player *p, gboolean fire_events)
 }
 
 static void
-media_became_ready(ns_media_player *p, double duration, int width, int height)
+media_became_ready(ns_media_player *p, double duration)
 {
-    (void)width;
-    (void)height;
     p->duration = duration > 0 ? duration : NAN;
     p->ready_state = HAVE_ENOUGH_DATA;
     p->network_state = NETWORK_IDLE;
@@ -1068,9 +1058,7 @@ media_poll_player(ns_media_player *p, gint64 now)
         if (p->ready_state < HAVE_METADATA) {
             ns_image *frames = media_video_frames(p);
             if (frames) {
-                media_became_ready(p, ns_image_anim_duration(frames),
-                                   frames->natural_width,
-                                   frames->natural_height);
+                media_became_ready(p, ns_image_anim_duration(frames));
             } else if (media_video_failed(p)) {
                 media_fail_source(p, MEDIA_ERR_SRC_NOT_SUPPORTED,
                                   "MEDIA_ELEMENT_ERROR: Format error");
@@ -1102,7 +1090,7 @@ media_poll_player(ns_media_player *p, gint64 now)
         }
         if (p->ready_state < HAVE_METADATA) {
             if (known && status.state == NS_AUDIO_PLAYER_READY)
-                media_became_ready(p, status.duration, 0, 0);
+                media_became_ready(p, status.duration);
             return TRUE;
         }
         if (known && status.state == NS_AUDIO_PLAYER_READY &&

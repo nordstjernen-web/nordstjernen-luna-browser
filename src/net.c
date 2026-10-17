@@ -43,6 +43,11 @@
 #include <sys/sysctl.h>
 #endif
 
+static void ns_net_fetch_async(const char *url, const char *top_url,
+                               GCancellable *cancellable,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data);
+
 static char *g_cookie_dir;
 
 typedef struct {
@@ -286,9 +291,8 @@ ns_net_multi_start(void)
 }
 
 static CURLcode
-ns_net_multi_perform(CURL *easy, GCancellable *cancellable)
+ns_net_multi_perform(CURL *easy)
 {
-    (void)cancellable;
     ns_net_multi_start();
     if (!g_multi) return curl_easy_perform(easy);
 
@@ -346,7 +350,7 @@ ns_net_data_path(char **slot, const char *basename)
     return *slot;
 }
 
-static void
+void
 ns_rmrf(const char *path)
 {
     if (!path) return;
@@ -562,12 +566,6 @@ ns_url_is_ftp(const char *url)
     return url && g_str_has_prefix(url, "ftp://");
 }
 
-static gboolean
-refresh_is_space(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
-}
-
 gboolean
 ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
 {
@@ -576,7 +574,7 @@ ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
     if (!input) return FALSE;
 
     const char *p = input;
-    while (refresh_is_space(*p)) p++;
+    while (ns_is_ascii_ws(*p)) p++;
 
     const char *digits = p;
     while (g_ascii_isdigit(*p)) p++;
@@ -590,10 +588,10 @@ ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
     while (*p == '.' || g_ascii_isdigit(*p)) p++;
 
     if (*p) {
-        if (*p != ';' && *p != ',' && !refresh_is_space(*p)) return FALSE;
-        while (refresh_is_space(*p)) p++;
+        if (*p != ';' && *p != ',' && !ns_is_ascii_ws(*p)) return FALSE;
+        while (ns_is_ascii_ws(*p)) p++;
         if (*p == ';' || *p == ',') p++;
-        while (refresh_is_space(*p)) p++;
+        while (ns_is_ascii_ws(*p)) p++;
     }
 
     if (*p == 'u' || *p == 'U') {
@@ -602,10 +600,10 @@ ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
             q++;
             if (*q == 'l' || *q == 'L') {
                 q++;
-                while (refresh_is_space(*q)) q++;
+                while (ns_is_ascii_ws(*q)) q++;
                 if (*q == '=') {
                     q++;
-                    while (refresh_is_space(*q)) q++;
+                    while (ns_is_ascii_ws(*q)) q++;
                     p = q;
                 }
             }
@@ -1217,7 +1215,7 @@ ns_net_hsts_should_upgrade(const char *host)
     return hit;
 }
 
-char *
+static char *
 ns_net_hsts_upgrade(const char *url)
 {
     if (!url) return NULL;
@@ -1330,7 +1328,7 @@ ns_net_empty_dir(const char *dir)
     g_dir_close(d);
 }
 
-void
+static void
 ns_net_cookies_clear(void)
 {
     g_mutex_lock(&g_cookie_partitions_lock);
@@ -1350,7 +1348,7 @@ ns_net_cookies_clear(void)
     ns_net_empty_dir(ns_net_cookie_dir());
 }
 
-void
+static void
 ns_net_site_storage_clear(void)
 {
     char *base = g_build_filename(g_get_user_data_dir(), NS_APP_DIR_NAME, NULL);
@@ -2199,39 +2197,6 @@ ns_net_apply_curl_proxy(void *curl_handle, const char *url)
     const char *no_proxy = ns_net_configured_no_proxy();
     if (no_proxy && *no_proxy)
         curl_easy_setopt(curl, CURLOPT_NOPROXY, no_proxy);
-}
-
-const char *
-ns_net_proxy_override(void)
-{
-    return g_proxy_override;
-}
-
-const char *
-ns_net_http_proxy(void)
-{
-    const ns_config *cfg = ns_config_get();
-    return cfg ? cfg->http_proxy : NULL;
-}
-
-const char *
-ns_net_https_proxy(void)
-{
-    const ns_config *cfg = ns_config_get();
-    return cfg ? cfg->https_proxy : NULL;
-}
-
-const char *
-ns_net_no_proxy(void)
-{
-    const ns_config *cfg = ns_config_get();
-    return cfg ? cfg->no_proxy : NULL;
-}
-
-const char *
-ns_net_ca_bundle_path(void)
-{
-    return g_ca_bundle;
 }
 
 void
@@ -3530,34 +3495,33 @@ synthesize_data_response(const char *url, ns_response *resp)
     return TRUE;
 }
 
-typedef struct ns_file_listing_entry {
+typedef struct ns_listing_entry {
     char     *name;
     char     *display;
     char     *uri;
+    char     *date;
     guint64   size;
-    gint64    mtime;
     gboolean  is_dir;
-    gboolean  have_stat;
-} ns_file_listing_entry;
+    gboolean  have_size;
+} ns_listing_entry;
 
 static void
-file_listing_entry_free(gpointer data)
+listing_entry_free(gpointer data)
 {
-    ns_file_listing_entry *e = data;
+    ns_listing_entry *e = data;
     if (!e) return;
     g_free(e->name);
     g_free(e->display);
     g_free(e->uri);
+    g_free(e->date);
     g_free(e);
 }
 
 static gint
-file_listing_entry_compare(gconstpointer ap, gconstpointer bp)
+listing_entry_compare(gconstpointer ap, gconstpointer bp)
 {
-    const ns_file_listing_entry *a =
-        *(const ns_file_listing_entry * const *)ap;
-    const ns_file_listing_entry *b =
-        *(const ns_file_listing_entry * const *)bp;
+    const ns_listing_entry *a = *(const ns_listing_entry * const *)ap;
+    const ns_listing_entry *b = *(const ns_listing_entry * const *)bp;
     if (a->is_dir != b->is_dir)
         return a->is_dir ? -1 : 1;
     return g_utf8_collate(a->display ? a->display : "",
@@ -3632,55 +3596,13 @@ file_directory_error_page(const char *url, long status, const char *error)
 }
 
 static char *
-file_directory_listing_page(const char *path, const char *url, long *status_out)
+listing_page(const char *title, const char *parent_uri, GPtrArray *entries)
 {
-    if (status_out) *status_out = 200;
-    GError *err = NULL;
-    GDir *dir = g_dir_open(path, 0, &err);
-    if (!dir) {
-        long status = g_error_matches(err, G_FILE_ERROR, G_FILE_ERROR_ACCES)
-            ? 403 : 404;
-        char *msg = g_strdup(err ? err->message : "cannot read folder");
-        g_clear_error(&err);
-        if (status_out) *status_out = status;
-        char *html = file_directory_error_page(url, status, msg);
-        g_free(msg);
-        return html;
-    }
-
-    GPtrArray *entries = g_ptr_array_new_with_free_func(file_listing_entry_free);
-    const char *name;
-    while ((name = g_dir_read_name(dir)) != NULL) {
-        char *full = g_build_filename(path, name, NULL);
-        ns_file_listing_entry *e = g_new0(ns_file_listing_entry, 1);
-        e->name = g_strdup(name);
-        e->display = g_filename_display_name(name);
-        e->is_dir = g_file_test(full, G_FILE_TEST_IS_DIR);
-        GStatBuf st;
-        if (g_stat(full, &st) == 0) {
-            e->have_stat = TRUE;
-            if (st.st_size > 0)
-                e->size = (guint64)st.st_size;
-            e->mtime = (gint64)st.st_mtime;
-        }
-        e->uri = file_uri_for_path(full, e->is_dir);
-        if (e->uri)
-            g_ptr_array_add(entries, e);
-        else
-            file_listing_entry_free(e);
-        g_free(full);
-    }
-    g_dir_close(dir);
-    g_ptr_array_sort(entries, file_listing_entry_compare);
-
-    char *display_path = g_filename_display_name(path);
-    char *esc_path = ns_html_escape_text(display_path ? display_path : path);
-    char *parent_uri = file_listing_parent_uri(path);
-    char *esc_parent = parent_uri ? ns_html_escape_text(parent_uri) : NULL;
+    char *esc_title = ns_html_escape_text(title);
     GString *out = g_string_new(NULL);
     g_string_append(out, "<!doctype html><html><head><meta charset=\"utf-8\">");
     g_string_append(out, "<title>Index of ");
-    g_string_append(out, esc_path);
+    g_string_append(out, esc_title);
     g_string_append(out, "</title><style>"
         "body{font-family:serif;margin:8px;color:#000;background:#fff}"
         "h1{font-size:2em;margin:.4em 0}"
@@ -3695,25 +3617,27 @@ file_directory_listing_page(const char *path, const char *url, long *status_out)
         "a{color:#00e;text-decoration:underline}"
         "hr{border:0;border-top:1px solid #bbb;margin:.6em 0}"
         "</style></head><body><h1>Index of ");
-    g_string_append(out, esc_path);
+    g_string_append(out, esc_title);
     g_string_append(out, "</h1><hr><table><thead><tr>"
         "<th>Name</th><th>Size</th><th>Date modified</th>"
         "</tr></thead><tbody>");
     if (parent_uri) {
+        char *esc_parent = ns_html_escape_text(parent_uri);
         g_string_append(out, "<tr><td class=\"name\"><span class=\"ico dir\""
             " aria-hidden=\"true\">&#128193;</span><a href=\"");
         g_string_append(out, esc_parent);
         g_string_append(out, "\">../</a></td><td class=\"size\"></td>"
             "<td></td></tr>");
+        g_free(esc_parent);
     }
     for (guint i = 0; i < entries->len; i++) {
-        ns_file_listing_entry *e = g_ptr_array_index(entries, i);
+        ns_listing_entry *e = g_ptr_array_index(entries, i);
         char *esc_uri = ns_html_escape_text(e->uri);
         char *esc_name = ns_html_escape_text(e->display ? e->display : e->name);
-        char *size = e->is_dir ? g_strdup("") : file_size_label(e->size);
-        char *date = e->have_stat ? file_mtime_label(e->mtime) : g_strdup("");
+        char *size = (!e->is_dir && e->have_size) ? file_size_label(e->size)
+                                                  : g_strdup("");
         char *esc_size = ns_html_escape_text(size);
-        char *esc_date = ns_html_escape_text(date);
+        char *esc_date = ns_html_escape_text(e->date ? e->date : "");
         g_string_append(out, "<tr><td class=\"name\"><span class=\"ico ");
         g_string_append(out, e->is_dir ? "dir" : "file");
         g_string_append(out, "\" aria-hidden=\"true\">");
@@ -3732,52 +3656,64 @@ file_directory_listing_page(const char *path, const char *url, long *status_out)
         g_free(esc_uri);
         g_free(esc_name);
         g_free(size);
-        g_free(date);
         g_free(esc_size);
         g_free(esc_date);
     }
     g_string_append(out, "</tbody></table><hr></body></html>");
-    g_ptr_array_free(entries, TRUE);
-    g_free(display_path);
-    g_free(esc_path);
-    g_free(parent_uri);
-    g_free(esc_parent);
+    g_free(esc_title);
     return g_string_free(out, FALSE);
 }
 
-typedef struct ns_ftp_listing_entry {
-    char     *name;
-    char     *display;
-    char     *uri;
-    char     *date;
-    guint64   size;
-    gboolean  is_dir;
-    gboolean  have_size;
-} ns_ftp_listing_entry;
-
-static void
-ftp_listing_entry_free(gpointer data)
+static char *
+file_directory_listing_page(const char *path, const char *url, long *status_out)
 {
-    ns_ftp_listing_entry *e = data;
-    if (!e) return;
-    g_free(e->name);
-    g_free(e->display);
-    g_free(e->uri);
-    g_free(e->date);
-    g_free(e);
-}
+    if (status_out) *status_out = 200;
+    GError *err = NULL;
+    GDir *dir = g_dir_open(path, 0, &err);
+    if (!dir) {
+        long status = g_error_matches(err, G_FILE_ERROR, G_FILE_ERROR_ACCES)
+            ? 403 : 404;
+        char *msg = g_strdup(err ? err->message : "cannot read folder");
+        g_clear_error(&err);
+        if (status_out) *status_out = status;
+        char *html = file_directory_error_page(url, status, msg);
+        g_free(msg);
+        return html;
+    }
 
-static gint
-ftp_listing_entry_compare(gconstpointer ap, gconstpointer bp)
-{
-    const ns_ftp_listing_entry *a =
-        *(const ns_ftp_listing_entry * const *)ap;
-    const ns_ftp_listing_entry *b =
-        *(const ns_ftp_listing_entry * const *)bp;
-    if (a->is_dir != b->is_dir)
-        return a->is_dir ? -1 : 1;
-    return g_utf8_collate(a->display ? a->display : "",
-                          b->display ? b->display : "");
+    GPtrArray *entries = g_ptr_array_new_with_free_func(listing_entry_free);
+    const char *name;
+    while ((name = g_dir_read_name(dir)) != NULL) {
+        char *full = g_build_filename(path, name, NULL);
+        ns_listing_entry *e = g_new0(ns_listing_entry, 1);
+        e->name = g_strdup(name);
+        e->display = g_filename_display_name(name);
+        e->is_dir = g_file_test(full, G_FILE_TEST_IS_DIR);
+        e->have_size = TRUE;
+        GStatBuf st;
+        if (g_stat(full, &st) == 0) {
+            if (st.st_size > 0)
+                e->size = (guint64)st.st_size;
+            e->date = file_mtime_label((gint64)st.st_mtime);
+        }
+        e->uri = file_uri_for_path(full, e->is_dir);
+        if (e->uri)
+            g_ptr_array_add(entries, e);
+        else
+            listing_entry_free(e);
+        g_free(full);
+    }
+    g_dir_close(dir);
+    g_ptr_array_sort(entries, listing_entry_compare);
+
+    char *display_path = g_filename_display_name(path);
+    char *parent_uri = file_listing_parent_uri(path);
+    char *html = listing_page(display_path ? display_path : path, parent_uri,
+                              entries);
+    g_ptr_array_free(entries, TRUE);
+    g_free(display_path);
+    g_free(parent_uri);
+    return html;
 }
 
 static char **
@@ -3851,7 +3787,7 @@ ftp_listing_parent_uri(const char *url)
 }
 
 static gboolean
-ftp_parse_unix_listing(char *line, ns_ftp_listing_entry *e)
+ftp_parse_unix_listing(char *line, ns_listing_entry *e)
 {
     if (!line || !*line || !e) return FALSE;
     if (line[0] != 'd' && line[0] != '-' && line[0] != 'l')
@@ -3886,7 +3822,7 @@ ftp_parse_unix_listing(char *line, ns_ftp_listing_entry *e)
 }
 
 static gboolean
-ftp_parse_dos_listing(char *line, ns_ftp_listing_entry *e)
+ftp_parse_dos_listing(char *line, ns_listing_entry *e)
 {
     if (!line || !*line || !e) return FALSE;
     char **tokens = ftp_split_fields(line, 4);
@@ -3920,7 +3856,7 @@ ftp_parse_dos_listing(char *line, ns_ftp_listing_entry *e)
     return TRUE;
 }
 
-static ns_ftp_listing_entry *
+static ns_listing_entry *
 ftp_listing_entry_from_line(const char *line)
 {
     if (!line) return NULL;
@@ -3930,7 +3866,7 @@ ftp_listing_entry_from_line(const char *line)
         g_free(work);
         return NULL;
     }
-    ns_ftp_listing_entry *e = g_new0(ns_ftp_listing_entry, 1);
+    ns_listing_entry *e = g_new0(ns_listing_entry, 1);
     if (!ftp_parse_unix_listing(work, e) &&
         !ftp_parse_dos_listing(work, e)) {
         g_clear_pointer(&e->name, g_free);
@@ -3944,7 +3880,7 @@ ftp_listing_entry_from_line(const char *line)
     }
     g_free(work);
     if (!e->name || !*e->name) {
-        ftp_listing_entry_free(e);
+        listing_entry_free(e);
         return NULL;
     }
     return e;
@@ -3955,88 +3891,26 @@ ftp_directory_listing_page(const char *url, GByteArray *body)
 {
     char *listing = (body && body->data && body->len > 0)
         ? g_strndup((const char *)body->data, body->len) : g_strdup("");
-    GPtrArray *entries = g_ptr_array_new_with_free_func(ftp_listing_entry_free);
+    GPtrArray *entries = g_ptr_array_new_with_free_func(listing_entry_free);
     char **lines = g_strsplit(listing, "\n", -1);
     for (int i = 0; lines[i]; i++) {
-        ns_ftp_listing_entry *e = ftp_listing_entry_from_line(lines[i]);
+        ns_listing_entry *e = ftp_listing_entry_from_line(lines[i]);
         if (!e) continue;
         e->uri = ftp_listing_child_uri(url, e->name, e->is_dir);
         if (e->uri)
             g_ptr_array_add(entries, e);
         else
-            ftp_listing_entry_free(e);
+            listing_entry_free(e);
     }
     g_strfreev(lines);
     g_free(listing);
-    g_ptr_array_sort(entries, ftp_listing_entry_compare);
+    g_ptr_array_sort(entries, listing_entry_compare);
 
-    char *esc_url = ns_html_escape_text(url ? url : "ftp://");
     char *parent_uri = ftp_listing_parent_uri(url);
-    char *esc_parent = parent_uri ? ns_html_escape_text(parent_uri) : NULL;
-    GString *out = g_string_new(NULL);
-    g_string_append(out, "<!doctype html><html><head><meta charset=\"utf-8\">");
-    g_string_append(out, "<title>Index of ");
-    g_string_append(out, esc_url);
-    g_string_append(out, "</title><style>"
-        "body{font-family:serif;margin:8px;color:#000;background:#fff}"
-        "h1{font-size:2em;margin:.4em 0}"
-        "table{border-collapse:collapse}"
-        "th{text-align:left;font-weight:bold;padding:0 3em .25em 0}"
-        "td{padding:0 3em 0 0;white-space:nowrap}"
-        "td.name{min-width:22em}"
-        "td.size{text-align:right}"
-        ".ico{display:inline-block;width:1.35em;margin-right:.35em;"
-        "text-align:center;font-family:\"Segoe UI Emoji\",\"Apple Color Emoji\","
-        "\"Noto Color Emoji\",sans-serif}"
-        "a{color:#00e;text-decoration:underline}"
-        "hr{border:0;border-top:1px solid #bbb;margin:.6em 0}"
-        "</style></head><body><h1>Index of ");
-    g_string_append(out, esc_url);
-    g_string_append(out, "</h1><hr><table><thead><tr>"
-        "<th>Name</th><th>Size</th><th>Date modified</th>"
-        "</tr></thead><tbody>");
-    if (parent_uri) {
-        g_string_append(out, "<tr><td class=\"name\"><span class=\"ico dir\""
-            " aria-hidden=\"true\">&#128193;</span><a href=\"");
-        g_string_append(out, esc_parent);
-        g_string_append(out, "\">../</a></td><td class=\"size\"></td>"
-            "<td></td></tr>");
-    }
-    for (guint i = 0; i < entries->len; i++) {
-        ns_ftp_listing_entry *e = g_ptr_array_index(entries, i);
-        char *esc_uri = ns_html_escape_text(e->uri);
-        char *esc_name = ns_html_escape_text(e->display ? e->display : e->name);
-        char *size = (!e->is_dir && e->have_size) ? file_size_label(e->size)
-                                                  : g_strdup("");
-        char *esc_size = ns_html_escape_text(size);
-        char *esc_date = ns_html_escape_text(e->date ? e->date : "");
-        g_string_append(out, "<tr><td class=\"name\"><span class=\"ico ");
-        g_string_append(out, e->is_dir ? "dir" : "file");
-        g_string_append(out, "\" aria-hidden=\"true\">");
-        g_string_append(out, e->is_dir ? "&#128193;" : "&#128196;");
-        g_string_append(out, "</span><a href=\"");
-        g_string_append(out, esc_uri);
-        g_string_append(out, "\">");
-        g_string_append(out, esc_name);
-        if (e->is_dir)
-            g_string_append_c(out, '/');
-        g_string_append(out, "</a></td><td class=\"size\">");
-        g_string_append(out, esc_size);
-        g_string_append(out, "</td><td>");
-        g_string_append(out, esc_date);
-        g_string_append(out, "</td></tr>");
-        g_free(esc_uri);
-        g_free(esc_name);
-        g_free(size);
-        g_free(esc_size);
-        g_free(esc_date);
-    }
-    g_string_append(out, "</tbody></table><hr></body></html>");
+    char *html = listing_page(url ? url : "ftp://", parent_uri, entries);
     g_ptr_array_free(entries, TRUE);
-    g_free(esc_url);
     g_free(parent_uri);
-    g_free(esc_parent);
-    return g_string_free(out, FALSE);
+    return html;
 }
 
 static gboolean
@@ -5549,7 +5423,7 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
 
     gint64 fetch_start_us = g_get_monotonic_time();
     double fetch_start_real_ms = (double)g_get_real_time() / 1000.0;
-    CURLcode rc = ns_net_multi_perform(curl, cancellable);
+    CURLcode rc = ns_net_multi_perform(curl);
 
     if ((rc == CURLE_PEER_FAILED_VERIFICATION ||
          rc == CURLE_SSL_CACERT_BADFILE) &&
@@ -5569,7 +5443,7 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
             if (g_share) curl_easy_setopt(curl, CURLOPT_SHARE, g_share);
-            rc = ns_net_multi_perform(curl, cancellable);
+            rc = ns_net_multi_perform(curl);
             if (rc == CURLE_OK)
                 resp->tls_warning = warn;
             else
@@ -6462,7 +6336,7 @@ ns_net_complete_blob(const char *url, GCancellable *cancellable,
     return TRUE;
 }
 
-void
+static void
 ns_net_fetch_async(const char        *url,
                    const char        *top_url,
                    GCancellable      *cancellable,
@@ -6692,7 +6566,7 @@ ns_form_set_submission_charset(const char *charset)
     g_form_submission_encoding = ns_encoding_output(g_form_submission_encoding);
 }
 
-void
+static void
 ns_form_urlencoded_append(GString *out, const char *s)
 {
     if (!out || !s) return;

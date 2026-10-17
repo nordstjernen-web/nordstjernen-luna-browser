@@ -5,6 +5,7 @@
 
 #include "cache.h"
 #include "config.h"
+#include "sqlite_db.h"
 #include "net.h"
 
 #include <glib/gstdio.h>
@@ -82,7 +83,6 @@ restrict_to_owner(const char *path, gboolean is_dir)
 #define NS_CACHE_MAX_AGE_SECONDS (30 * 24 * 60 * 60)
 
 static void delete_key(const char *key);
-static void cache_rmrf(const char *path);
 static void evict_aged_out(void);
 static void evict_to_cap(void);
 
@@ -187,14 +187,7 @@ row_key_for(const char *base_key, const char *selector)
 static gboolean
 cache_exec(const char *sql)
 {
-    if (!g_cache_db) return FALSE;
-    char *err = NULL;
-    int rc = sqlite3_exec(g_cache_db, sql, NULL, NULL, &err);
-    if (rc != SQLITE_OK)
-        g_warning("cache: sqlite exec failed: %s",
-                  err ? err : sqlite3_errstr(rc));
-    if (err) sqlite3_free(err);
-    return rc == SQLITE_OK;
+    return ns_sqlite_exec(g_cache_db, "cache", sql);
 }
 
 static void
@@ -215,24 +208,6 @@ cache_drop_if_legacy(void)
     sqlite3_finalize(st);
     if (table_exists && !has_body_size)
         cache_exec("DROP TABLE entries");
-}
-
-static void
-cache_harden(sqlite3 *db)
-{
-#ifdef SQLITE_DBCONFIG_DEFENSIVE
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, 1, NULL);
-#endif
-    sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 0, NULL);
-#ifdef SQLITE_DBCONFIG_TRUSTED_SCHEMA
-    sqlite3_db_config(db, SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0, NULL);
-#endif
-#ifdef SQLITE_DBCONFIG_DQS_DDL
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DQS_DDL, 0, NULL);
-#endif
-#ifdef SQLITE_DBCONFIG_DQS_DML
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DQS_DML, 0, NULL);
-#endif
 }
 
 #define NS_CACHE_SCHEMA_VERSION 2
@@ -260,7 +235,7 @@ cache_schema(void)
         if (!cache_exec("DROP TABLE IF EXISTS entries")) return FALSE;
         if (g_cache_dir) {
             char *bodies = g_build_filename(g_cache_dir, "bodies", NULL);
-            cache_rmrf(bodies);
+            ns_rmrf(bodies);
             g_free(bodies);
         }
     }
@@ -322,18 +297,13 @@ ns_cache_init(void)
     restrict_to_owner(g_cache_dir, TRUE);
 
     char *db_path = g_build_filename(g_cache_dir, "http-cache.sqlite", NULL);
-    int rc = sqlite3_open_v2(db_path, &g_cache_db,
-                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
-    if (rc != SQLITE_OK) {
-        g_warning("cache: could not open %s: %s", db_path,
-                  g_cache_db ? sqlite3_errmsg(g_cache_db) : sqlite3_errstr(rc));
-        if (g_cache_db) { sqlite3_close(g_cache_db); g_cache_db = NULL; }
+    g_cache_db = ns_sqlite_open("cache", db_path,
+                                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+    if (!g_cache_db) {
         g_free(db_path);
         g_cache_disabled = TRUE;
         return;
     }
-    cache_harden(g_cache_db);
-    sqlite3_busy_timeout(g_cache_db, 2500);
     cache_drop_if_legacy();
     if (!cache_schema()) {
         sqlite3_close(g_cache_db);
@@ -357,26 +327,6 @@ ns_cache_shutdown(void)
     g_clear_pointer(&g_cache_dir, g_free);
 }
 
-static void
-cache_rmrf(const char *path)
-{
-    GDir *dir = g_dir_open(path, 0, NULL);
-    if (dir) {
-        const char *name;
-        while ((name = g_dir_read_name(dir))) {
-            char *child = g_build_filename(path, name, NULL);
-            if (g_file_test(child, G_FILE_TEST_IS_DIR) &&
-                !g_file_test(child, G_FILE_TEST_IS_SYMLINK))
-                cache_rmrf(child);
-            else
-                g_unlink(child);
-            g_free(child);
-        }
-        g_dir_close(dir);
-    }
-    g_rmdir(path);
-}
-
 void
 ns_cache_clear(void)
 {
@@ -386,7 +336,7 @@ ns_cache_clear(void)
         cache_exec("DELETE FROM entries");
     if (g_cache_dir) {
         char *bodies = g_build_filename(g_cache_dir, "bodies", NULL);
-        cache_rmrf(bodies);
+        ns_rmrf(bodies);
         g_free(bodies);
     }
 }

@@ -15,12 +15,6 @@ G_BEGIN_DECLS
 typedef struct ns_html_parser ns_html_parser;
 typedef struct ns_html_fragment_parser ns_html_fragment_parser;
 
-ns_html_parser *ns_html_parser_new(gboolean scripting);
-gboolean ns_html_parser_write(ns_html_parser *parser,
-                              const char *input, gsize len);
-ns_node *ns_html_parser_finish(ns_html_parser *parser);
-void ns_html_parser_free(ns_html_parser *parser);
-
 ns_html_fragment_parser *ns_html_fragment_parser_new(
     const char *context_tag, gboolean scripting);
 gboolean ns_html_fragment_parser_write(ns_html_fragment_parser *parser,

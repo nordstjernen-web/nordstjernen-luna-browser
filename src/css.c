@@ -13,6 +13,14 @@
 #include <math.h>
 #include <string.h>
 
+static GHashTable *ns_css_compute(ns_node *doc,
+                                  const ns_css_stylesheet *const *author_sheets,
+                                  gsize n_sheets);
+static char *ns_css_container_name_canonical(const char *text);
+static char *ns_css_font_family_canonical(const char *text);
+static char *ns_css_time_specified(const char *value);
+static char *ns_css_value_serialize_specified(const ns_css_value *v);
+
 static double g_viewport_w = 1000;
 static double g_viewport_h = 800;
 static __thread double g_root_line_px;
@@ -47,7 +55,7 @@ css_custom_property_name(const char *name)
 {
     if (!name || name[0] != '-' || name[1] != '-' || !name[2]) return FALSE;
     for (const char *p = name + 2; *p; p++)
-        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f')
+        if (ns_is_ascii_ws(*p))
             return FALSE;
     return TRUE;
 }
@@ -591,21 +599,21 @@ ns_css_prop_inherited(int prop)
            (kProperty[prop].flags & NS_CSS_META_INHERITED) != 0;
 }
 
-gboolean
+static gboolean
 ns_css_prop_is_logical(int prop)
 {
     return prop >= 0 && prop < NS_CSS_PROP_COUNT &&
            (kProperty[prop].flags & NS_CSS_META_LOGICAL) != 0;
 }
 
-int
+static int
 ns_css_prop_logical_group(int prop)
 {
     return prop >= 0 && prop < NS_CSS_PROP_COUNT
         ? kProperty[prop].logical_group : 0;
 }
 
-int
+static int
 ns_css_prop_syntax(int prop)
 {
     if (prop < 0 || prop >= NS_CSS_PROP_COUNT) return prop;
@@ -647,9 +655,6 @@ ns_css_text_orientation(const ns_style *s)
 }
 
 static gboolean
-is_ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
-
-static gboolean
 is_ident_start(char c)
 {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '-' || (unsigned char)c >= 128;
@@ -680,7 +685,7 @@ css_append_hex_escape(GString *out, const char **pp, const char *end)
         p++;
         n++;
     }
-    if (p < end && is_ws(*p)) {
+    if (p < end && ns_is_ascii_ws(*p)) {
         gboolean cr = *p == '\r';
         p++;
         if (cr && p < end && *p == '\n') p++;
@@ -703,7 +708,7 @@ ns_css_append_unescaped(GString *out, const char **pp)
                 p++;
                 n++;
             }
-            if (is_ws(*p)) {
+            if (ns_is_ascii_ws(*p)) {
                 gboolean cr = *p == '\r';
                 p++;
                 if (cr && *p == '\n') p++;
@@ -842,9 +847,9 @@ css_wide_keyword_is(const char *kw)
 static ns_css_value *
 parse_css_wide_keyword(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     gsize len = strlen(text);
-    while (len > 0 && is_ws(text[len - 1])) len--;
+    while (len > 0 && ns_is_ascii_ws(text[len - 1])) len--;
     char *kw = ascii_lower(text, len);
     if (!css_wide_keyword_is(kw)) {
         g_free(kw);
@@ -1134,11 +1139,11 @@ ns_css_keyword_is(const ns_css_value *v, const char *kw)
 static char *
 font_family_token_clean(const char *start, gsize len)
 {
-    while (len > 0 && is_ws(*start)) {
+    while (len > 0 && ns_is_ascii_ws(*start)) {
         start++;
         len--;
     }
-    while (len > 0 && is_ws(start[len - 1])) len--;
+    while (len > 0 && ns_is_ascii_ws(start[len - 1])) len--;
     if (len >= 2 &&
         ((start[0] == '"' && start[len - 1] == '"') ||
          (start[0] == '\'' && start[len - 1] == '\''))) {
@@ -1153,7 +1158,7 @@ font_family_token_clean(const char *start, gsize len)
             i++;
             c = start[i];
         }
-        if (is_ws(c)) {
+        if (ns_is_ascii_ws(c)) {
             pending_space = out->len > 0;
             continue;
         }
@@ -2446,7 +2451,7 @@ css_angle_value_degrees(double v, char **endp)
 static const char *
 color_skip_ws(const char *p, const char *end)
 {
-    while (p < end && is_ws(*p)) p++;
+    while (p < end && ns_is_ascii_ws(*p)) p++;
     return p;
 }
 
@@ -2803,7 +2808,7 @@ color_component_end(const char *p, const char *end)
     while (p < end) {
         if (*p == '(') depth++;
         else if (*p == ')') depth--;
-        else if (depth == 0 && is_ws(*p)) break;
+        else if (depth == 0 && ns_is_ascii_ws(*p)) break;
         p++;
     }
     return p;
@@ -2945,14 +2950,14 @@ color_parse_function(ns_color_fn fn, const char *p, const char *end,
                      ns_color *out, int depth)
 {
     p = color_skip_ws(p, end);
-    if (end - p > 4 && g_ascii_strncasecmp(p, "from", 4) == 0 && is_ws(p[4]))
+    if (end - p > 4 && g_ascii_strncasecmp(p, "from", 4) == 0 && ns_is_ascii_ws(p[4]))
         return color_parse_relative(fn, p + 4, end, out, depth);
     ns_css_color_space space = NS_CSS_COLOR_SRGB;
     if (fn == NS_COLOR_FN_COLOR) {
         const char *name_end = color_space_ident_end(p, end);
         if (!color_space_by_name(p, (gsize)(name_end - p), TRUE, &space))
             return FALSE;
-        if (name_end >= end || !is_ws(*name_end)) return FALSE;
+        if (name_end >= end || !ns_is_ascii_ws(*name_end)) return FALSE;
         p = name_end;
     }
     ns_color_args args;
@@ -3116,7 +3121,7 @@ color_parse_mix(const char *p, const char *end, ns_color *out, int depth)
     ns_hue_method method = NS_HUE_SHORTER;
     int first = 0;
     if (ok && g_ascii_strncasecmp(parts[0], "in", 2) == 0 &&
-        is_ws(parts[0][2])) {
+        ns_is_ascii_ws(parts[0][2])) {
         ok = color_parse_method(parts[0], &space, &method);
         first = 1;
     }
@@ -3220,7 +3225,7 @@ color_parse_range(const char *s, const char *end, ns_color *out, int depth)
     out->alpha = 1.0;
     if (depth > NS_COLOR_MAX_DEPTH) return FALSE;
     s = color_skip_ws(s, end);
-    while (end > s && is_ws(end[-1])) end--;
+    while (end > s && ns_is_ascii_ws(end[-1])) end--;
     if (s >= end) return FALSE;
     if (*s == '#') return color_parse_hex(s + 1, end, out);
     const char *p = s;
@@ -3516,7 +3521,7 @@ color_relative_specified_append(GString *out, ns_color_fn fn, const char *p,
         while (e < end) {
             if (*e == '(') nest++;
             else if (*e == ')') nest--;
-            else if (nest == 0 && (is_ws(*e) || *e == '/')) break;
+            else if (nest == 0 && (ns_is_ascii_ws(*e) || *e == '/')) break;
             e++;
         }
         g_string_append_c(out, ' ');
@@ -3580,7 +3585,7 @@ color_mix_specified_append(GString *out, const char *p, const char *end,
     int first = 0;
     g_string_append(out, "color-mix(");
     if (ok && g_ascii_strncasecmp(parts[0], "in", 2) == 0 &&
-        is_ws(parts[0][2])) {
+        ns_is_ascii_ws(parts[0][2])) {
         static const char *const methods[] = {
             "shorter", "longer", "increasing", "decreasing",
         };
@@ -3664,7 +3669,7 @@ color_specified_append(GString *out, const char *s, const char *end, int depth)
 {
     if (depth > NS_COLOR_MAX_DEPTH) return FALSE;
     s = color_skip_ws(s, end);
-    while (end > s && is_ws(end[-1])) end--;
+    while (end > s && ns_is_ascii_ws(end[-1])) end--;
     ns_color col;
     if (!color_parse_range(s, end, &col, depth)) return FALSE;
     const char *p = s;
@@ -3683,7 +3688,7 @@ color_specified_append(GString *out, const char *s, const char *end, int depth)
             return color_light_dark_specified_append(out, body, close, depth);
         const char *q = color_skip_ws(body, close);
         if (close - q > 4 && g_ascii_strncasecmp(q, "from", 4) == 0 &&
-            is_ws(q[4]))
+            ns_is_ascii_ws(q[4]))
             return color_relative_specified_append(out, fn, q + 4, close,
                                                    depth);
         gboolean legacy_fn = fn == NS_COLOR_FN_RGB || fn == NS_COLOR_FN_HSL ||
@@ -3903,8 +3908,8 @@ css_find_nth_of(const char *s, const char *end)
         if (paren == 0 && bracket == 0 &&
             p + 2 <= end &&
             g_ascii_strncasecmp(p, "of", 2) == 0 &&
-            (p == s || is_ws(p[-1])) &&
-            (p + 2 == end || is_ws(p[2])))
+            (p == s || ns_is_ascii_ws(p[-1])) &&
+            (p + 2 == end || ns_is_ascii_ws(p[2])))
             return p;
         p++;
     }
@@ -3931,7 +3936,7 @@ parse_anb(const char *arg, gsize alen, int *out_a, int *out_b)
     char *s = g_malloc(strlen(trimmed) + 1);
     char *w = s;
     for (const char *r = trimmed; *r; r++)
-        if (!is_ws(*r)) *w++ = *r;
+        if (!ns_is_ascii_ws(*r)) *w++ = *r;
     *w = '\0';
     int a = 0, b = 0;
     gboolean ok = TRUE;
@@ -4298,7 +4303,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
         while (p < end) {
             const char *tok_start = p;
             char cc = *p;
-            if (is_ws(cc) || cc == ',' || cc == '{' ||
+            if (ns_is_ascii_ws(cc) || cc == ',' || cc == '{' ||
                 cc == '>' || cc == '+' || cc == '~')
                 break;
             if (sel->pseudo_element != NS_CSS_PE_NONE &&
@@ -4314,10 +4319,8 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                 if (p < end && *p == '|' && !(p + 1 < end && p[1] == '=')) {
                     g_clear_pointer(&cmp->namespace_uri, g_free);
                     cmp->namespace_any = cc == '*';
-                    if (cc == '|') {
-                        cmp->ns_none = TRUE;
+                    if (cc == '|')
                         cmp->namespace_any = FALSE;
-                    }
                     p++;
                     if (p < end && *p == '*') {
                         p++;
@@ -4400,7 +4403,6 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                         g_clear_pointer(&cmp->namespace_uri, g_free);
                         cmp->namespace_uri = g_strdup(namespace_uri);
                         cmp->namespace_any = FALSE;
-                        cmp->ns_none = FALSE;
                     }
                     p++;
                     if (p < end && *p == '*') {
@@ -4524,18 +4526,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                                 matches_any_group_free);
                         g_ptr_array_add(cmp->has_groups, group);
                         int ma = 0, mb = 0, mc = 0;
-                        for (guint gi = 0; gi < group->len; gi++) {
-                            const ns_css_selector *sub =
-                                g_ptr_array_index(group, gi);
-                            if (sub->spec_a > ma ||
-                                (sub->spec_a == ma && sub->spec_b > mb) ||
-                                (sub->spec_a == ma && sub->spec_b == mb &&
-                                 sub->spec_c > mc)) {
-                                ma = sub->spec_a;
-                                mb = sub->spec_b;
-                                mc = sub->spec_c;
-                            }
-                        }
+                        selector_group_max_specificity(group, &ma, &mb, &mc);
                         sel->spec_a += ma;
                         sel->spec_b += mb;
                         sel->spec_c += mc;
@@ -4559,18 +4550,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                         g_ptr_array_add(cmp->matches_any, group);
                         if (!is_where) {
                             int ma = 0, mb = 0, mc = 0;
-                            for (guint gi = 0; gi < group->len; gi++) {
-                                const ns_css_selector *sub =
-                                    g_ptr_array_index(group, gi);
-                                if (sub->spec_a > ma ||
-                                    (sub->spec_a == ma && sub->spec_b > mb) ||
-                                    (sub->spec_a == ma && sub->spec_b == mb &&
-                                     sub->spec_c > mc)) {
-                                    ma = sub->spec_a;
-                                    mb = sub->spec_b;
-                                    mc = sub->spec_c;
-                                }
-                            }
+                            selector_group_max_specificity(group, &ma, &mb, &mc);
                             sel->spec_a += ma;
                             sel->spec_b += mb;
                             sel->spec_c += mc;
@@ -4589,18 +4569,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                                 matches_any_group_free);
                         g_ptr_array_add(cmp->matches_none, group);
                         int ma = 0, mb = 0, mc = 0;
-                        for (guint gi = 0; gi < group->len; gi++) {
-                            const ns_css_selector *sub =
-                                g_ptr_array_index(group, gi);
-                            if (sub->spec_a > ma ||
-                                (sub->spec_a == ma && sub->spec_b > mb) ||
-                                (sub->spec_a == ma && sub->spec_b == mb &&
-                                 sub->spec_c > mc)) {
-                                ma = sub->spec_a;
-                                mb = sub->spec_b;
-                                mc = sub->spec_c;
-                            }
-                        }
+                        selector_group_max_specificity(group, &ma, &mb, &mc);
                         sel->spec_a += ma;
                         sel->spec_b += mb;
                         sel->spec_c += mc;
@@ -4919,30 +4888,7 @@ resolve_to_px_pct_font(const char *text, gsize len, double *out_px,
         case NS_CSS_UNIT_RLH:
             font_units_set(font, v->u.length.unit, v->u.length.v, out_px);
             break;
-        case NS_CSS_UNIT_VW:
-        case NS_CSS_UNIT_SVW:
-        case NS_CSS_UNIT_LVW:
-        case NS_CSS_UNIT_DVW:
-        case NS_CSS_UNIT_VH:
-        case NS_CSS_UNIT_SVH:
-        case NS_CSS_UNIT_LVH:
-        case NS_CSS_UNIT_DVH:
-        case NS_CSS_UNIT_VI:
-        case NS_CSS_UNIT_SVI:
-        case NS_CSS_UNIT_LVI:
-        case NS_CSS_UNIT_DVI:
-        case NS_CSS_UNIT_VB:
-        case NS_CSS_UNIT_SVB:
-        case NS_CSS_UNIT_LVB:
-        case NS_CSS_UNIT_DVB:
-        case NS_CSS_UNIT_VMIN:
-        case NS_CSS_UNIT_SVMIN:
-        case NS_CSS_UNIT_LVMIN:
-        case NS_CSS_UNIT_DVMIN:
-        case NS_CSS_UNIT_VMAX:
-        case NS_CSS_UNIT_SVMAX:
-        case NS_CSS_UNIT_LVMAX:
-        case NS_CSS_UNIT_DVMAX:
+        NS_CSS_CASE_VIEWPORT_UNITS:
             *out_px = viewport_resolve(v->u.length.v, v->u.length.unit);
             if (font)
                 viewport_unit_coeff(v->u.length.unit, v->u.length.v,
@@ -4974,30 +4920,7 @@ resolve_to_px_pct_font(const char *text, gsize len, double *out_px,
         case NS_CSS_UNIT_REM:
         case NS_CSS_UNIT_LH:
         case NS_CSS_UNIT_RLH:     font_units_set(font, u, num, out_px); break;
-        case NS_CSS_UNIT_VW:
-        case NS_CSS_UNIT_SVW:
-        case NS_CSS_UNIT_LVW:
-        case NS_CSS_UNIT_DVW:
-        case NS_CSS_UNIT_VH:
-        case NS_CSS_UNIT_SVH:
-        case NS_CSS_UNIT_LVH:
-        case NS_CSS_UNIT_DVH:
-        case NS_CSS_UNIT_VI:
-        case NS_CSS_UNIT_SVI:
-        case NS_CSS_UNIT_LVI:
-        case NS_CSS_UNIT_DVI:
-        case NS_CSS_UNIT_VB:
-        case NS_CSS_UNIT_SVB:
-        case NS_CSS_UNIT_LVB:
-        case NS_CSS_UNIT_DVB:
-        case NS_CSS_UNIT_VMIN:
-        case NS_CSS_UNIT_SVMIN:
-        case NS_CSS_UNIT_LVMIN:
-        case NS_CSS_UNIT_DVMIN:
-        case NS_CSS_UNIT_VMAX:
-        case NS_CSS_UNIT_SVMAX:
-        case NS_CSS_UNIT_LVMAX:
-        case NS_CSS_UNIT_DVMAX:
+        NS_CSS_CASE_VIEWPORT_UNITS:
             *out_px = viewport_resolve(num, u);
             if (font)
                 viewport_unit_coeff(u, num, &font->vw, &font->vh,
@@ -5042,7 +4965,7 @@ static void
 calc_skip_ws(const char **pp, const char *end)
 {
     const char *p = *pp;
-    while (p < end && is_ws(*p)) p++;
+    while (p < end && ns_is_ascii_ws(*p)) p++;
     *pp = p;
 }
 
@@ -5218,30 +5141,7 @@ calc_unit_value(const char *unit, double num, ns_calc_term *out)
     case NS_CSS_UNIT_RLH:
         out->rlh = v;
         break;
-    case NS_CSS_UNIT_VW:
-    case NS_CSS_UNIT_SVW:
-    case NS_CSS_UNIT_LVW:
-    case NS_CSS_UNIT_DVW:
-    case NS_CSS_UNIT_VH:
-    case NS_CSS_UNIT_SVH:
-    case NS_CSS_UNIT_LVH:
-    case NS_CSS_UNIT_DVH:
-    case NS_CSS_UNIT_VI:
-    case NS_CSS_UNIT_SVI:
-    case NS_CSS_UNIT_LVI:
-    case NS_CSS_UNIT_DVI:
-    case NS_CSS_UNIT_VB:
-    case NS_CSS_UNIT_SVB:
-    case NS_CSS_UNIT_LVB:
-    case NS_CSS_UNIT_DVB:
-    case NS_CSS_UNIT_VMIN:
-    case NS_CSS_UNIT_SVMIN:
-    case NS_CSS_UNIT_LVMIN:
-    case NS_CSS_UNIT_DVMIN:
-    case NS_CSS_UNIT_VMAX:
-    case NS_CSS_UNIT_SVMAX:
-    case NS_CSS_UNIT_LVMAX:
-    case NS_CSS_UNIT_DVMAX:
+    NS_CSS_CASE_VIEWPORT_UNITS:
         out->px = viewport_resolve(v, u);
         viewport_unit_coeff(u, v, &out->vw, &out->vh, &out->vmin, &out->vmax);
         break;
@@ -5367,30 +5267,7 @@ calc_primary_parse(const char **pp, const char *end, ns_calc_term *out,
             case NS_CSS_UNIT_REM:     out->rem = num; break;
             case NS_CSS_UNIT_LH:      out->lh = num; break;
             case NS_CSS_UNIT_RLH:     out->rlh = num; break;
-            case NS_CSS_UNIT_VW:
-            case NS_CSS_UNIT_SVW:
-            case NS_CSS_UNIT_LVW:
-            case NS_CSS_UNIT_DVW:
-            case NS_CSS_UNIT_VH:
-            case NS_CSS_UNIT_SVH:
-            case NS_CSS_UNIT_LVH:
-            case NS_CSS_UNIT_DVH:
-            case NS_CSS_UNIT_VI:
-            case NS_CSS_UNIT_SVI:
-            case NS_CSS_UNIT_LVI:
-            case NS_CSS_UNIT_DVI:
-            case NS_CSS_UNIT_VB:
-            case NS_CSS_UNIT_SVB:
-            case NS_CSS_UNIT_LVB:
-            case NS_CSS_UNIT_DVB:
-            case NS_CSS_UNIT_VMIN:
-            case NS_CSS_UNIT_SVMIN:
-            case NS_CSS_UNIT_LVMIN:
-            case NS_CSS_UNIT_DVMIN:
-            case NS_CSS_UNIT_VMAX:
-            case NS_CSS_UNIT_SVMAX:
-            case NS_CSS_UNIT_LVMAX:
-            case NS_CSS_UNIT_DVMAX:
+            NS_CSS_CASE_VIEWPORT_UNITS:
                 out->px = viewport_resolve(num, v->u.length.unit);
                 viewport_unit_coeff(v->u.length.unit, num, &out->vw, &out->vh,
                                     &out->vmin, &out->vmax);
@@ -5813,7 +5690,7 @@ parse_calc(const char *text)
     return v;
 }
 
-static const char *
+const char *
 ns_css_unit_suffix(int unit)
 {
     switch (unit) {
@@ -5915,11 +5792,11 @@ serialize_nonfinite_length(double v, const char *unit)
     return g_strdup_printf("calc(%s * 1%s)", nf, unit);
 }
 
-char *
+static char *
 ns_css_math_canonical(const char *value)
 {
     if (!value) return NULL;
-    while (*value && is_ws(*value)) value++;
+    while (*value && ns_is_ascii_ws(*value)) value++;
     if (ns_value_has_relative_unit(value)) return NULL;
     static const char *const fns[] = {
         "calc(", "min(", "max(", "clamp(", "round(", "mod(", "rem(",
@@ -6116,7 +5993,7 @@ calc_compare_lengths(int fn, char *const *parts, int n)
 static ns_css_value *
 parse_calc_inner(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     int fn = -1;
     const char *args = NULL;
     if      (g_ascii_strncasecmp(text, "calc(",  5) == 0) { fn = 0; args = text + 5; }
@@ -6145,7 +6022,7 @@ parse_calc_inner(const char *text)
     const char *body_end = match_close_paren(args, args + strlen(args));
     if (!body_end) return NULL;
     for (const char *tail = body_end + 1; *tail; tail++)
-        if (!is_ws(*tail)) return NULL;
+        if (!ns_is_ascii_ws(*tail)) return NULL;
     if (fn >= 4) {
         char *parts[4] = {0};
         int n = calc_split_args(args, body_end, parts, G_N_ELEMENTS(parts));
@@ -6241,13 +6118,13 @@ parse_calc_inner(const char *text)
             }
         } else if (fn == 21 && n == 3) {
             const char *first = parts[0];
-            while (*first && is_ws(*first)) first++;
+            while (*first && ns_is_ascii_ws(*first)) first++;
             gboolean no_clamp = FALSE;
             if (g_ascii_strncasecmp(first, "no-clamp", 8) == 0 &&
-                (first[8] == '\0' || is_ws(first[8]))) {
+                (first[8] == '\0' || ns_is_ascii_ws(first[8]))) {
                 no_clamp = TRUE;
                 first += 8;
-                while (*first && is_ws(*first)) first++;
+                while (*first && ns_is_ascii_ws(*first)) first++;
             }
             ns_calc_term c;
             if (calc_eval_arg(first, &a) && calc_eval_arg(parts[1], &b) &&
@@ -6463,19 +6340,19 @@ parse_minmax_token(const char *body, gsize len, ns_css_track *out, int depth)
 {
     const char *p = body;
     const char *end = body + len;
-    while (p < end && is_ws(*p)) p++;
+    while (p < end && ns_is_ascii_ws(*p)) p++;
     const char *as = p;
     char term = 0;
     const char *comma = css_scan_until(p, end, ",", &term);
     if (term != ',') return FALSE;
     p = comma;
     gsize alen = (gsize)(p - as);
-    while (alen > 0 && is_ws(as[alen - 1])) alen--;
+    while (alen > 0 && ns_is_ascii_ws(as[alen - 1])) alen--;
     p++;
-    while (p < end && is_ws(*p)) p++;
+    while (p < end && ns_is_ascii_ws(*p)) p++;
     const char *bs = p;
     gsize blen = (gsize)(end - p);
-    while (blen > 0 && is_ws(bs[blen - 1])) blen--;
+    while (blen > 0 && ns_is_ascii_ws(bs[blen - 1])) blen--;
     ns_css_track mn = {0}, mx = {0};
     gboolean ok = parse_one_track_depth(as, alen, &mn, depth) &&
                   parse_one_track_depth(bs, blen, &mx, depth);
@@ -6499,8 +6376,8 @@ static gboolean
 parse_one_track_depth(const char *start, gsize len, ns_css_track *out, int depth)
 {
     if (depth >= NS_CSS_TRACK_MAX_DEPTH) return FALSE;
-    while (len > 0 && is_ws(*start)) { start++; len--; }
-    while (len > 0 && is_ws(start[len - 1])) len--;
+    while (len > 0 && ns_is_ascii_ws(*start)) { start++; len--; }
+    while (len > 0 && ns_is_ascii_ws(start[len - 1])) len--;
     if (len == 0) return FALSE;
     if (len > 7 && g_ascii_strncasecmp(start, "minmax(", 7) == 0 &&
         start[len - 1] == ')') {
@@ -6543,7 +6420,7 @@ split_tracks_top(const char *text, gsize len, const char **starts, gsize *lens, 
     const char *p = text;
     const char *end = text + len;
     while (p < end && n < max) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         const char *tok_start = p;
         char term = 0;
@@ -6604,7 +6481,7 @@ split_ws_paren(const char *text, char **out, int max)
     int n = 0;
     const char *p = text, *end = text + strlen(text);
     while (p < end && n < max) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         const char *start = p;
         int depth = 0;
@@ -6616,7 +6493,7 @@ split_ws_paren(const char *text, char **out, int max)
             if (c == '"' || c == '\'') { quote = c; p++; continue; }
             if (c == '(') depth++;
             else if (c == ')') { if (depth) depth--; }
-            else if (is_ws(c) && depth == 0) break;
+            else if (ns_is_ascii_ws(c) && depth == 0) break;
             p++;
         }
         out[n++] = g_strndup(start, (gsize)(p - start));
@@ -6708,7 +6585,7 @@ font_shorthand_size_value(const char *size_only)
     return parse_value_for(NS_CSS_FONT_SIZE, size_only);
 }
 
-char *
+static char *
 ns_css_font_shorthand_canonical(const char *text)
 {
     if (!text) return NULL;
@@ -6901,7 +6778,7 @@ font_family_random_item_valid(const char *item, gsize ilen)
     return ok;
 }
 
-char *
+static char *
 ns_css_font_family_canonical(const char *text)
 {
     if (!text) return NULL;
@@ -6910,12 +6787,12 @@ ns_css_font_family_canonical(const char *text)
     const char *end = text + strlen(text);
     gboolean any = FALSE;
     while (p <= end) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         const char *item_start = p;
         char term = 0;
         const char *item_end = css_scan_until(p, end, ",", &term);
         gsize ilen = (gsize)(item_end - item_start);
-        while (ilen > 0 && is_ws(item_start[ilen - 1])) ilen--;
+        while (ilen > 0 && ns_is_ascii_ws(item_start[ilen - 1])) ilen--;
         if (ilen == 0) { g_string_free(out, TRUE); return NULL; }
         if (any) g_string_append(out, ", ");
         any = TRUE;
@@ -6927,19 +6804,19 @@ ns_css_font_family_canonical(const char *text)
             }
             const char *body = item_start + 1;
             gsize blen = ilen - 2;
-            gboolean ident_like = blen > 0 && !is_ws(body[0]) &&
-                                  !is_ws(body[blen - 1]) &&
+            gboolean ident_like = blen > 0 && !ns_is_ascii_ws(body[0]) &&
+                                  !ns_is_ascii_ws(body[blen - 1]) &&
                                   !memchr(body, '\\', blen);
             if (ident_like) {
                 const char *w = body, *wend = body + blen;
                 while (w < wend && ident_like) {
                     const char *tok = w;
-                    while (w < wend && !is_ws(*w)) w++;
+                    while (w < wend && !ns_is_ascii_ws(*w)) w++;
                     gsize tlen = (gsize)(w - tok);
                     if (!font_family_ident_valid(tok, tlen) ||
                         font_family_is_generic(tok, tlen))
                         ident_like = FALSE;
-                    if (w < wend && (w + 1 >= wend || is_ws(w[1])))
+                    if (w < wend && (w + 1 >= wend || ns_is_ascii_ws(w[1])))
                         ident_like = FALSE;
                     w++;
                 }
@@ -6985,9 +6862,9 @@ ns_css_font_family_canonical(const char *text)
                     }
             }
             while (q < qend) {
-                while (q < qend && is_ws(*q)) q++;
+                while (q < qend && ns_is_ascii_ws(*q)) q++;
                 const char *tok = q;
-                while (q < qend && !is_ws(*q)) q++;
+                while (q < qend && !ns_is_ascii_ws(*q)) q++;
                 gsize tlen = (gsize)(q - tok);
                 if (tlen == 0) break;
                 static const char *const strict_generic[] = {
@@ -7054,9 +6931,9 @@ tracks_add_names(ns_css_tracks *tk, const char *names, gsize names_len, int line
     if (memchr(names, ',', names_len)) return FALSE;
     const char *q = names, *qend = names + names_len;
     while (q < qend) {
-        while (q < qend && is_ws(*q)) q++;
+        while (q < qend && ns_is_ascii_ws(*q)) q++;
         const char *ns = q;
-        while (q < qend && !is_ws(*q)) q++;
+        while (q < qend && !ns_is_ascii_ws(*q)) q++;
         gsize nlen = (gsize)(q - ns);
         if (nlen > 0 && !line_name_is_custom_ident(ns, nlen)) return FALSE;
         if (nlen > 0 && nlen < NS_CSS_LINE_NAME_MAX &&
@@ -7089,7 +6966,7 @@ tracks_append_repeat_body(ns_css_tracks *tk, const char *body, gsize body_len,
     int nb = 0;
     const char *p = body, *end = body + body_len;
     while (p < end && nb < 32) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         const char *tok_start = p;
         if (*p == '[') {
@@ -7137,15 +7014,15 @@ parse_tracks(const char *text)
     v->kind = NS_CSS_V_TRACKS;
     const char *p = text;
     const char *full_end = text + strlen(text);
-    while (p < full_end && is_ws(*p)) p++;
+    while (p < full_end && ns_is_ascii_ws(*p)) p++;
     if (g_ascii_strncasecmp(p, "subgrid", 7) == 0 &&
-        (p + 7 >= full_end || is_ws(p[7]) || p[7] == '[')) {
+        (p + 7 >= full_end || ns_is_ascii_ws(p[7]) || p[7] == '[')) {
         v->u.tracks.subgrid = TRUE;
         return v;
     }
     gboolean last_was_names = FALSE;
     while (p < full_end && v->u.tracks.n < NS_CSS_TRACKS_MAX) {
-        while (p < full_end && is_ws(*p)) p++;
+        while (p < full_end && ns_is_ascii_ws(*p)) p++;
         if (p >= full_end) break;
         if (*p == '[') {
             const char *names = ++p;
@@ -7168,11 +7045,11 @@ parse_tracks(const char *text)
         last_was_names = FALSE;
         if (g_ascii_strncasecmp(p, "repeat(", 7) == 0) {
             p += 7;
-            while (p < full_end && is_ws(*p)) p++;
+            while (p < full_end && ns_is_ascii_ws(*p)) p++;
             const char *count_s = p;
             while (p < full_end && *p != ',' && *p != ')') p++;
             gsize count_len = (gsize)(p - count_s);
-            while (count_len > 0 && is_ws(count_s[count_len - 1])) count_len--;
+            while (count_len > 0 && ns_is_ascii_ws(count_s[count_len - 1])) count_len--;
             if (p < full_end && *p == ',') p++;
             const char *body = p;
             int depth = 1;
@@ -7233,7 +7110,7 @@ parse_tracks(const char *text)
         if (n == 0) break;
         {
             const char *after = tstarts[0] + tlens[0];
-            while (after < full_end && is_ws(*after)) after++;
+            while (after < full_end && ns_is_ascii_ws(*after)) after++;
             if (after < full_end && *after == ',') {
                 g_free(v);
                 return NULL;
@@ -7247,7 +7124,7 @@ parse_tracks(const char *text)
         }
         v->u.tracks.tracks[v->u.tracks.n++] = t;
         const char *next = tstarts[0] + tlens[0];
-        while (next < full_end && is_ws(*next)) next++;
+        while (next < full_end && ns_is_ascii_ws(*next)) next++;
         if (next < full_end && *next == ',') next++;
         if (next <= p) next = p + 1;
         p = next;
@@ -7280,7 +7157,7 @@ parse_areas(const char *text)
     int cols = -1;
     const char *p = text;
     while (*p && rows < NS_CSS_TRACKS_MAX) {
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         if (*p != '"' && *p != '\'') {
             for (int r = 0; r < rows; r++)
@@ -7480,7 +7357,7 @@ static char *
 shadow_specified_canonical(const char *value, gboolean is_text)
 {
     if (!value) return NULL;
-    while (*value && is_ws(*value)) value++;
+    while (*value && ns_is_ascii_ws(*value)) value++;
     if (!*value || strstr(value, "var(")) return NULL;
     if (g_ascii_strcasecmp(value, "none") == 0) return g_strdup("none");
     GString *out = g_string_new(NULL);
@@ -7562,7 +7439,7 @@ parse_one_shadow(const char *text, ns_css_shadow *out)
 static ns_css_value *
 parse_box_shadow(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     if (!*text) return NULL;
     ns_css_value *v = g_new0(ns_css_value, 1);
     v->kind = NS_CSS_V_SHADOW;
@@ -8179,7 +8056,7 @@ gradient_parse(const char *text, ns_gradient_parse *gp, const char **out_end,
 {
     memset(gp, 0, sizeof *gp);
     const char *p = text;
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     if (g_ascii_strncasecmp(p, "repeating-", 10) == 0) {
         gp->gr.repeating = TRUE;
         p += 10;
@@ -8188,7 +8065,7 @@ gradient_parse(const char *text, ns_gradient_parse *gp, const char **out_end,
     else if (g_ascii_strncasecmp(p, "radial-gradient", 15) == 0) { gp->gr.radial = TRUE; p += 15; }
     else if (g_ascii_strncasecmp(p, "conic-gradient", 14) == 0) { gp->gr.conic = TRUE; p += 14; }
     else return FALSE;
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     if (*p != '(') return FALSE;
     p++;
     const char *body_start = p;
@@ -8453,7 +8330,7 @@ gradient_serialize_specified(const ns_gradient_parse *gp)
 static gboolean
 text_starts_gradient(const char *p)
 {
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     if (g_ascii_strncasecmp(p, "repeating-", 10) == 0) p += 10;
     return g_ascii_strncasecmp(p, "linear-gradient", 15) == 0 ||
            g_ascii_strncasecmp(p, "radial-gradient", 15) == 0 ||
@@ -8464,7 +8341,7 @@ static char *image_set_canonical(const char *text, gboolean computed);
 static gboolean text_starts_image_set(const char *p);
 static const char *cq_match_paren(const char *p, const char *end);
 
-char *
+static char *
 ns_css_image_value_canonical(const char *text)
 {
     if (!text) return NULL;
@@ -8481,7 +8358,7 @@ ns_css_image_value_canonical(const char *text)
             ns_gradient_parse gp;
             const char *gend = NULL;
             if (gradient_parse(layer, &gp, &gend, TRUE)) {
-                while (gend && *gend && is_ws(*gend)) gend++;
+                while (gend && *gend && ns_is_ascii_ws(*gend)) gend++;
                 if (!gend || !*gend) canon = gradient_serialize_specified(&gp);
                 gradient_parse_clear(&gp);
             }
@@ -8626,7 +8503,7 @@ content_tokenize(const char *text)
     g_array_set_clear_func(toks, content_tok_clear);
     const char *p = text;
     while (*p) {
-        if (is_ws(*p)) { p++; continue; }
+        if (ns_is_ascii_ws(*p)) { p++; continue; }
         content_tok t = { 0 };
         if (*p == '"' || *p == '\'') {
             const char *e = content_scan_string_end(p);
@@ -8892,7 +8769,7 @@ content_item_canonical(const content_tok *t, gboolean alt)
     return NULL;
 }
 
-char *
+static char *
 ns_css_content_canonical(const char *text)
 {
     if (!text) return NULL;
@@ -8943,7 +8820,7 @@ image_set_split_ws(const char *text, char **out, int max)
     int n = 0;
     const char *p = text;
     while (*p && n < max) {
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *start = p;
         int depth = 0;
@@ -8956,7 +8833,7 @@ image_set_split_ws(const char *text, char **out, int max)
             }
             if (*p == '(') depth++;
             else if (*p == ')') { if (depth) depth--; }
-            else if (is_ws(*p) && depth == 0) break;
+            else if (ns_is_ascii_ws(*p) && depth == 0) break;
             p++;
         }
         out[n++] = g_strndup(start, (gsize)(p - start));
@@ -8992,7 +8869,7 @@ static char *
 image_set_canonical(const char *text, gboolean computed)
 {
     const char *p = text;
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     if (g_ascii_strncasecmp(p, "-webkit-image-set(", 18) == 0) p += 18;
     else if (g_ascii_strncasecmp(p, "image-set(", 10) == 0) p += 10;
     else return NULL;
@@ -9000,7 +8877,7 @@ image_set_canonical(const char *text, gboolean computed)
     const char *close = cq_match_paren(p - 1, end);
     if (!close) return NULL;
     const char *after = close + 1;
-    while (*after && is_ws(*after)) after++;
+    while (*after && ns_is_ascii_ws(*after)) after++;
     if (*after) return NULL;
     char *body = g_strndup(p, (gsize)(close - p));
     GPtrArray *options = content_split_args(body);
@@ -9066,12 +8943,12 @@ image_set_canonical(const char *text, gboolean computed)
 static gboolean
 text_starts_image_set(const char *p)
 {
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     return g_ascii_strncasecmp(p, "image-set(", 10) == 0 ||
            g_ascii_strncasecmp(p, "-webkit-image-set(", 18) == 0;
 }
 
-char *
+static char *
 ns_css_unicode_range_canonical(const char *text)
 {
     if (!text) return NULL;
@@ -9156,7 +9033,7 @@ static char *
 pick_image_set_url(const char *t)
 {
     const char *p = t;
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     if (g_ascii_strncasecmp(p, "-webkit-image-set(", 18) == 0)
         p += 18;
     else if (g_ascii_strncasecmp(p, "image-set(", 10) == 0)
@@ -9168,24 +9045,24 @@ pick_image_set_url(const char *t)
     char *best = NULL;
     double best_res = 0;
     while (*p && *p != ')') {
-        while (*p && (is_ws(*p) || *p == ',')) p++;
+        while (*p && (ns_is_ascii_ws(*p) || *p == ',')) p++;
         if (!*p || *p == ')') break;
         char *url = NULL;
         if (g_ascii_strncasecmp(p, "url(", 4) == 0) {
             const char *u = p + 4;
-            while (*u && is_ws(*u)) u++;
+            while (*u && ns_is_ascii_ws(*u)) u++;
             char q = 0;
             if (*u == '"' || *u == '\'') { q = *u; u++; }
             const char *end;
             if (q) end = css_quoted_end(u, q);
-            else { end = u; while (*end && *end != ')' && !is_ws(*end)) end++; }
+            else { end = u; while (*end && *end != ')' && !ns_is_ascii_ws(*end)) end++; }
             if (end && end > u) url = css_unescape_url(u, (gsize)(end - u));
             p = end ? end : p + 4;
             while (*p && *p != ')') p++;
             if (*p == ')') p++;
         }
         double res = 1.0;
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (*p && *p != ',' && *p != ')') {
             res = g_ascii_strtod(p, NULL);
             while (*p && *p != ',' && *p != ')') p++;
@@ -9211,7 +9088,7 @@ parse_gradient_text(const char *t, gboolean allow_trailing)
     ns_gradient_parse gp;
     const char *gend = NULL;
     if (!gradient_parse(t, &gp, &gend, FALSE)) return NULL;
-    while (gend && *gend && is_ws(*gend)) gend++;
+    while (gend && *gend && ns_is_ascii_ws(*gend)) gend++;
     if (!allow_trailing && gend && *gend) {
         gradient_parse_clear(&gp);
         return NULL;
@@ -9236,7 +9113,7 @@ parse_angle_deg(const char *s)
     char *end = NULL;
     double v = g_ascii_strtod(s, &end);
     if (!end || end == s) return 0;
-    while (*end && is_ws(*end)) end++;
+    while (*end && ns_is_ascii_ws(*end)) end++;
     if (g_ascii_strncasecmp(end, "rad", 3) == 0) return v * 180.0 / G_PI;
     if (g_ascii_strncasecmp(end, "turn", 4) == 0) return v * 360.0;
     if (g_ascii_strncasecmp(end, "grad", 4) == 0) return v * 0.9;
@@ -9261,7 +9138,7 @@ parse_transform_len(const char *s, double *out, gboolean *is_percent)
     char *end = NULL;
     double v = g_ascii_strtod(s, &end);
     if (!end || end == s) return FALSE;
-    while (*end && is_ws(*end)) end++;
+    while (*end && ns_is_ascii_ws(*end)) end++;
     *out = v;
     *is_percent = (*end == '%');
     return TRUE;
@@ -9305,7 +9182,7 @@ static gboolean
 parse_angle_any(const char *s, double *deg_out)
 {
     if (!s) return FALSE;
-    while (*s && is_ws(*s)) s++;
+    while (*s && ns_is_ascii_ws(*s)) s++;
     if (!*s) return FALSE;
     if (text_is_math_fn(s)) {
         ns_calc_term t;
@@ -9326,13 +9203,13 @@ static gboolean parse_scale_number(const char *s, double *out);
 static ns_css_value *
 parse_transform(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     if (!*text) return NULL;
     if (g_ascii_strncasecmp(text, "none", 4) == 0) return NULL;
     ns_css_transform tf = {0};
     const char *p = text;
     while (*p && tf.n_ops < NS_CSS_TRANSFORM_OPS_MAX) {
-        while (*p && (is_ws(*p) || *p == ',')) p++;
+        while (*p && (ns_is_ascii_ws(*p) || *p == ',')) p++;
         if (!*p) break;
         const char *name_start = p;
         while (*p && *p != '(') p++;
@@ -9598,7 +9475,7 @@ transform_value_one_op(const ns_css_transform_op *op)
 static ns_css_value *
 parse_translate_prop(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     if (!*text || g_ascii_strcasecmp(text, "none") == 0) return NULL;
     char *toks[4] = {0};
     int nt = split_ws_limit(text, toks, 3);
@@ -9617,7 +9494,7 @@ parse_translate_prop(const char *text)
 static ns_css_value *
 parse_rotate_prop(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     if (!*text || g_ascii_strcasecmp(text, "none") == 0) return NULL;
     char *toks[5] = {0};
     int nt = split_ws_limit(text, toks, 4);
@@ -9659,13 +9536,13 @@ static gboolean
 parse_scale_number(const char *s, double *out)
 {
     if (!s) return FALSE;
-    while (*s && is_ws(*s)) s++;
+    while (*s && ns_is_ascii_ws(*s)) s++;
     if (!*s) return FALSE;
     char *end = NULL;
     double v = g_ascii_strtod(s, &end);
     if (end && end != s) {
         const char *p = end;
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (*p == '\0') { *out = v; return TRUE; }
         if (*p == '%' && p[1] == '\0') { *out = v / 100.0; return TRUE; }
     }
@@ -9694,7 +9571,7 @@ parse_scale_number(const char *s, double *out)
 static ns_css_value *
 parse_scale_prop(const char *text)
 {
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     if (!*text || g_ascii_strcasecmp(text, "none") == 0) return NULL;
     char *toks[4] = {0};
     int nt = split_ws_limit(text, toks, 3);
@@ -10290,7 +10167,7 @@ parse_animation_duration(const char *t)
     return v;
 }
 
-char *
+static char *
 ns_css_ident_serialize(const char *name)
 {
     if (!name) return g_strdup("");
@@ -10669,7 +10546,7 @@ ns_css_anim_shorthand_serialize(const ns_css_anim_list *list, gboolean is_animat
     return g_string_free(out, FALSE);
 }
 
-char *
+static char *
 ns_css_animation_shorthand_canonical(const char *text, gboolean is_animation)
 {
     ns_css_value *v = parse_anim_value(text, is_animation);
@@ -11513,7 +11390,7 @@ display_parse(const char *lowered, ns_display *out)
     return TRUE;
 }
 
-char *
+static char *
 ns_css_display_serialize(ns_display d)
 {
     static const char *const internal_names[] = {
@@ -11553,7 +11430,7 @@ ns_css_display_serialize(ns_display d)
     return g_strdup_printf("run-in %s", inner_names[d.inner]);
 }
 
-ns_display
+static ns_display
 ns_css_display_from_keyword(const char *canonical)
 {
     ns_display d = { 0 };
@@ -11568,7 +11445,7 @@ ns_css_display_of(const ns_style *s)
     return s ? s->display : d;
 }
 
-ns_display
+static ns_display
 ns_css_display_blockified(ns_display d)
 {
     if (d.box != NS_DISPLAY_BOX_NORMAL) return d;
@@ -11609,13 +11486,13 @@ normalize_display_value(const char *text)
     return ok ? ns_css_display_serialize(d) : NULL;
 }
 
-char *
+static char *
 ns_css_display_canonical(const char *value)
 {
     if (!value) return NULL;
-    while (*value && is_ws(*value)) value++;
+    while (*value && ns_is_ascii_ws(*value)) value++;
     gsize n = strlen(value);
-    while (n > 0 && is_ws(value[n - 1])) n--;
+    while (n > 0 && ns_is_ascii_ws(value[n - 1])) n--;
     char *t = g_strndup(value, n);
     char *r = normalize_display_value(t);
     g_free(t);
@@ -11731,24 +11608,24 @@ canonicalize_transform_arg(const char *arg, int type)
     return NULL;
 }
 
-char *
+static char *
 ns_css_transform_canonical(const char *value)
 {
     if (!value) return NULL;
     const char *scan = value;
-    while (*scan && is_ws(*scan)) scan++;
+    while (*scan && ns_is_ascii_ws(*scan)) scan++;
     if (!*scan || g_ascii_strncasecmp(scan, "none", 4) == 0) return NULL;
 
     GString *out = g_string_new(NULL);
     gboolean changed = FALSE;
     const char *p = value;
     while (*p) {
-        if (is_ws(*p) || *p == ',') { g_string_append_c(out, *p); p++; continue; }
+        if (ns_is_ascii_ws(*p) || *p == ',') { g_string_append_c(out, *p); p++; continue; }
         const char *nstart = p;
-        while (*p && *p != '(' && !is_ws(*p) && *p != ',') p++;
+        while (*p && *p != '(' && !ns_is_ascii_ws(*p) && *p != ',') p++;
         gsize nlen = (gsize)(p - nstart);
         g_string_append_len(out, nstart, nlen);
-        while (*p && is_ws(*p)) { g_string_append_c(out, *p); p++; }
+        while (*p && ns_is_ascii_ws(*p)) { g_string_append_c(out, *p); p++; }
         if (*p != '(') continue;
         char *fn_lc = g_ascii_strdown(nstart, nlen);
         g_string_append_c(out, '(');
@@ -11768,9 +11645,9 @@ ns_css_transform_canonical(const char *value)
             else if (q < aend && *q == ')') adepth--;
             if (q == aend || (*q == ',' && adepth == 0)) {
                 const char *s = seg;
-                while (s < q && is_ws(*s)) s++;
+                while (s < q && ns_is_ascii_ws(*s)) s++;
                 const char *e = q;
-                while (e > s && is_ws(e[-1])) e--;
+                while (e > s && ns_is_ascii_ws(e[-1])) e--;
                 char *argtxt = g_strndup(s, (gsize)(e - s));
                 char *canon = NULL;
                 int type = transform_arg_type(fn_lc, argidx);
@@ -12050,8 +11927,8 @@ css_time_plain(const char *s, const char *e, double *out_ms)
         1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
         1e12, 1e13, 1e14, 1e15,
     };
-    while (s < e && is_ws(*s)) s++;
-    while (e > s && is_ws(e[-1])) e--;
+    while (s < e && ns_is_ascii_ws(*s)) s++;
+    while (e > s && ns_is_ascii_ws(e[-1])) e--;
     gboolean negative = FALSE;
     if (s < e && (*s == '+' || *s == '-')) negative = *s++ == '-';
     guint64 mantissa = 0;
@@ -12132,7 +12009,7 @@ css_time_seconds(const char *s, const char *e, double *out)
 static gboolean
 css_starts_math_fn(const char *s, const char *e)
 {
-    while (s < e && is_ws(*s)) s++;
+    while (s < e && ns_is_ascii_ws(*s)) s++;
     static const char *const fns[] = {
         "calc(", "min(", "max(", "clamp(", "round(", "mod(", "rem(",
         "abs(", "hypot(", "sign(",
@@ -12158,8 +12035,8 @@ css_time_list_serialize(const char *value, gboolean computed)
         else if (c < e && *c == ')') depth--;
         else if (c == e || (*c == ',' && depth == 0)) {
             const char *is = seg, *ie = c;
-            while (is < ie && is_ws(*is)) is++;
-            while (ie > is && is_ws(ie[-1])) ie--;
+            while (is < ie && ns_is_ascii_ws(*is)) is++;
+            while (ie > is && ns_is_ascii_ws(ie[-1])) ie--;
             if (!first) g_string_append(out, ", ");
             first = FALSE;
             double sec = 0;
@@ -12195,7 +12072,7 @@ css_time_list_serialize(const char *value, gboolean computed)
     return g_string_free(out, FALSE);
 }
 
-char *
+static char *
 ns_css_time_specified(const char *value)
 {
     return value ? css_time_list_serialize(value, FALSE) : NULL;
@@ -12346,7 +12223,7 @@ grid_line_tokens(const char *text, char **out, int max)
     int n = 0;
     const char *p = text, *end = text + strlen(text);
     while (p < end) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         if (n == max) {
             for (int i = 0; i < n; i++) g_free(out[i]);
@@ -12354,13 +12231,13 @@ grid_line_tokens(const char *text, char **out, int max)
         }
         const char *start = p;
         int depth = 0;
-        while (p < end && (depth > 0 || !is_ws(*p))) {
+        while (p < end && (depth > 0 || !ns_is_ascii_ws(*p))) {
             if (*p == '\\' && p + 1 < end) {
                 p++;
                 if (g_ascii_isxdigit(*p)) {
                     for (int k = 0; k < 6 && p < end && g_ascii_isxdigit(*p); k++)
                         p++;
-                    if (p < end && is_ws(*p)) p++;
+                    if (p < end && ns_is_ascii_ws(*p)) p++;
                 } else {
                     p++;
                 }
@@ -12556,7 +12433,7 @@ grid_tokens(const char *text)
     const char *p = text;
     const char *end = text + strlen(text);
     while (TRUE) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) return out;
         const char *start = p;
         grid_tok t = { GRID_TOK_OTHER, NULL };
@@ -12582,7 +12459,7 @@ grid_tokens(const char *text)
             while (p < end) {
                 if (*p == '(') depth++;
                 else if (*p == ')' && --depth < 0) break;
-                else if (depth == 0 && (is_ws(*p) || *p == '/' || *p == '[' ||
+                else if (depth == 0 && (ns_is_ascii_ws(*p) || *p == '/' || *p == '[' ||
                                         *p == '"' || *p == '\''))
                     break;
                 p++;
@@ -12603,9 +12480,9 @@ grid_names_append(GString *acc, const char *tok)
     const char *q = tok + 1;
     const char *qend = tok + len - 1;
     while (q < qend) {
-        while (q < qend && is_ws(*q)) q++;
+        while (q < qend && ns_is_ascii_ws(*q)) q++;
         const char *name = q;
-        while (q < qend && !is_ws(*q)) q++;
+        while (q < qend && !ns_is_ascii_ws(*q)) q++;
         gsize nlen = (gsize)(q - name);
         if (nlen == 0) break;
         if (!line_name_is_custom_ident(name, nlen)) return FALSE;
@@ -12737,9 +12614,9 @@ grid_subgrid_canonical(const char *text)
 static char *
 grid_track_text_canonical(const char *text)
 {
-    while (is_ws(*text)) text++;
+    while (ns_is_ascii_ws(*text)) text++;
     if (g_ascii_strncasecmp(text, "subgrid", 7) == 0 &&
-        (!text[7] || is_ws(text[7]) || text[7] == '['))
+        (!text[7] || ns_is_ascii_ws(text[7]) || text[7] == '['))
         return grid_subgrid_canonical(text);
     GArray *toks = grid_tokens(text);
     if (!toks) return NULL;
@@ -13432,9 +13309,9 @@ static ns_css_value *
 parse_value_for(ns_css_prop prop, const char *text)
 {
 
-    while (*text && is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     gsize n = strlen(text);
-    while (n > 0 && is_ws(text[n - 1])) n--;
+    while (n > 0 && ns_is_ascii_ws(text[n - 1])) n--;
     char *t = g_strndup(text, n);
 
     ns_css_value *v = NULL;
@@ -14292,7 +14169,7 @@ parse_value_for(ns_css_prop prop, const char *text)
         }
         if (!v) {
             const char *p = t;
-            while (*p && is_ws(*p)) p++;
+            while (*p && ns_is_ascii_ws(*p)) p++;
             char *iset = pick_image_set_url(p);
             if (iset) {
                 v = g_new0(ns_css_value, 1);
@@ -14302,7 +14179,7 @@ parse_value_for(ns_css_prop prop, const char *text)
                 iset_computed = NULL;
             } else if (g_ascii_strncasecmp(p, "url(", 4) == 0) {
                 const char *u = p + 4;
-                while (*u && is_ws(*u)) u++;
+                while (*u && ns_is_ascii_ws(*u)) u++;
                 char q = 0;
                 if (*u == '"' || *u == '\'') { q = *u; u++; }
                 const char *end;
@@ -14310,7 +14187,7 @@ parse_value_for(ns_css_prop prop, const char *text)
                     end = css_quoted_end(u, q);
                 } else {
                     end = u;
-                    while (*end && *end != ')' && !is_ws(*end)) end++;
+                    while (*end && *end != ')' && !ns_is_ascii_ws(*end)) end++;
                 }
                 if (end && end > u) {
                     char *url = css_unescape_url(u, (gsize)(end - u));
@@ -14434,10 +14311,10 @@ parse_value_for(ns_css_prop prop, const char *text)
         gboolean with_auto = FALSE, has_ratio = FALSE, bad = FALSE;
         double a = 1, b = 1;
         while (rp < rend && !bad) {
-            while (rp < rend && is_ws(*rp)) rp++;
+            while (rp < rend && ns_is_ascii_ws(*rp)) rp++;
             if (rp >= rend) break;
             if (g_ascii_strncasecmp(rp, "auto", 4) == 0 &&
-                (rp + 4 == rend || is_ws(rp[4]))) {
+                (rp + 4 == rend || ns_is_ascii_ws(rp[4]))) {
                 if (with_auto) bad = TRUE;
                 with_auto = TRUE;
                 rp += 4;
@@ -14447,16 +14324,16 @@ parse_value_for(ns_css_prop prop, const char *text)
             char *ea = NULL;
             a = g_ascii_strtod(rp, &ea);
             if (!ea || ea == rp || a < 0 || !isfinite(a) ||
-                (ea < rend && !is_ws(*ea) && *ea != '/')) { bad = TRUE; break; }
+                (ea < rend && !ns_is_ascii_ws(*ea) && *ea != '/')) { bad = TRUE; break; }
             rp = ea;
-            while (rp < rend && is_ws(*rp)) rp++;
+            while (rp < rend && ns_is_ascii_ws(*rp)) rp++;
             if (rp < rend && *rp == '/') {
                 rp++;
-                while (rp < rend && is_ws(*rp)) rp++;
+                while (rp < rend && ns_is_ascii_ws(*rp)) rp++;
                 char *eb = NULL;
                 b = g_ascii_strtod(rp, &eb);
                 if (!eb || eb == rp || b < 0 || !isfinite(b) ||
-                    (eb < rend && !is_ws(*eb))) { bad = TRUE; break; }
+                    (eb < rend && !ns_is_ascii_ws(*eb))) { bad = TRUE; break; }
                 rp = eb;
             }
             has_ratio = TRUE;
@@ -14672,7 +14549,7 @@ parse_value_for(ns_css_prop prop, const char *text)
         } else {
             char *end = NULL;
             double d = g_ascii_strtod(t, &end);
-            while (end && *end && is_ws(*end)) end++;
+            while (end && *end && ns_is_ascii_ws(*end)) end++;
             if (end && end != t && *end == '\0') { num = d; got = TRUE; }
         }
         if (got && isfinite(num) && num >= 1 && num <= 1000) {
@@ -14909,7 +14786,7 @@ ns_css_prop_id(const char *name)
     return name ? prop_id(name) : -1;
 }
 
-gboolean
+static gboolean
 ns_css_declaration_valid(int prop, const char *text)
 {
     if (prop < 0 || !text || !*text) return TRUE;
@@ -15026,7 +14903,7 @@ split_ws_limit(const char *s, char *out[], int max)
     const char *p = s;
     const char *end = s + strlen(s);
     while (p < end && n < max) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         const char *start = p;
         char term = 0;
@@ -15043,7 +14920,7 @@ css_ws_token_count(const char *s)
     const char *p = s;
     const char *end = s + strlen(s);
     while (p < end) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         char term = 0;
         p = css_scan_until(p, end, " \t\n\r\f", &term);
@@ -15212,9 +15089,9 @@ custom_prop_wide_kind(const char *text)
 {
     if (!text) return NS_CUSTOM_WIDE_NONE;
     const char *start = text;
-    while (*start && is_ws(*start)) start++;
+    while (*start && ns_is_ascii_ws(*start)) start++;
     const char *end = text + strlen(text);
-    while (end > start && is_ws(end[-1])) end--;
+    while (end > start && ns_is_ascii_ws(end[-1])) end--;
     gsize len = (gsize)(end - start);
     if (len == 7 && g_ascii_strncasecmp(start, "inherit", len) == 0)
         return NS_CUSTOM_WIDE_INHERIT;
@@ -15473,9 +15350,8 @@ substitute_vars_tracked(const char *vtext, const ns_var_map *map,
 }
 
 static char *
-substitute_vars_with(const char *vtext, const ns_var_map *map, int depth)
+substitute_vars_with(const char *vtext, const ns_var_map *map)
 {
-    (void)depth;
     ns_var_budget budget = { 0 };
     return substitute_vars_tracked(vtext, map, &budget);
 }
@@ -15483,7 +15359,7 @@ substitute_vars_with(const char *vtext, const ns_var_map *map, int depth)
 char *
 ns_css_resolve_style_vars(const char *text, const ns_style *style)
 {
-    return substitute_vars_with(text, style ? style->vars : NULL, 0);
+    return substitute_vars_with(text, style ? style->vars : NULL);
 }
 
 static gboolean
@@ -16022,7 +15898,7 @@ bg_clip_canonical(const char *text)
     return r;
 }
 
-char *
+static char *
 ns_css_background_shorthand_serialize(const char *image, const char *position,
                                       const char *size, const char *repeat,
                                       const char *attachment,
@@ -16793,7 +16669,7 @@ parse_border_image_shorthand(const char *vtext, gboolean important,
     return ok;
 }
 
-char *
+static char *
 ns_css_border_image_shorthand_serialize(const char *source, const char *slice,
                                         const char *width, const char *outset,
                                         const char *repeat)
@@ -16822,7 +16698,7 @@ ns_css_border_image_shorthand_serialize(const char *source, const char *slice,
     return g_string_free(out, FALSE);
 }
 
-typedef struct { const char *name; ns_css_prop t, r, b, l; } border_side_map;
+typedef struct { const char *name; ns_css_prop t, r, b; } border_side_map;
 
 static void
 parse_border_shorthand(const border_side_map *side, const char *vtext,
@@ -17062,13 +16938,13 @@ transform_list_canonical(const char *value)
 {
     if (!value) return NULL;
     const char *p = value;
-    while (*p && is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     if (!*p) return NULL;
     if (g_ascii_strcasecmp(p, "none") == 0) return g_strdup("none");
     GString *out = g_string_new(NULL);
     gboolean ok = TRUE;
     while (ok && *p) {
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *name_start = p;
         while (*p && (g_ascii_isalnum((guchar)*p) || *p == '-' || *p == '_')) p++;
@@ -17105,7 +16981,7 @@ transform_list_canonical(const char *value)
         g_ptr_array_free(parts, TRUE);
         g_free(args);
         g_free(fn_lc);
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (*p == ',') ok = FALSE;
     }
     if (!ok || out->len == 0) {
@@ -17119,7 +16995,7 @@ static char *
 individual_transform_canonical(const char *value, ns_css_prop prop)
 {
     if (!value) return NULL;
-    while (*value && is_ws(*value)) value++;
+    while (*value && ns_is_ascii_ws(*value)) value++;
     if (g_ascii_strcasecmp(value, "none") == 0) return g_strdup("none");
     char *tokens[5] = {0};
     int n = split_ws_limit(value, tokens, G_N_ELEMENTS(tokens));
@@ -17465,30 +17341,26 @@ parse_declaration_block(const char **pp, const char *end,
 
         static const border_side_map border_sides[] = {
             { "border-top",    NS_CSS_BORDER_TOP_WIDTH,    NS_CSS_BORDER_TOP_COLOR,
-                               NS_CSS_BORDER_TOP_STYLE,    NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_TOP_STYLE },
             { "border-right",  NS_CSS_BORDER_RIGHT_WIDTH,  NS_CSS_BORDER_RIGHT_COLOR,
-                               NS_CSS_BORDER_RIGHT_STYLE,  NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_RIGHT_STYLE },
             { "border-bottom", NS_CSS_BORDER_BOTTOM_WIDTH, NS_CSS_BORDER_BOTTOM_COLOR,
-                               NS_CSS_BORDER_BOTTOM_STYLE, NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_BOTTOM_STYLE },
             { "border-left",   NS_CSS_BORDER_LEFT_WIDTH,   NS_CSS_BORDER_LEFT_COLOR,
-                               NS_CSS_BORDER_LEFT_STYLE,   NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_LEFT_STYLE },
             { "border-inline-start", NS_CSS_BORDER_INLINE_START_WIDTH,
                                       NS_CSS_BORDER_INLINE_START_COLOR,
-                                      NS_CSS_BORDER_INLINE_START_STYLE,
-                                      NS_CSS_PROP_COUNT },
+                                      NS_CSS_BORDER_INLINE_START_STYLE },
             { "border-inline-end",   NS_CSS_BORDER_INLINE_END_WIDTH,
                                       NS_CSS_BORDER_INLINE_END_COLOR,
-                                      NS_CSS_BORDER_INLINE_END_STYLE,
-                                      NS_CSS_PROP_COUNT },
+                                      NS_CSS_BORDER_INLINE_END_STYLE },
             { "border-block-start",  NS_CSS_BORDER_BLOCK_START_WIDTH,
                                       NS_CSS_BORDER_BLOCK_START_COLOR,
-                                      NS_CSS_BORDER_BLOCK_START_STYLE,
-                                      NS_CSS_PROP_COUNT },
+                                      NS_CSS_BORDER_BLOCK_START_STYLE },
             { "border-block-end",    NS_CSS_BORDER_BLOCK_END_WIDTH,
                                       NS_CSS_BORDER_BLOCK_END_COLOR,
-                                      NS_CSS_BORDER_BLOCK_END_STYLE,
-                                      NS_CSS_PROP_COUNT },
-            { NULL, 0, 0, 0, 0 },
+                                      NS_CSS_BORDER_BLOCK_END_STYLE },
+            { NULL, 0, 0, 0 },
         };
 
         gboolean is_border_side = FALSE;
@@ -18746,7 +18618,7 @@ static const char *
 css_skip_ws_comments(const char *p, const char *end)
 {
     for (;;) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p + 1 < end && p[0] == '/' && p[1] == '*') {
             p = css_skip_comment(p, end);
             continue;
@@ -19066,7 +18938,7 @@ font_src_consider_urls(char **best, const char *value)
                     else p++;
                 }
             } else {
-                while (p < end && *p != ')' && !is_ws(*p)) {
+                while (p < end && *p != ')' && !ns_is_ascii_ws(*p)) {
                     if (*p == '\\' && p + 1 < end) p += 2;
                     else p++;
                 }
@@ -19135,7 +19007,7 @@ ns_css_keyframes_resolve(const ns_css_keyframes *kf,
     for (int i = 0; i < out->n_stops; i++) {
         ns_css_keyframe_stop *s = &out->stops[i];
         const char *rawp = s->raw_props;
-        s->raw_props = rawp ? substitute_vars_with(rawp, vars, 0) : NULL;
+        s->raw_props = rawp ? substitute_vars_with(rawp, vars) : NULL;
     }
     return out;
 }
@@ -19242,7 +19114,7 @@ ns_css_sizes_resolve(const char *sizes)
     const char *p = sizes;
     const char *end = sizes + strlen(sizes);
     while (p < end) {
-        while (p < end && (is_ws(*p) || *p == ',')) p++;
+        while (p < end && (ns_is_ascii_ws(*p) || *p == ',')) p++;
         if (p >= end) break;
         const char *entry = p;
         while (p < end && *p != ',') {
@@ -19257,7 +19129,7 @@ ns_css_sizes_resolve(const char *sizes)
         const char *q = entry;
         const char *len_start = NULL;
         while (q < entry_end) {
-            while (q < entry_end && is_ws(*q)) q++;
+            while (q < entry_end && ns_is_ascii_ws(*q)) q++;
             if (q >= entry_end) break;
             if (sizes_is_length_fn(q) || g_ascii_isdigit(*q) ||
                 *q == '.' || *q == '+' || *q == '-') {
@@ -19268,7 +19140,7 @@ ns_css_sizes_resolve(const char *sizes)
                 const char *cp = match_close_paren(q + 1, entry_end);
                 q = cp ? cp + 1 : entry_end;
             } else {
-                while (q < entry_end && !is_ws(*q)) q++;
+                while (q < entry_end && !ns_is_ascii_ws(*q)) q++;
             }
         }
         if (!len_start) continue;
@@ -19404,7 +19276,7 @@ match_kw(const char *p, const char *end, const char *kw)
     if (g_ascii_strncasecmp(p, kw, n) != 0) return FALSE;
     if (p + n == end) return TRUE;
     char c = p[n];
-    return is_ws(c) || (c == '/' && p + n + 1 < end && p[n + 1] == '*');
+    return ns_is_ascii_ws(c) || (c == '/' && p + n + 1 < end && p[n + 1] == '*');
 }
 
 static gboolean
@@ -19706,7 +19578,7 @@ cq_spacify(const char *s)
             while (*p == '<' || *p == '>' || *p == '=')
                 g_string_append_c(o, *p++);
             g_string_append_c(o, ' ');
-        } else if (is_ws(*p)) {
+        } else if (ns_is_ascii_ws(*p)) {
             g_string_append_c(o, ' ');
             p++;
         } else {
@@ -19830,7 +19702,7 @@ cq_node_new(cq_node_kind kind)
 static const char *
 cq_skip_ws(const char *p, const char *end)
 {
-    while (p < end && is_ws(*p)) p++;
+    while (p < end && ns_is_ascii_ws(*p)) p++;
     return p;
 }
 
@@ -19841,7 +19713,7 @@ cq_word_at(const char *p, const char *end, const char *word)
     if ((gsize)(end - p) < len || g_ascii_strncasecmp(p, word, len) != 0)
         return FALSE;
     const char *after = p + len;
-    return after == end || is_ws(*after) || *after == '(';
+    return after == end || ns_is_ascii_ws(*after) || *after == '(';
 }
 
 static const char *
@@ -20043,7 +19915,7 @@ cq_parse_in_parens(const char **pp, const char *end, gboolean *ok, int depth)
         if (!close) { *ok = FALSE; return NULL; }
         const char *inner = cq_skip_ws(p + 1, end);
         const char *inner_end = close;
-        while (inner_end > inner && is_ws(inner_end[-1])) inner_end--;
+        while (inner_end > inner && ns_is_ascii_ws(inner_end[-1])) inner_end--;
         *pp = close + 1;
         if (inner >= inner_end) { *ok = FALSE; return NULL; }
         if (*inner == '(' || cq_word_at(inner, inner_end, "not")) {
@@ -20159,7 +20031,7 @@ cq_parse_condition(const char *cond, char **out_name, cq_node **out_query)
     p = cq_skip_ws(p, end);
     if (p < end && *p != '(' && !cq_word_at(p, end, "not")) {
         const char *s = p;
-        while (p < end && !is_ws(*p) && *p != '(') {
+        while (p < end && !ns_is_ascii_ws(*p) && *p != '(') {
             if (*p == '\\' && p + 1 < end) p++;
             p++;
         }
@@ -20245,7 +20117,7 @@ cq_serialize(const cq_node *n, GString *out)
     }
 }
 
-char *
+static char *
 ns_css_container_name_canonical(const char *text)
 {
     char *tok[16] = {0};
@@ -20263,7 +20135,7 @@ ns_css_container_name_canonical(const char *text)
     return res;
 }
 
-char *
+static char *
 ns_css_container_shorthand_canonical(const char *text)
 {
     const char *slash = strchr(text, '/');
@@ -20327,7 +20199,7 @@ substitute_tree_counting(const char *text, int index, int count)
             value = count;
         }
         if (fn) {
-            while (is_ws(*fn)) fn++;
+            while (ns_is_ascii_ws(*fn)) fn++;
             if (*fn == ')') {
                 g_string_append_printf(out, "%d", value);
                 p = fn + 1;
@@ -20537,8 +20409,8 @@ container_rule_matches(ns_css_rule *r)
 static char *
 css_trim_dup_range(const char *start, const char *end)
 {
-    while (start < end && is_ws(*start)) start++;
-    while (end > start && is_ws(end[-1])) end--;
+    while (start < end && ns_is_ascii_ws(*start)) start++;
+    while (end > start && ns_is_ascii_ws(end[-1])) end--;
     return g_strndup(start, (gsize)(end - start));
 }
 
@@ -20662,7 +20534,7 @@ css_at_keyword(const char *p, const char *end, const char *kw)
     if (g_ascii_strncasecmp(p, kw, len) != 0) return FALSE;
     if (p + len == end) return TRUE;
     char c = p[len];
-    return is_ws(c) || c == '(' || c == ';' || c == ',';
+    return ns_is_ascii_ws(c) || c == '(' || c == ';' || c == ',';
 }
 
 static char *
@@ -20687,7 +20559,7 @@ css_parse_import_url(const char **pp, const char *end)
                 else p++;
             }
         } else {
-            while (p < end && *p != ')' && !is_ws(*p)) p++;
+            while (p < end && *p != ')' && !ns_is_ascii_ws(*p)) p++;
         }
         url = g_strndup(start, (gsize)(p - start));
         if (quote && p < end && *p == quote) p++;
@@ -21019,11 +20891,13 @@ css_selector_segment_has_scope_marker(const char *p, const char *end)
     return FALSE;
 }
 
-static void
-css_scope_append_amp_rewritten(GString *out, const char *p, const char *end)
+static gboolean
+css_replace_nesting_amp(GString *out, const char *p, const char *end,
+                        const char *replacement)
 {
     char quote = 0;
     int bracket = 0;
+    gboolean replaced = FALSE;
     while (p < end) {
         char c = *p;
         if (quote) {
@@ -21057,13 +20931,15 @@ css_scope_append_amp_rewritten(GString *out, const char *p, const char *end)
         if (c == '[') bracket++;
         else if (c == ']' && bracket > 0) bracket--;
         if (c == '&' && bracket == 0) {
-            g_string_append(out, ":scope");
+            g_string_append(out, replacement);
+            replaced = TRUE;
             p++;
             continue;
         }
         g_string_append_c(out, c);
         p++;
     }
+    return replaced;
 }
 
 static char *
@@ -21077,8 +20953,8 @@ css_scope_selector_list_text(const char *start, const char *end)
         const char *seg_end = css_scan_until(p, end, ",", &term);
         const char *s = p;
         const char *e = seg_end;
-        while (s < e && is_ws(*s)) s++;
-        while (e > s && is_ws(e[-1])) e--;
+        while (s < e && ns_is_ascii_ws(*s)) s++;
+        while (e > s && ns_is_ascii_ws(e[-1])) e--;
         if (s < e) {
             if (!first) g_string_append(out, ", ");
             first = FALSE;
@@ -21087,7 +20963,7 @@ css_scope_selector_list_text(const char *start, const char *end)
                 g_string_append(out, ":where(:scope) ");
                 g_string_append_len(out, s, (gssize)(e - s));
             } else {
-                css_scope_append_amp_rewritten(out, s, e);
+                css_replace_nesting_amp(out, s, e, ":scope");
             }
         }
         p = term == ',' ? seg_end + 1 : seg_end;
@@ -21418,7 +21294,7 @@ parse_rules_until(const char **pp, const char *end,
                                                               prelude_end);
                 {
                     const char *q = nm_start;
-                    while (q < prelude_end && is_ws(*q)) q++;
+                    while (q < prelude_end && ns_is_ascii_ws(*q)) q++;
                     gboolean quoted = q < prelude_end && (*q == '"' || *q == '\'');
                     if (kf_name && *kf_name && !quoted &&
                         (css_wide_keyword_or_default(kf_name) ||
@@ -21781,10 +21657,10 @@ parse_rules_until(const char **pp, const char *end,
             } else {
                 g_sel_parse_error = TRUE;
             }
-            while (parse_p < parse_end && is_ws(*parse_p)) parse_p++;
+            while (parse_p < parse_end && ns_is_ascii_ws(*parse_p)) parse_p++;
             if (parse_p < parse_end && *parse_p == ',') {
                 parse_p++;
-                while (parse_p < parse_end && is_ws(*parse_p)) parse_p++;
+                while (parse_p < parse_end && ns_is_ascii_ws(*parse_p)) parse_p++;
                 if (parse_p >= parse_end) g_sel_parse_error = TRUE;
                 continue;
             }
@@ -21808,59 +21684,6 @@ parse_rules_until(const char **pp, const char *end,
     }
     *pp = p;
     if (nested) at_depth--;
-}
-
-static gboolean
-css_append_nested_selector(GString *out, const char *part,
-                           const char *parent_expr)
-{
-    const char *p = part;
-    const char *end = part + strlen(part);
-    char quote = 0;
-    int bracket = 0;
-    gboolean replaced = FALSE;
-    while (p < end) {
-        char c = *p;
-        if (quote) {
-            if (c == '\\' && p + 1 < end) {
-                g_string_append_len(out, p, 2);
-                p += 2;
-                continue;
-            }
-            g_string_append_c(out, c);
-            if (c == quote) quote = 0;
-            p++;
-            continue;
-        }
-        if (c == '/' && p + 1 < end && p[1] == '*') {
-            const char *q = css_skip_comment(p, end);
-            g_string_append_len(out, p, (gssize)(q - p));
-            p = q;
-            continue;
-        }
-        if (c == '\\' && p + 1 < end) {
-            g_string_append_len(out, p, 2);
-            p += 2;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-            g_string_append_c(out, c);
-            p++;
-            continue;
-        }
-        if (c == '[') bracket++;
-        else if (c == ']' && bracket > 0) bracket--;
-        if (c == '&' && bracket == 0) {
-            g_string_append(out, parent_expr);
-            replaced = TRUE;
-            p++;
-            continue;
-        }
-        g_string_append_c(out, c);
-        p++;
-    }
-    return replaced;
 }
 
 static char *
@@ -21898,7 +21721,8 @@ css_combine_selectors(const char *parent, const char *child, gsize max_len)
         if (out->len) g_string_append(out, ", ");
         char *isparent = g_strdup_printf(":is(%s)", pc);
         GString *piece = g_string_new(NULL);
-        if (css_append_nested_selector(piece, part, isparent))
+        if (css_replace_nesting_amp(piece, part, part + strlen(part),
+                                    isparent))
             g_string_append_len(out, piece->str, (gssize)piece->len);
         else
             g_string_append_printf(out, ":is(%s) %s", pc, part);
@@ -21924,10 +21748,10 @@ static void
 css_trim_selector(char *sel)
 {
     char *s = sel;
-    while (*s && is_ws(*s)) s++;
+    while (*s && ns_is_ascii_ws(*s)) s++;
     if (s != sel) memmove(sel, s, strlen(s) + 1);
     size_t n = strlen(sel);
-    while (n > 0 && is_ws((unsigned char)sel[n - 1])) {
+    while (n > 0 && ns_is_ascii_ws((unsigned char)sel[n - 1])) {
         size_t bs = 0, i = n - 1;
         while (i > 0 && sel[i - 1] == '\\') { bs++; i--; }
         if (bs % 2 == 1) break;
@@ -22008,7 +21832,7 @@ css_body_has_nested_rule(const char *s, const char *e)
 {
     const char *p = s;
     while (p < e) {
-        while (p < e && is_ws(*p)) p++;
+        while (p < e && ns_is_ascii_ws(*p)) p++;
         if (p >= e) break;
         if (p + 1 < e && p[0] == '/' && p[1] == '*') {
             p += 2;
@@ -22071,7 +21895,7 @@ css_flatten_style_rule(GString *out, const char *sel,
     GString *decls = g_string_new(NULL);
     const char *p = body_s;
     while (p < body_e) {
-        while (p < body_e && is_ws(*p)) p++;
+        while (p < body_e && ns_is_ascii_ws(*p)) p++;
         if (p >= body_e) break;
         if (p + 1 < body_e && p[0] == '/' && p[1] == '*') {
             const char *cs = p;
@@ -22376,7 +22200,7 @@ ns_css_stylesheet_free(ns_css_stylesheet *s)
     g_free(s);
 }
 
-void
+static void
 ns_css_stylesheet_force_layer(ns_css_stylesheet *s, const char *layer_name)
 {
     if (!s || !layer_name || !*layer_name) return;
@@ -22718,7 +22542,6 @@ ns_css_rule_index_build(const ns_css_stylesheet *sheet)
             if (sel && sel->pseudo_element != NS_CSS_PE_NONE) {
                 ((ns_css_stylesheet *)sheet)->pseudo_mask |=
                     (1u << sel->pseudo_element);
-                ((ns_css_rule *)r)->pe_mask |= (1u << sel->pseudo_element);
             }
             if (!sel || sel->compounds->len == 0) {
                 index_add_candidate_array(idx->universal, ri, si);
@@ -22821,7 +22644,7 @@ ns_el_placeholder_shown(const ns_node *el)
         gboolean empty = TRUE;
         if (txt) {
             for (const char *q = txt; *q; q++)
-                if (!is_ws(*q)) { empty = FALSE; break; }
+                if (!ns_is_ascii_ws(*q)) { empty = FALSE; break; }
             g_free(txt);
         }
         return empty;
@@ -22967,7 +22790,7 @@ ns_el_is_blank(const ns_node *el)
     char *txt = ns_node_collect_text(el);
     gboolean blank = TRUE;
     for (const char *p = txt ? txt : ""; *p; p++) {
-        if (!is_ws(*p)) {
+        if (!ns_is_ascii_ws(*p)) {
             blank = FALSE;
             break;
         }
@@ -23217,7 +23040,7 @@ ns_css_lang_one_matches(const char *lang, const char *want)
     if (!lang || !want || !*want) return FALSE;
     while (*want == ' ' || *want == '\'' || *want == '"') want++;
     gsize wlen = strlen(want);
-    while (wlen > 0 && (is_ws(want[wlen - 1]) ||
+    while (wlen > 0 && (ns_is_ascii_ws(want[wlen - 1]) ||
                         want[wlen - 1] == '\'' || want[wlen - 1] == '"'))
         wlen--;
     if (wlen == 0) return FALSE;
@@ -23746,9 +23569,9 @@ ns_css_attr_value_matches(const ns_css_attr_pred *a, const char *value,
     case NS_CSS_ATTR_WORD: {
         const char *p = value;
         while (*p) {
-            while (*p && is_ws(*p)) p++;
+            while (*p && ns_is_ascii_ws(*p)) p++;
             const char *token = p;
-            while (*p && !is_ws(*p)) p++;
+            while (*p && !ns_is_ascii_ws(*p)) p++;
             if ((gsize)(p - token) == wanted_len &&
                 (ci ? g_ascii_strncasecmp(token, a->value, wanted_len) == 0
                     : strncmp(token, a->value, wanted_len) == 0))
@@ -24326,9 +24149,9 @@ css_serialize_urls(char *value)
             const char *close = match_close_paren(p + 4, end);
             if (close) {
                 const char *start = p + 4;
-                while (start < close && is_ws(*start)) start++;
+                while (start < close && ns_is_ascii_ws(*start)) start++;
                 const char *stop = close;
-                while (stop > start && is_ws(stop[-1])) stop--;
+                while (stop > start && ns_is_ascii_ws(stop[-1])) stop--;
                 if (stop > start &&
                     ((*start == '"' && stop[-1] == '"') ||
                      (*start == '\'' && stop[-1] == '\''))) {
@@ -26419,7 +26242,7 @@ ns_css_parse_selector_list(const char *text)
     const char *end = text + strlen(text);
     gboolean expect_selector = TRUE;
     while (p < end) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         if (*p == ',') {
             g_sel_parse_error = TRUE;
@@ -26433,7 +26256,7 @@ ns_css_parse_selector_list(const char *text)
             g_ptr_array_add(out, sel);
             expect_selector = FALSE;
         }
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p < end && *p == ',') { p++; expect_selector = TRUE; }
         else if (p == iter_start) break;
     }
@@ -27560,7 +27383,7 @@ ns_css_value_serialize(const ns_css_value *v)
     return value_serialize_layers(v, FALSE);
 }
 
-char *
+static char *
 ns_css_value_serialize_specified(const ns_css_value *v)
 {
     return value_serialize_layers(v, TRUE);
@@ -28325,7 +28148,7 @@ var_map_apply_unregistered(GHashTable *own, const ns_var_map *parent,
     if (kind == NS_CUSTOM_WIDE_NONE && strstr(resolved->text, "var(")) {
         ns_var_map scope = { .ref = 1, .own = own,
                              .parent = (ns_var_map *)parent };
-        expanded = substitute_vars_with(value_text, &scope, 0);
+        expanded = substitute_vars_with(value_text, &scope);
         kind = custom_prop_wide_kind(expanded);
     }
     if (kind == NS_CUSTOM_WIDE_REVERT ||
@@ -28387,7 +28210,7 @@ var_map_apply_registered(GHashTable *vars, const ns_var_map *parent,
     if (kind == NS_CUSTOM_WIDE_NONE && strstr(resolved->text, "var(")) {
         ns_var_map scope = { .ref = 1, .own = vars,
                              .parent = (ns_var_map *)parent };
-        expanded = substitute_vars_with(value_text, &scope, 0);
+        expanded = substitute_vars_with(value_text, &scope);
         kind = custom_prop_wide_kind(expanded);
     }
     if (kind == NS_CUSTOM_WIDE_REVERT ||
@@ -29130,7 +28953,7 @@ pending_substituted_value(const pending_match *pm, const ns_var_map *vars,
                           const ns_node *node)
 {
     gboolean custom = pm->pd->pname[0] == '-' && pm->pd->pname[1] == '-';
-    char *substituted = substitute_vars_with(pm->pd->raw_vtext, vars, 0);
+    char *substituted = substitute_vars_with(pm->pd->raw_vtext, vars);
     if (substituted && strstr(substituted, "attr(")) {
         gboolean tainted = FALSE;
         char *with_attrs = substitute_attrs(substituted, node, 0, &tainted);
@@ -29584,30 +29407,7 @@ resolve_font_size_px(const ns_style *s, const ns_style *parent_style)
         return fs->u.length.v *
                font_relative_unit_px(fs->u.length.unit, parent_px, pf, pw, pi);
     }
-    case NS_CSS_UNIT_VW:
-    case NS_CSS_UNIT_SVW:
-    case NS_CSS_UNIT_LVW:
-    case NS_CSS_UNIT_DVW:
-    case NS_CSS_UNIT_VH:
-    case NS_CSS_UNIT_SVH:
-    case NS_CSS_UNIT_LVH:
-    case NS_CSS_UNIT_DVH:
-    case NS_CSS_UNIT_VI:
-    case NS_CSS_UNIT_SVI:
-    case NS_CSS_UNIT_LVI:
-    case NS_CSS_UNIT_DVI:
-    case NS_CSS_UNIT_VB:
-    case NS_CSS_UNIT_SVB:
-    case NS_CSS_UNIT_LVB:
-    case NS_CSS_UNIT_DVB:
-    case NS_CSS_UNIT_VMIN:
-    case NS_CSS_UNIT_SVMIN:
-    case NS_CSS_UNIT_LVMIN:
-    case NS_CSS_UNIT_DVMIN:
-    case NS_CSS_UNIT_VMAX:
-    case NS_CSS_UNIT_SVMAX:
-    case NS_CSS_UNIT_LVMAX:
-    case NS_CSS_UNIT_DVMAX:
+    NS_CSS_CASE_VIEWPORT_UNITS:
         return viewport_resolve(fs->u.length.v, fs->u.length.unit);
     case NS_CSS_UNIT_CQW:
     case NS_CSS_UNIT_CQI:
@@ -29885,30 +29685,7 @@ resolve_em_units(ns_style *out, const ns_style *parent_style, double root_px)
                 ? initial_line_px : root_line_px;
             v->u.length.unit = NS_CSS_UNIT_PX;
             break;
-        case NS_CSS_UNIT_VW:
-        case NS_CSS_UNIT_SVW:
-        case NS_CSS_UNIT_LVW:
-        case NS_CSS_UNIT_DVW:
-        case NS_CSS_UNIT_VH:
-        case NS_CSS_UNIT_SVH:
-        case NS_CSS_UNIT_LVH:
-        case NS_CSS_UNIT_DVH:
-        case NS_CSS_UNIT_VI:
-        case NS_CSS_UNIT_SVI:
-        case NS_CSS_UNIT_LVI:
-        case NS_CSS_UNIT_DVI:
-        case NS_CSS_UNIT_VB:
-        case NS_CSS_UNIT_SVB:
-        case NS_CSS_UNIT_LVB:
-        case NS_CSS_UNIT_DVB:
-        case NS_CSS_UNIT_VMIN:
-        case NS_CSS_UNIT_SVMIN:
-        case NS_CSS_UNIT_LVMIN:
-        case NS_CSS_UNIT_DVMIN:
-        case NS_CSS_UNIT_VMAX:
-        case NS_CSS_UNIT_SVMAX:
-        case NS_CSS_UNIT_LVMAX:
-        case NS_CSS_UNIT_DVMAX:
+        NS_CSS_CASE_VIEWPORT_UNITS:
             v = ns_css_value_cow(out, i);
             v->u.length.v = viewport_resolve(v->u.length.v, v->u.length.unit);
             v->u.length.unit = NS_CSS_UNIT_PX;
@@ -30329,7 +30106,7 @@ static gboolean
 attr_is_color(const char *v, guint8 *r_out, guint8 *g_out, guint8 *b_out, guint8 *a_out)
 {
     if (!v) return FALSE;
-    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\f' || *v == '\r') v++;
+    while (ns_is_ascii_ws(*v)) v++;
     const char *end = v + strlen(v);
     while (end > v && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' ||
                        end[-1] == '\f' || end[-1] == '\r'))
@@ -30350,7 +30127,7 @@ html_dimension_value(const char *s, gboolean ignore_zero, double *value,
                      gboolean *percent)
 {
     if (!s) return FALSE;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\f' || *s == '\r')
+    while (ns_is_ascii_ws(*s))
         s++;
     if (!g_ascii_isdigit(*s)) return FALSE;
     double v = 0;
@@ -30479,7 +30256,7 @@ legacy_font_size_keyword(const char *s)
         "xxx-large",
     };
     if (!s) return NULL;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\f' || *s == '\r')
+    while (ns_is_ascii_ws(*s))
         s++;
     int sign = *s == '+' ? 1 : *s == '-' ? -1 : 0;
     if (sign) s++;
@@ -30974,9 +30751,9 @@ word_list_contains(const char *list, const char *word)
 {
     gsize len = strlen(word);
     for (const char *p = list; *p; ) {
-        while (*p && is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         const char *start = p;
-        while (*p && !is_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         if ((gsize)(p - start) == len && memcmp(start, word, len) == 0)
             return TRUE;
     }
@@ -34461,7 +34238,7 @@ selector_first_compound_len(const char *s)
         char c = s[i];
         if (c == '(' || c == '[') depth++;
         else if (c == ')' || c == ']') { if (depth) depth--; }
-        else if (!depth && (is_ws(c) || c == '>' || c == '+' || c == '~' ||
+        else if (!depth && (ns_is_ascii_ws(c) || c == '>' || c == '+' || c == '~' ||
                             c == ','))
             break;
         i++;
@@ -34519,8 +34296,8 @@ scope_one_selector(GString *out, const char *sel, gsize len,
                    const char *marker, const char *host_id,
                    gboolean frame_scope)
 {
-    while (len && is_ws(*sel)) { sel++; len--; }
-    while (len && is_ws(sel[len - 1])) len--;
+    while (len && ns_is_ascii_ws(*sel)) { sel++; len--; }
+    while (len && ns_is_ascii_ws(sel[len - 1])) len--;
     if (!len) return;
     char *s = g_strndup(sel, len);
     gsize clen = selector_first_compound_len(s);
@@ -34557,7 +34334,7 @@ scope_rule_list(GString *out, const char *p, const char *end,
         return;
     }
     while (p < end) {
-        while (p < end && is_ws(*p)) p++;
+        while (p < end && ns_is_ascii_ws(*p)) p++;
         if (p >= end) break;
         if (p + 1 < end && p[0] == '/' && p[1] == '*') {
             p += 2;
@@ -35107,13 +34884,6 @@ style_sheet_cached_take(ns_node *style, char *css)
 }
 
 ns_css_stylesheet *
-ns_css_stylesheet_from_style_element_cached(ns_node *style)
-{
-    char *css = style_element_final_css(style);
-    return css ? style_sheet_cached_take(style, css) : NULL;
-}
-
-ns_css_stylesheet *
 ns_css_stylesheet_from_style_text_cached(ns_node *style, const char *css)
 {
     return css ? style_sheet_cached_take(style, g_strdup(css)) : NULL;
@@ -35134,7 +34904,7 @@ ns_css_compute_scoped(ns_node *doc,
     return styles;
 }
 
-GHashTable *
+static GHashTable *
 ns_css_compute(ns_node *doc,
                const ns_css_stylesheet *const *author_sheets,
                gsize n_sheets)

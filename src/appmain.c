@@ -460,11 +460,10 @@ ns_run_headless(ns_headless_opts *hopts)
 }
 
 static int
-ns_run_proc_gui(int argc, char **argv, const char *url,
-                const char *gsk_renderer_override, const char *session_path,
-                gboolean recover, gboolean private_mode)
+ns_run_proc_gui(const char *url, const char *gsk_renderer_override,
+                const char *session_path, gboolean recover,
+                gboolean private_mode)
 {
-    (void)argc; (void)argv;
     const ns_config *cfg = ns_config_get();
     ns_apply_gsk_renderer(gsk_renderer_override ? gsk_renderer_override
                           : (cfg ? cfg->gsk_renderer : NULL));
@@ -670,9 +669,8 @@ main(int argc, char **argv)
         }
         const char *session = ns_watchdog_child_session_arg(argc, argv);
         gboolean recover = ns_watchdog_child_is_recovery();
-        int gui_rc = ns_run_proc_gui(argc, argv, hopts.url,
-                                     gsk_renderer_override, session, recover,
-                                     private_window);
+        int gui_rc = ns_run_proc_gui(hopts.url, gsk_renderer_override, session,
+                                     recover, private_window);
         ns_trace_close();
         return gui_rc;
     }

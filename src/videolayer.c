@@ -107,16 +107,6 @@ clock_position(const ns_video_clock *clock, gint64 now_us)
     return (elapsed_ms % clock->total_ms) / 1000.0;
 }
 
-double
-ns_video_layer_position(ns_video_layer *layer, gint64 now_us)
-{
-    if (!layer) return 0.0;
-    g_mutex_lock(&layer->lock);
-    double t = clock_position(&layer->clock, now_us);
-    g_mutex_unlock(&layer->lock);
-    return t;
-}
-
 static gboolean
 layer_present_locked(ns_video_layer *layer, double t)
 {

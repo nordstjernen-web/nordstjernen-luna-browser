@@ -766,7 +766,7 @@ collect_stylesheets_walk(ns_node *n, const char *base_url,
         collect_stylesheets_walk(c, base_url, cc, depth + 1);
 }
 
-void
+static void
 ns_engine_collect_stylesheets(ns_node *doc, const char *base_url,
                               GPtrArray *out, GPtrArray *out_docs,
                               GHashTable *css_cache)

@@ -40,6 +40,8 @@
 #include "camera.h"
 #include "trace.h"
 
+static int ns_browser_animating(ns_browser *browser);
+
 #define NS_IMAGE_RELAYOUT_BATCH 8
 
 struct ns_browser {
@@ -1453,25 +1455,6 @@ browser_prepare_document_response(ns_response *resp)
     resp->content_type = g_strdup("text/html; charset=utf-8");
 }
 
-static void
-browser_apply_meta_csp(ns_js *js, const ns_node *node, int depth)
-{
-    if (depth > 1024) return;
-    for (const ns_node *c = node ? node->first_child : NULL; c;
-         c = c->next_sibling) {
-        if (c->kind == NS_NODE_ELEMENT && c->name &&
-            g_ascii_strcasecmp(c->name, "meta") == 0) {
-            const char *he = ns_element_get_attr(c, "http-equiv");
-            if (he && g_ascii_strcasecmp(he, "content-security-policy") == 0) {
-                const char *content = ns_element_get_attr(c, "content");
-                if (content && *content)
-                    ns_js_add_csp_header(js, content);
-            }
-        }
-        browser_apply_meta_csp(js, c, depth + 1);
-    }
-}
-
 static gboolean
 headers_have_no_store(const char *raw)
 {
@@ -1549,7 +1532,7 @@ browser_build_from_doc(ns_node *doc, char *base, int viewport_width,
         ns_js_set_clipboard_write_cb(b->js, browser_js_clipboard_write, b);
         ns_js_set_selection_cmd_cb(b->js, browser_js_selection_cmd, b);
         ns_js_add_csp_header(b->js, csp_header);
-        browser_apply_meta_csp(b->js, doc, 0);
+        ns_js_apply_meta_csp(b->js, doc);
         const ns_config *run_cfg = ns_config_get();
         if (!run_cfg || run_cfg->javascript_enabled)
             ns_js_run_scripts_in_doc(b->js, doc, base, b->doc_charset,
@@ -2212,7 +2195,7 @@ ns_browser_next_wake_us(ns_browser *browser)
     return browser->refresh_due_us;
 }
 
-int
+static int
 ns_browser_animating(ns_browser *browser)
 {
     if (!browser) return 0;
@@ -2371,16 +2354,6 @@ ns_browser_scroll_blit_bands(ns_browser *browser, GArray *out_bands)
     if (h->three_d || h->sticky || h->fixed_background) return 0;
     g_array_append_vals(out_bands, h->fixed_bands->data, h->fixed_bands->len);
     return 1;
-}
-
-int
-ns_browser_render_argb32(ns_browser *browser, int scroll_x, int scroll_y,
-                         int width, int height, double scale,
-                         unsigned char *out, int stride)
-{
-    return ns_browser_render_argb32_rects(browser, scroll_x, scroll_y, width,
-                                          height, 0, scale, out, stride, NULL,
-                                          0);
 }
 
 static void
@@ -3849,7 +3822,7 @@ ns_browser_key_full(ns_browser *browser, int kind, const char *key,
     return nav;
 }
 
-int
+static int
 ns_browser_focused_editable(ns_browser *browser)
 {
     if (!browser || !browser->js)

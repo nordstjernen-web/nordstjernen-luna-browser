@@ -295,11 +295,7 @@ struct ns_style;
 int         ns_css_prop_id(const char *name);
 int         ns_css_resolve_prop(int prop, const struct ns_style *style);
 const char *ns_css_prop_name(int prop);
-int         ns_css_prop_syntax(int prop);
-int         ns_css_prop_logical_group(int prop);
-gboolean    ns_css_prop_is_logical(int prop);
 gboolean    ns_css_prop_inherited(int prop);
-gboolean    ns_css_declaration_valid(int prop, const char *text);
 gboolean    ns_css_named_property_supported(const char *name);
 gboolean    ns_css_named_declaration_valid(const char *name, const char *text);
 
@@ -400,8 +396,6 @@ void  ns_css_anim_lists(const struct ns_style *s, gboolean is_animation,
                         ns_css_anim_list *out, gboolean *out_mismatch);
 char *ns_css_anim_shorthand_serialize(const ns_css_anim_list *list,
                                       gboolean is_animation);
-char *ns_css_animation_shorthand_canonical(const char *text, gboolean is_animation);
-char *ns_css_ident_serialize(const char *name);
 char *ns_css_list_style_serialize(const char *type, const char *position,
                                   const char *image);
 char *ns_css_grid_shorthand_compose(char *const values[6], gboolean full);
@@ -623,6 +617,20 @@ typedef enum ns_css_unit {
     NS_CSS_UNIT_FR,
 } ns_css_unit;
 
+#define NS_CSS_CASE_VIEWPORT_UNITS \
+    case NS_CSS_UNIT_VW: case NS_CSS_UNIT_SVW: \
+    case NS_CSS_UNIT_LVW: case NS_CSS_UNIT_DVW: \
+    case NS_CSS_UNIT_VH: case NS_CSS_UNIT_SVH: \
+    case NS_CSS_UNIT_LVH: case NS_CSS_UNIT_DVH: \
+    case NS_CSS_UNIT_VI: case NS_CSS_UNIT_SVI: \
+    case NS_CSS_UNIT_LVI: case NS_CSS_UNIT_DVI: \
+    case NS_CSS_UNIT_VB: case NS_CSS_UNIT_SVB: \
+    case NS_CSS_UNIT_LVB: case NS_CSS_UNIT_DVB: \
+    case NS_CSS_UNIT_VMIN: case NS_CSS_UNIT_SVMIN: \
+    case NS_CSS_UNIT_LVMIN: case NS_CSS_UNIT_DVMIN: \
+    case NS_CSS_UNIT_VMAX: case NS_CSS_UNIT_SVMAX: \
+    case NS_CSS_UNIT_LVMAX: case NS_CSS_UNIT_DVMAX
+
 typedef enum ns_css_color_space {
     NS_CSS_COLOR_LEGACY,
     NS_CSS_COLOR_SRGB,
@@ -641,6 +649,8 @@ typedef enum ns_css_color_space {
     NS_CSS_COLOR_HSL,
     NS_CSS_COLOR_HWB,
 } ns_css_color_space;
+
+const char *ns_css_unit_suffix(int unit);
 
 void     ns_css_set_viewport(double vw_px, double vh_px);
 void     ns_css_set_frame_viewport_cb(
@@ -695,8 +705,6 @@ void ns_css_set_color_scheme(ns_css_color_scheme scheme);
 char    *ns_css_media_list_serialize(const char *query);
 void     ns_css_media_viewport_push(double w, double h);
 void     ns_css_media_viewport_pop(void);
-double   ns_css_media_viewport_current_w(void);
-double   ns_css_media_viewport_current_h(void);
 void     ns_css_set_device_size(double w, double h);
 void     ns_css_set_media_device(const ns_css_media_device *device);
 void     ns_css_get_media_device(ns_css_media_device *device);
@@ -887,7 +895,6 @@ typedef struct ns_css_simple {
     GPtrArray *has_groups;
     gboolean   never_match;
     gboolean   namespace_any;
-    gboolean   ns_none;
 } ns_css_simple;
 
 typedef enum ns_css_comb {
@@ -979,7 +986,6 @@ typedef struct ns_css_rule {
     ns_css_container_query *container_query;
     GPtrArray  *scopes;
     int         source_order;
-    guint       pe_mask;
 } ns_css_rule;
 
 typedef struct ns_css_import {
@@ -1070,7 +1076,6 @@ gboolean           ns_css_supports_declaration(const char *property,
                                                const char *value);
 gboolean           ns_css_supports_condition(const char *condition,
                                              gboolean allow_bare_declaration);
-ns_css_stylesheet *ns_css_stylesheet_from_style_element_cached(ns_node *style);
 ns_css_stylesheet *ns_css_stylesheet_from_style_text_cached(ns_node *style,
                                                            const char *css);
 char              *ns_css_style_element_text(ns_node *style);
@@ -1089,8 +1094,6 @@ void               ns_css_relayout_leave(void);
 void               ns_css_stylesheet_resolve_urls(ns_css_stylesheet *s,
                                                   const char *base_url);
 void               ns_css_stylesheet_free(ns_css_stylesheet *s);
-void               ns_css_stylesheet_force_layer(ns_css_stylesheet *s,
-                                                 const char *layer_name);
 
 typedef enum ns_display_box {
     NS_DISPLAY_BOX_NORMAL,
@@ -1166,9 +1169,6 @@ double ns_css_clamped_dimension_px(const ns_style *s,
                                    double font_size, double basis);
 
 ns_display ns_css_display_of(const ns_style *s);
-ns_display ns_css_display_from_keyword(const char *canonical);
-ns_display ns_css_display_blockified(ns_display d);
-char      *ns_css_display_serialize(ns_display d);
 
 static inline gboolean
 ns_display_is_none(ns_display d)
@@ -1274,9 +1274,6 @@ void ns_css_keyframes_resolved_free(ns_css_keyframes *kf);
 
 void ns_css_append_unescaped(GString *out, const char **pp);
 
-GHashTable *ns_css_compute(ns_node                 *doc,
-                           const ns_css_stylesheet *const *author_sheets,
-                           gsize                     n_sheets);
 GHashTable *ns_css_compute_scoped(ns_node *doc,
                                   const ns_css_stylesheet *const *author_sheets,
                                   const ns_node *const *sheet_docs,
@@ -1340,19 +1337,7 @@ void ns_css_set_doc_language(const char *lang);
 
 const char *ns_style_keyword(const ns_style *s, ns_css_prop p);
 const char *ns_css_alignment_base(const char *keyword);
-char *ns_css_font_family_canonical(const char *text);
-char *ns_css_font_shorthand_canonical(const char *text);
-char *ns_css_image_value_canonical(const char *text);
 char *ns_css_background_position_join(const char *xs, const char *ys);
-char *ns_css_border_image_shorthand_serialize(const char *source, const char *slice,
-                                              const char *width, const char *outset,
-                                              const char *repeat);
-char *ns_css_background_shorthand_serialize(const char *image, const char *position,
-                                            const char *size, const char *repeat,
-                                            const char *attachment,
-                                            const char *origin, const char *clip,
-                                            const char *color);
-char *ns_css_content_canonical(const char *text);
 ns_css_value *ns_css_value_interpolate(const ns_css_value *a, const ns_css_value *b, double t);
 gboolean ns_css_value_equal(const ns_css_value *a, const ns_css_value *b);
 ns_css_value *ns_css_value_dup(const ns_css_value *v);
@@ -1372,10 +1357,7 @@ int ns_css_style_layout_change(const ns_style *a, const ns_style *b);
 /* Whether two computed styles hold the same values, pseudo-elements too. */
 gboolean ns_css_style_equal(const ns_style *a, const ns_style *b);
 void ns_css_incremental_exclude(const void *node, gboolean exclude);
-char *ns_css_unicode_range_canonical(const char *text);
 char *ns_css_container_condition_canonical(const char *cond);
-char *ns_css_container_name_canonical(const char *text);
-char *ns_css_container_shorthand_canonical(const char *text);
 double ns_css_gradient_angle(const ns_css_gradient *gr, double w, double h);
 void ns_css_gradient_radii(const ns_css_gradient *gr, double w, double h,
                            double cx, double cy, double *rx, double *ry);
@@ -1384,17 +1366,12 @@ int ns_css_used_column_count(const ns_style *s, double avail_w,
                              double *out_gap);
 
 char *ns_css_value_serialize(const ns_css_value *v);
-char *ns_css_value_serialize_specified(const ns_css_value *v);
 char *ns_css_individual_transform_serialize(const ns_css_value *v, int prop);
-char *ns_css_math_canonical(const char *value);
 char *ns_css_calc_canonical(const char *text);
 char *ns_css_tracks_computed_serialize(const ns_style *s, const ns_style *root,
                                        int prop);
 char *ns_css_negative_zero_normalize(char *value);
-char *ns_css_transform_canonical(const char *value);
-char *ns_css_display_canonical(const char *value);
 char *ns_css_specified_canonical(const char *prop, const char *value);
-char *ns_css_time_specified(const char *value);
 char *ns_css_time_computed(const char *value);
 
 gboolean ns_css_parse_color(const char *s, guint8 *r, guint8 *g, guint8 *b,

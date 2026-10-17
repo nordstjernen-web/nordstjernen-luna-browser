@@ -61,7 +61,6 @@ void ns_audio_context_stream_end(NsAudioContext *context, const char *token,
                                  gboolean ended);
 gboolean ns_audio_context_status(NsAudioContext *context, const char *token,
                                  NsAudioStatus *out);
-void ns_audio_context_reset(NsAudioContext *context);
 void ns_audio_context_destroy(NsAudioContext *context);
 void ns_audio_shutdown(void);
 

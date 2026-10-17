@@ -8,6 +8,8 @@
 #include <math.h>
 #include <string.h>
 
+static void ns_anim_apply(ns_anim *a, GHashTable *styles);
+
 #define NS_ANIM_MAX_ACTIVE 256
 #define NS_ANIM_KEYFRAME_PROP -1
 
@@ -289,7 +291,7 @@ state_active_count(const ns_anim_state *s)
     return n;
 }
 
-void
+static void
 ns_anim_prune(ns_anim *a, GHashTable *live)
 {
     if (!a || !live) return;
@@ -1130,7 +1132,7 @@ ns_anim_base_value(ns_anim *a, const ns_node *node, int prop)
     return v && v->kind == 0 && !v->u.keyword ? NULL : v;
 }
 
-void
+static void
 ns_anim_apply(ns_anim *a, GHashTable *styles)
 {
     if (!a || !styles) return;
