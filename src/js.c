@@ -35845,74 +35845,6 @@ ns_element_set_indeterminate(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-typedef struct ns_js_progress_state {
-    gboolean determinate;
-    double max;
-    double value;
-    double position;
-} ns_js_progress_state;
-
-typedef struct ns_js_meter_state {
-    double min;
-    double max;
-    double value;
-    double low;
-    double high;
-    double optimum;
-} ns_js_meter_state;
-
-static gboolean
-ns_attr_float(const ns_node *n, const char *attr, double *out)
-{
-    return ns_html_parse_float(ns_element_get_attr(n, attr), out);
-}
-
-static ns_js_progress_state
-ns_progress_state_for(const ns_node *n)
-{
-    ns_js_progress_state st = {0};
-    double parsed;
-    st.max = ns_attr_float(n, "max", &parsed) && parsed > 0 ? parsed : 1.0;
-    st.determinate = ns_element_get_attr(n, "value") != NULL;
-    if (st.determinate) {
-        st.value = ns_attr_float(n, "value", &parsed) && parsed > 0 ? parsed : 0.0;
-        if (st.value > st.max) st.value = st.max;
-        st.position = st.max > 0 ? st.value / st.max : 0.0;
-    } else {
-        st.value = 0.0;
-        st.position = -1.0;
-    }
-    return st;
-}
-
-static ns_js_meter_state
-ns_meter_state_for(const ns_node *n)
-{
-    ns_js_meter_state st = {0};
-    double parsed;
-    st.min = ns_attr_float(n, "min", &parsed) ? parsed : 0.0;
-    double candidate_max = ns_attr_float(n, "max", &parsed) ? parsed : 1.0;
-    st.max = candidate_max >= st.min ? candidate_max : st.min;
-    double candidate_value = ns_attr_float(n, "value", &parsed) ? parsed : 0.0;
-    st.value = candidate_value;
-    if (st.value < st.min) st.value = st.min;
-    if (st.value > st.max) st.value = st.max;
-    double candidate_low = ns_attr_float(n, "low", &parsed) ? parsed : st.min;
-    st.low = candidate_low;
-    if (st.low < st.min) st.low = st.min;
-    if (st.low > st.max) st.low = st.max;
-    double candidate_high = ns_attr_float(n, "high", &parsed) ? parsed : st.max;
-    st.high = candidate_high;
-    if (st.high < st.low) st.high = st.low;
-    if (st.high > st.max) st.high = st.max;
-    double midpoint = st.min + (st.max - st.min) / 2.0;
-    double candidate_optimum = ns_attr_float(n, "optimum", &parsed) ? parsed : midpoint;
-    st.optimum = candidate_optimum;
-    if (st.optimum < st.min) st.optimum = st.min;
-    if (st.optimum > st.max) st.optimum = st.max;
-    return st;
-}
-
 static JSValue
 ns_element_set_double_attr_limited(JSContext *ctx, ns_node *el,
                                    const char *attr, JSValueConst val,
@@ -35961,7 +35893,7 @@ ns_element_range_number_getter(JSContext *ctx, JSValueConst this_val, int magic)
     const ns_node *el = ns_unwrap_element(this_val);
     if (!el || !el->name) return JS_NewString(ctx, "");
     if (g_ascii_strcasecmp(el->name, "meter") == 0) {
-        ns_js_meter_state st = ns_meter_state_for(el);
+        ns_meter_state st = ns_meter_state_for(el);
         if (magic == NS_RANGE_MIN) return JS_NewFloat64(ctx, st.min);
         if (magic == NS_RANGE_MAX) return JS_NewFloat64(ctx, st.max);
         if (magic == NS_RANGE_LOW) return JS_NewFloat64(ctx, st.low);
@@ -35969,7 +35901,7 @@ ns_element_range_number_getter(JSContext *ctx, JSValueConst this_val, int magic)
         if (magic == NS_RANGE_OPTIMUM) return JS_NewFloat64(ctx, st.optimum);
     }
     if (g_ascii_strcasecmp(el->name, "progress") == 0 && magic == NS_RANGE_MAX) {
-        ns_js_progress_state st = ns_progress_state_for(el);
+        ns_progress_state st = ns_progress_state_for(el);
         return JS_NewFloat64(ctx, st.max);
     }
     const char *attr = ns_range_attr_name(magic);
@@ -35998,8 +35930,8 @@ ns_element_get_progress_position(JSContext *ctx, JSValueConst this_val)
     const ns_node *el = ns_unwrap_element(this_val);
     if (!el || !el->name || g_ascii_strcasecmp(el->name, "progress") != 0)
         return JS_UNDEFINED;
-    ns_js_progress_state st = ns_progress_state_for(el);
-    return JS_NewFloat64(ctx, st.position);
+    ns_progress_state st = ns_progress_state_for(el);
+    return JS_NewFloat64(ctx, st.frac);
 }
 
 static JSValue
@@ -36008,11 +35940,11 @@ ns_element_get_value_prop(JSContext *ctx, JSValueConst this_val)
     const ns_node *el = ns_unwrap_element(this_val);
     if (!el) return JS_NewString(ctx, "");
     if (el->name && strcmp(el->name, "progress") == 0) {
-        ns_js_progress_state st = ns_progress_state_for(el);
+        ns_progress_state st = ns_progress_state_for(el);
         return JS_NewFloat64(ctx, st.value);
     }
     if (el->name && strcmp(el->name, "meter") == 0) {
-        ns_js_meter_state st = ns_meter_state_for(el);
+        ns_meter_state st = ns_meter_state_for(el);
         return JS_NewFloat64(ctx, st.value);
     }
     if (el->name && strcmp(el->name, "li") == 0) {
@@ -56858,6 +56790,12 @@ ns_js_frame_collect_meta_csp(ns_js *js, const ns_node *node, int depth)
     }
 }
 
+void
+ns_js_apply_meta_csp(ns_js *js, const ns_node *doc)
+{
+    ns_js_frame_collect_meta_csp(js, doc, 0);
+}
+
 static void
 ns_js_frame_register_csp(ns_js *js, ns_node *content_doc, const char *header)
 {
@@ -56868,7 +56806,7 @@ ns_js_frame_register_csp(ns_js *js, ns_node *content_doc, const char *header)
     ns_csp *outer = js->csp;
     js->csp = NULL;
     ns_js_add_csp_header(js, header);
-    ns_js_frame_collect_meta_csp(js, content_doc, 0);
+    ns_js_apply_meta_csp(js, content_doc);
     ns_csp *frame_csp = js->csp;
     js->csp = outer;
     g_hash_table_replace(js->doc_csp, content_doc, frame_csp);

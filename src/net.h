@@ -205,6 +205,7 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(ns_url_parts, ns_url_parts_free)
 char *ns_net_cookies_for_js(const char *url);
 void  ns_net_cookie_store_from_js(const char *url, const char *cookie);
 
+void  ns_rmrf(const char *path);
 void  ns_net_set_proxy_override(const char *proxy_url);
 void  ns_net_set_allow_file_urls(gboolean allow);
 gboolean ns_net_file_urls_allowed(void);

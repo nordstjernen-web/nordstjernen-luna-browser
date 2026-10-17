@@ -350,7 +350,7 @@ ns_net_data_path(char **slot, const char *basename)
     return *slot;
 }
 
-static void
+void
 ns_rmrf(const char *path)
 {
     if (!path) return;

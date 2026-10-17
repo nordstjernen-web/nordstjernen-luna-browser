@@ -240,6 +240,27 @@ gboolean ns_layout_frame_viewport(const ns_node *frame, double *w, double *h);
 gboolean ns_layout_reads_label_attr(const ns_node *n, const char *name);
 gboolean ns_overflow_keyword_clips(const char *overflow);
 
+typedef struct ns_progress_state {
+    gboolean determinate;
+    double max;
+    double value;
+    double frac;
+} ns_progress_state;
+
+typedef struct ns_meter_state {
+    double min;
+    double max;
+    double value;
+    double low;
+    double high;
+    double optimum;
+    double frac;
+    int quality;
+} ns_meter_state;
+
+ns_progress_state ns_progress_state_for(const ns_node *n);
+ns_meter_state    ns_meter_state_for(const ns_node *n);
+
 /* Points the boxes at the new computed styles (styles) where old_to_new maps
  * an old style that differs from its new one only in values paint reads at
  * use time, or (old styles in moved) in the insets of an absolutely

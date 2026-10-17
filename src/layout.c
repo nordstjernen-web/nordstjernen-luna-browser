@@ -2493,32 +2493,14 @@ apply_text_transform(const char *src, const char *tt)
     return NULL;
 }
 
-typedef struct ns_progress_state {
-    gboolean determinate;
-    double max;
-    double value;
-    double frac;
-} ns_progress_state;
-
-typedef struct ns_meter_state {
-    double min;
-    double max;
-    double value;
-    double low;
-    double high;
-    double optimum;
-    double frac;
-    int quality;
-} ns_meter_state;
-
 static gboolean
 parse_float_attr(const ns_node *n, const char *attr, double *out)
 {
     return ns_html_parse_float(ns_element_get_attr(n, attr), out);
 }
 
-static ns_progress_state
-progress_state_for(const ns_node *n)
+ns_progress_state
+ns_progress_state_for(const ns_node *n)
 {
     ns_progress_state st = {0};
     double parsed;
@@ -2535,8 +2517,8 @@ progress_state_for(const ns_node *n)
     return st;
 }
 
-static ns_meter_state
-meter_state_for(const ns_node *n)
+ns_meter_state
+ns_meter_state_for(const ns_node *n)
 {
     ns_meter_state st = {0};
     double parsed;
@@ -2842,14 +2824,14 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
         double frac = 0;
         guint8 r = 0, g = 0, b = 0, alpha = 0;
         if (is_meter) {
-            ns_meter_state st = meter_state_for(n);
+            ns_meter_state st = ns_meter_state_for(n);
             frac = st.frac;
             if (st.quality == 0) { r = 0x2e; g = 0x9d; b = 0x54; }
             else if (st.quality == 1) { r = 0xd0; g = 0xa4; b = 0x1f; }
             else { r = 0xc4; g = 0x43; b = 0x3c; }
             alpha = 255;
         } else {
-            ns_progress_state st = progress_state_for(n);
+            ns_progress_state st = ns_progress_state_for(n);
             frac = st.frac;
         }
         ns_inline_attr attr = {
@@ -6379,21 +6361,7 @@ inline_box_form_hit(const ns_box *box, double local_x, double local_y,
     apply_inline_layout_attrs(i18n, box);
     ns_inline_layout_set_attrs(layout, i18n, box);
     ns_pango_attr_list_unref(i18n);
-    const ns_css_value *ta_v =
-        parent_style ? parent_style->values[NS_CSS_TEXT_ALIGN] : NULL;
-    gboolean rtl = ns_pango_context_get_base_dir(
-        ns_pango_layout_get_context(layout)) == NS_PANGO_DIRECTION_RTL;
-    if (keyword_is(ta_v, "center"))
-        ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_CENTER);
-    else if (keyword_is(ta_v, "right") ||
-             (keyword_is(ta_v, "end") && !rtl) ||
-             (keyword_is(ta_v, "start") && rtl) ||
-             (!ta_v && rtl))
-        ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_RIGHT);
-    else if (keyword_is(ta_v, "justify"))
-        ns_pango_layout_set_justify(layout, TRUE);
-    else
-        ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_LEFT);
+    ns_paint_apply_text_align(layout, parent_style);
     ns_paint_start_align_overflowing_lines(layout);
 
     int index = 0, trailing = 0;
