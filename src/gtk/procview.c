@@ -516,9 +516,8 @@ pv_free(NsProcView *v)
 static void pv_unref(NsProcView *v) { if (g_atomic_ref_count_dec(&v->rc)) pv_free(v); }
 
 static cairo_surface_t *
-stage_fill(NsProcView *v, const unsigned char *px, int w, int h, int stride)
+stage_fill(const unsigned char *px, int w, int h, int stride)
 {
-    (void)v;
     cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
     if (cairo_surface_status(s) != CAIRO_STATUS_SUCCESS) {
         cairo_surface_destroy(s);
@@ -723,7 +722,7 @@ run_render(NsProcView *v, ns_page_session *s, Req *req)
                 fr.n_damage = 0;
             }
             if (!res->patch)
-                res->surface = stage_fill(v, fr.pixels, fr.width, fr.height,
+                res->surface = stage_fill(fr.pixels, fr.width, fr.height,
                                           fr.stride);
             res->gen = fr.gen;
             res->base_gen = fr.base_gen;

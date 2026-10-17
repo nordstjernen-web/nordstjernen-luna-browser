@@ -10,8 +10,6 @@
 
 G_BEGIN_DECLS
 
-GdkPaintable *ns_icon_lookup(const char *name);
-
 GtkWidget *ns_icon_image_new(const char *name);
 
 void ns_icon_image_set(GtkImage *image, const char *name);

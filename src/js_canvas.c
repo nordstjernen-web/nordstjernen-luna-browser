@@ -243,8 +243,7 @@ ns_image_bitmap_from_imagedata(JSContext *ctx, JSValueConst src,
 }
 
 static cairo_surface_t *
-ns_image_bitmap_crop(cairo_surface_t *src, int sw, int sh,
-                     int sx, int sy, int rw, int rh)
+ns_image_bitmap_crop(cairo_surface_t *src, int sx, int sy, int rw, int rh)
 {
     cairo_surface_t *out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, rw, rh);
     if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
@@ -255,7 +254,6 @@ ns_image_bitmap_crop(cairo_surface_t *src, int sw, int sh,
     cairo_set_source_surface(cr, src, -sx, -sy);
     cairo_paint(cr);
     cairo_destroy(cr);
-    (void)sw; (void)sh;
     return out;
 }
 
@@ -419,7 +417,7 @@ ns_window_create_image_bitmap(JSContext *ctx, JSValueConst this_val,
         return promise;
     }
     if (crop) {
-        cairo_surface_t *out = ns_image_bitmap_crop(surf, sw, sh, sx, sy, rw, rh);
+        cairo_surface_t *out = ns_image_bitmap_crop(surf, sx, sy, rw, rh);
         cairo_surface_destroy(surf);
         if (!out) {
             ns_js_promise_reject(ctx, resolvers, "createImageBitmap: crop failed");
@@ -1262,8 +1260,7 @@ ns_box_blur_argb(uint8_t *data, int w, int h, int stride, int radius)
 }
 
 static void
-ns_ctx_with_shadow(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st,
-                   ns_ctx_drawfn draw, void *ud)
+ns_ctx_with_shadow(ns_canvas_state *st, ns_ctx_drawfn draw, void *ud)
 {
     if (!ns_ctx_has_shadow(st)) {
         draw(st->cr, ud);
@@ -1313,7 +1310,6 @@ ns_ctx_with_shadow(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st,
     cairo_restore(st->cr);
     cairo_surface_destroy(off);
     draw(st->cr, ud);
-    (void)ctx; (void)this_val;
 }
 
 static void
@@ -1379,7 +1375,7 @@ ns_ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
         .w = ns_arg_d(ctx, argv[2]), .h = ns_arg_d(ctx, argv[3]),
         .lw = st->line_width, .ctx = ctx, .this_val = this_val, .st = st,
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_fillrect, &u);
+    ns_ctx_with_shadow(st, ns_draw_fillrect, &u);
     ns_ctx_request_repaint(ctx, this_val);
     return JS_UNDEFINED;
 }
@@ -1396,7 +1392,7 @@ ns_ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
         .w = ns_arg_d(ctx, argv[2]), .h = ns_arg_d(ctx, argv[3]),
         .lw = st->line_width, .ctx = ctx, .this_val = this_val, .st = st,
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_strokerect, &u);
+    ns_ctx_with_shadow(st, ns_draw_strokerect, &u);
     ns_ctx_request_repaint(ctx, this_val);
     return JS_UNDEFINED;
 }
@@ -1594,7 +1590,7 @@ ns_ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
         .lw = st->line_width, .snapshot = snap,
         .fill_rule = cairo_get_fill_rule(st->cr),
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_fillpath, &u);
+    ns_ctx_with_shadow(st, ns_draw_fillpath, &u);
     if (snap) cairo_path_destroy(snap);
     ns_ctx_restore_path(st->cr, saved);
     ns_ctx_request_repaint(ctx, this_val);
@@ -1618,7 +1614,7 @@ ns_ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
         .lw = st->line_width, .snapshot = snap,
         .fill_rule = cairo_get_fill_rule(st->cr),
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_strokepath, &u);
+    ns_ctx_with_shadow(st, ns_draw_strokepath, &u);
     if (snap) cairo_path_destroy(snap);
     ns_ctx_restore_path(st->cr, saved);
     ns_ctx_request_repaint(ctx, this_val);

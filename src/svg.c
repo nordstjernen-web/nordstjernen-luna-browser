@@ -293,7 +293,7 @@ svg_state_clear(svg_state *st)
 }
 
 static void
-svg_set_dashes(svg_state *st, const char *text, double basis, double font_size)
+svg_set_dashes(svg_state *st, const char *text)
 {
     if (st->dashes) { g_array_free(st->dashes, TRUE); st->dashes = NULL; }
     if (!text || g_ascii_strcasecmp(text, "none") == 0) return;
@@ -317,8 +317,6 @@ svg_set_dashes(svg_state *st, const char *text, double basis, double font_size)
             g_array_append_val(out, d);
         }
     }
-    (void)basis;
-    (void)font_size;
     st->dashes = out;
 }
 
@@ -479,7 +477,7 @@ svg_state_apply_node(svg_ctx *ctx, svg_state *st, const ns_node *n)
     if ((v = svg_prop(ctx, n, "stroke-dashoffset")))
         st->dash_offset = svg_length_str(v, basis, st->font_size, 0.0);
     if ((v = svg_prop(ctx, n, "stroke-dasharray")))
-        svg_set_dashes(st, v, basis, st->font_size);
+        svg_set_dashes(st, v);
     if ((v = svg_prop(ctx, n, "fill-rule")))
         st->fill_rule = (g_ascii_strcasecmp(v, "evenodd") == 0)
             ? CAIRO_FILL_RULE_EVEN_ODD : CAIRO_FILL_RULE_WINDING;
@@ -541,7 +539,7 @@ svg_state_apply_node(svg_ctx *ctx, svg_state *st, const ns_node *n)
     if ((kw = ns_style_keyword(s, NS_CSS_PAINT_ORDER)))
         st->stroke_first = g_ascii_strncasecmp(kw, "stroke", 6) == 0;
     if ((kw = ns_style_keyword(s, NS_CSS_STROKE_DASHARRAY)))
-        svg_set_dashes(st, kw, basis, st->font_size);
+        svg_set_dashes(st, kw);
     if ((kw = ns_style_keyword(s, NS_CSS_VECTOR_EFFECT)))
         st->non_scaling_stroke = g_ascii_strcasecmp(kw, "non-scaling-stroke") == 0;
     if ((kw = ns_style_keyword(s, NS_CSS_VISIBILITY)))

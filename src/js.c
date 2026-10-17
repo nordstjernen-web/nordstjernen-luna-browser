@@ -326,9 +326,8 @@ static void ns_js_record_character_data(ns_js *js, ns_node *target, const char *
 static void ns_node_iters_pre_remove(ns_js *js, ns_node *removed);
 static gboolean ns_mut_target_covers(const ns_mut_target *t, ns_node *node);
 static void ns_slot_reconcile_child_change(ns_js *js, ns_node *parent,
-                                           ns_node *added, ns_node *removed);
+                                           ns_node *removed);
 static void ns_slot_reconcile_child_change_arrays(ns_js *js, ns_node *parent,
-                                                  GPtrArray *added,
                                                   GPtrArray *removed);
 static void ns_slot_reconcile_attr_change(ns_js *js, ns_node *target,
                                           const char *name,
@@ -13515,7 +13514,7 @@ ns_nav_finish_cb(JSContext *ctx, JSValueConst this_val,
 
 static JSValue
 ns_nav_run_intercept(JSContext *ctx, ns_js *js, JSValueConst ev,
-                     JSValue committed, JSValue finished, JSValue *finresolv)
+                     JSValue committed, JSValue *finresolv)
 {
     JSValue handlers = JS_GetPropertyStr(ctx, ev, "_handlers");
     JSValue results = JS_NewArray(ctx);
@@ -13557,7 +13556,6 @@ ns_nav_run_intercept(JSContext *ctx, ns_js *js, JSValueConst ev,
     JS_FreeValue(ctx, on_ok);
     JS_FreeValue(ctx, on_err);
     JS_FreeValue(ctx, all);
-    (void)finished;
     return JS_UNDEFINED;
 }
 
@@ -13699,7 +13697,7 @@ ns_nav_navigate(JSContext *ctx, JSValueConst this_val,
             js->soft_nav_cb(js->current_url, replace, js->soft_nav_user_data);
         ns_nav_fire_currententrychange(js, replace ? "replace" : "push");
         JSValue finresolv[2] = { fres[0], fres[1] };
-        ns_nav_run_intercept(ctx, js, ev, cres[0], finished, finresolv);
+        ns_nav_run_intercept(ctx, js, ev, cres[0], finresolv);
         JS_FreeValue(ctx, cres[0]); JS_FreeValue(ctx, cres[1]);
         JS_FreeValue(ctx, fres[0]); JS_FreeValue(ctx, fres[1]);
         JS_FreeValue(ctx, ev);
@@ -18089,10 +18087,8 @@ ns_xhr_install_interface(JSContext *ctx, JSValueConst global)
 }
 
 static JSValue
-ns_form_data_method(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv)
+ns_form_data_method(JSContext *ctx, JSValueConst this_val)
 {
-    (void)argc; (void)argv;
     JSValue entries = JS_GetPropertyStr(ctx, this_val, "_entries");
     if (!JS_IsArray(entries)) {
         JS_FreeValue(ctx, entries);
@@ -18107,7 +18103,7 @@ ns_form_data_append(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_UNDEFINED;
-    JSValue entries = ns_form_data_method(ctx, this_val, 0, NULL);
+    JSValue entries = ns_form_data_method(ctx, this_val);
     uint32_t len = ns_js_array_length(ctx, entries);
     JSValue pair = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, argv[0]));
@@ -18126,7 +18122,7 @@ ns_form_data_set(JSContext *ctx, JSValueConst this_val,
     if (argc < 2) return JS_UNDEFINED;
     const char *key = JS_ToCString(ctx, argv[0]);
     if (!key) return JS_UNDEFINED;
-    JSValue entries = ns_form_data_method(ctx, this_val, 0, NULL);
+    JSValue entries = ns_form_data_method(ctx, this_val);
     uint32_t len = ns_js_array_length(ctx, entries);
     JSValue kept = JS_NewArray(ctx);
     uint32_t out = 0;
@@ -18174,7 +18170,7 @@ ns_form_data_getAll(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return out;
     const char *key = JS_ToCString(ctx, argv[0]);
     if (!key) return out;
-    JSValue entries = ns_form_data_method(ctx, this_val, 0, NULL);
+    JSValue entries = ns_form_data_method(ctx, this_val);
     uint32_t len = ns_js_array_length(ctx, entries);
     uint32_t o = 0;
     for (uint32_t i = 0; i < len; i++) {
@@ -18199,7 +18195,7 @@ ns_form_data_get(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
     if (argc < 1) return JS_NULL;
-    JSValue entries = ns_form_data_method(ctx, this_val, 0, NULL);
+    JSValue entries = ns_form_data_method(ctx, this_val);
     const char *key = JS_ToCString(ctx, argv[0]);
     JSValue result = JS_NULL;
     if (key) {
@@ -18246,7 +18242,7 @@ ns_form_data_delete(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return JS_UNDEFINED;
     const char *name = JS_ToCString(ctx, argv[0]);
     if (!name) return JS_UNDEFINED;
-    JSValue entries = ns_form_data_method(ctx, this_val, 0, NULL);
+    JSValue entries = ns_form_data_method(ctx, this_val);
     uint32_t len = ns_js_array_length(ctx, entries);
     JSValue kept = JS_NewArray(ctx);
     uint32_t out = 0;
@@ -18272,7 +18268,7 @@ ns_form_data_forEach(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_UNDEFINED;
-    JSValue entries = ns_form_data_method(ctx, this_val, 0, NULL);
+    JSValue entries = ns_form_data_method(ctx, this_val);
     uint32_t len = ns_js_array_length(ctx, entries);
     for (uint32_t i = 0; i < len; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, entries, i);
@@ -21058,10 +21054,8 @@ ns_worker_event(JSContext *ctx, const char *type, JSValueConst data,
 }
 
 static void
-ns_worker_dispatch(JSContext *ctx, JSValueConst target, const char *type,
-                   JSValueConst ev)
+ns_worker_dispatch(JSContext *ctx, JSValueConst target, JSValueConst ev)
 {
-    (void)type;
     JSValue dispatch = JS_GetPropertyStr(ctx, target, "dispatchEvent");
     if (JS_IsFunction(ctx, dispatch)) {
         JSValueConst args[1] = { ev };
@@ -21185,7 +21179,7 @@ ns_worker_deliver_owner(gpointer data)
         JS_FreeValue(ctx, nav);
         JS_FreeValue(ctx, global);
     }
-    ns_worker_dispatch(ctx, target, type, ev);
+    ns_worker_dispatch(ctx, target, ev);
     JS_FreeValue(ctx, target);
     JS_FreeValue(ctx, ev);
     JS_FreeValue(ctx, data_v);
@@ -21423,7 +21417,7 @@ ns_worker_deliver_worker(gpointer data)
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue ev = ns_worker_event(ctx, type, data_v, host->origin, NULL, NULL);
     ns_worker_event_attach_ports(ctx, ev, msg, JS_UNDEFINED);
-    ns_worker_dispatch(ctx, global, type, ev);
+    ns_worker_dispatch(ctx, global, ev);
     JS_FreeValue(ctx, ev);
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, data_v);
@@ -22266,14 +22260,14 @@ ns_sw_fire_lifecycle(ns_js *js)
     JSValue global = JS_GetGlobalObject(ctx);
 
     JSValue install = ns_sw_make_extendable_event(ctx, "install");
-    ns_worker_dispatch(ctx, global, "install", install);
+    ns_worker_dispatch(ctx, global, install);
     JS_FreeValue(ctx, install);
     ns_drain_microtasks(js);
     if (!g_atomic_int_get(&host->closing)) {
         ns_sw_post_owner_state(host, "installed");
         ns_sw_post_owner_state(host, "activating");
         JSValue activate = ns_sw_make_extendable_event(ctx, "activate");
-        ns_worker_dispatch(ctx, global, "activate", activate);
+        ns_worker_dispatch(ctx, global, activate);
         JS_FreeValue(ctx, activate);
         ns_drain_microtasks(js);
         ns_sw_post_owner_state(host, "activated");
@@ -23635,7 +23629,7 @@ ns_js_record_child_change(ns_js *js, ns_node *parent,
     ns_js_index_child_change(js, parent, added, removed);
     ns_css_mark_childlist_change(parent, added, removed,
                                  previous_sibling, next_sibling);
-    ns_slot_reconcile_child_change(js, parent, added, removed);
+    ns_slot_reconcile_child_change(js, parent, removed);
     ns_mut_record_emit(js, "childList", parent, added, removed,
                        previous_sibling, next_sibling, NULL, NULL, NULL);
 }
@@ -23731,7 +23725,7 @@ ns_js_record_child_change_arrays(ns_js *js, ns_node *parent,
                                          ? g_ptr_array_index(removed, 0) : NULL,
                                      NULL, NULL);
     }
-    ns_slot_reconcile_child_change_arrays(js, parent, added, removed);
+    ns_slot_reconcile_child_change_arrays(js, parent, removed);
     ns_mut_record_emit_child_list_arrays(js, parent, added, removed,
                                          previous_sibling, next_sibling);
 }
@@ -26877,8 +26871,7 @@ ns_event_type_is_window_reflected(const char *type)
 }
 
 static gboolean
-ns_fire_window_level_handlers(ns_js *js, const ns_node *doc_node,
-                              const char *type, JSValue event,
+ns_fire_window_level_handlers(ns_js *js, const char *type, JSValue event,
                               gboolean at_target)
 {
     gboolean reflected = ns_event_type_is_window_reflected(type);
@@ -26886,7 +26879,6 @@ ns_fire_window_level_handlers(ns_js *js, const ns_node *doc_node,
 
     gboolean fired = FALSE;
     JSContext *ctx = js->ctx;
-    (void)doc_node;
     char prop_name[48];
     g_snprintf(prop_name, sizeof prop_name, "on%s", type);
     JSValue global = JS_GetGlobalObject(ctx);
@@ -27131,7 +27123,7 @@ ns_invoke_listeners_at_full(ns_js *js, const ns_node *cur,
         else if (ns_fire_inline_on_handler(js, cur, type, event))
             *fired = TRUE;
         if (cur->kind == NS_NODE_DOCUMENT &&
-            ns_fire_window_level_handlers(js, cur, type, event, at_target))
+            ns_fire_window_level_handlers(js, type, event, at_target))
             *fired = TRUE;
     }
 
@@ -30006,9 +29998,8 @@ static JSValue ns_element_setAttributeNode(JSContext *ctx,
                                            int argc, JSValueConst *argv);
 
 static ns_node *
-ns_namedmap_owner(JSContext *ctx, JSValueConst this_val)
+ns_namedmap_owner(JSValueConst this_val)
 {
-    (void)ctx;
     ns_live_back *b = JS_GetOpaque(this_val, ns_live_class_id);
     if (b) return ns_unwrap_element_mut(b->owner);
     return NULL;
@@ -30021,7 +30012,7 @@ ns_namedmap_getNamedItem(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return JS_NULL;
     const char *want = JS_ToCString(ctx, argv[0]);
     if (!want) return JS_NULL;
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     const ns_attr *a = NULL;
     if (n && n->kind == NS_NODE_ELEMENT) {
         for (const ns_attr *it = n->attrs; it; it = it->next) {
@@ -30043,7 +30034,7 @@ ns_namedmap_item(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return JS_NULL;
     uint32_t idx = 0;
     JS_ToUint32(ctx, &idx, argv[0]);
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     const ns_attr *a = NULL;
     if (n && n->kind == NS_NODE_ELEMENT) {
         uint32_t cur = 0;
@@ -30063,7 +30054,7 @@ ns_namedmap_item(JSContext *ctx, JSValueConst this_val,
 static JSValue
 ns_namedmap_get_length(JSContext *ctx, JSValueConst this_val)
 {
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     uint32_t count = 0;
     if (n && n->kind == NS_NODE_ELEMENT) {
         for (const ns_attr *it = n->attrs; it; it = it->next) {
@@ -30079,7 +30070,7 @@ ns_namedmap_getNamedItemNS(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_NULL;
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     const char *namespace_uri = JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])
         ? NULL : JS_ToCString(ctx, argv[0]);
     const char *local_name = JS_ToCString(ctx, argv[1]);
@@ -30101,7 +30092,7 @@ static JSValue
 ns_namedmap_setNamedItem(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
 {
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     if (!n) return JS_ThrowTypeError(ctx, "NamedNodeMap has no owner element");
     JSValue owner = ns_make_element(ctx, n);
     JSValue result = ns_element_setAttributeNode(ctx, owner, argc, argv);
@@ -30114,7 +30105,7 @@ ns_namedmap_removeNamedItem(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
     if (argc < 1) return JS_ThrowTypeError(ctx, "1 argument required");
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     const char *name = JS_ToCString(ctx, argv[0]);
     if (!name) return JS_EXCEPTION;
     const ns_attr *a = NULL;
@@ -30142,7 +30133,7 @@ ns_namedmap_removeNamedItemNS(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_ThrowTypeError(ctx, "2 arguments required");
-    ns_node *n = ns_namedmap_owner(ctx, this_val);
+    ns_node *n = ns_namedmap_owner(this_val);
     const char *ns = JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])
         ? NULL : JS_ToCString(ctx, argv[0]);
     if (ns && !*ns) { JS_FreeCString(ctx, ns); ns = NULL; }
@@ -34403,10 +34394,6 @@ ns_element_get_ownerDocument(JSContext *ctx, JSValueConst this_val)
     JSValue own = JS_GetPropertyStr(ctx, this_val, "__ndOwnerDoc");
     if (JS_IsObject(own)) return own;
     JS_FreeValue(ctx, own);
-    JSValue noown = JS_GetPropertyStr(ctx, this_val, "__ndNoOwnerDoc");
-    gboolean no_owner = JS_ToBool(ctx, noown) > 0;
-    JS_FreeValue(ctx, noown);
-    if (no_owner) return JS_NULL;
     if (!js->current_doc) return JS_NULL;
     return ns_make_element(ctx, js->current_doc);
 }
@@ -35132,18 +35119,15 @@ ns_slot_reconcile_changes(ns_js *js, ns_node *parent,
 }
 
 static void
-ns_slot_reconcile_child_change(ns_js *js, ns_node *parent,
-                               ns_node *added, ns_node *removed)
+ns_slot_reconcile_child_change(ns_js *js, ns_node *parent, ns_node *removed)
 {
-    (void)added;
     ns_slot_reconcile_changes(js, parent, NULL, removed);
 }
 
 static void
 ns_slot_reconcile_child_change_arrays(ns_js *js, ns_node *parent,
-                                      GPtrArray *added, GPtrArray *removed)
+                                      GPtrArray *removed)
 {
-    (void)added;
     ns_slot_reconcile_changes(js, parent, removed, NULL);
 }
 
@@ -35466,11 +35450,10 @@ ns_element_noop_set(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 }
 
 static gboolean
-ns_element_is_scrolling_root(JSContext *ctx, JSValueConst this_val)
+ns_element_is_scrolling_root(JSValueConst this_val)
 {
     const ns_node *n = ns_unwrap_element(this_val);
     if (!n || !n->name || strcmp(n->name, "html") != 0) return FALSE;
-    (void)ctx;
     return TRUE;
 }
 
@@ -35503,7 +35486,7 @@ ns_window_get_scroll_y(JSContext *ctx, JSValueConst this_val,
 static JSValue
 ns_element_get_scrollTop(JSContext *ctx, JSValueConst this_val)
 {
-    if (ns_element_is_scrolling_root(ctx, this_val))
+    if (ns_element_is_scrolling_root(this_val))
         return JS_NewFloat64(ctx, ns_window_scroll_prop(ctx, "scrollY"));
     const ns_box *b = ns_box_for_this(ctx, this_val);
     if (!b) return JS_NewInt32(ctx, 0);
@@ -35513,7 +35496,7 @@ ns_element_get_scrollTop(JSContext *ctx, JSValueConst this_val)
 static JSValue
 ns_element_get_scrollLeft(JSContext *ctx, JSValueConst this_val)
 {
-    if (ns_element_is_scrolling_root(ctx, this_val))
+    if (ns_element_is_scrolling_root(this_val))
         return JS_NewFloat64(ctx, ns_window_scroll_prop(ctx, "scrollX"));
     const ns_box *b = ns_box_for_this(ctx, this_val);
     if (!b) return JS_NewInt32(ctx, 0);
@@ -35670,7 +35653,7 @@ ns_element_set_scrollTop(JSContext *ctx, JSValueConst this_val, JSValueConst val
 {
     double v;
     if (JS_ToFloat64(ctx, &v, val) != 0) return JS_UNDEFINED;
-    if (ns_element_is_scrolling_root(ctx, this_val)) {
+    if (ns_element_is_scrolling_root(this_val)) {
         ns_js_scroll_viewport(js_from_ctx(ctx),
                               ns_window_scroll_prop(ctx, "scrollX"), v);
         return JS_UNDEFINED;
@@ -35702,7 +35685,7 @@ ns_element_set_scrollLeft(JSContext *ctx, JSValueConst this_val, JSValueConst va
 {
     double v;
     if (JS_ToFloat64(ctx, &v, val) != 0) return JS_UNDEFINED;
-    if (ns_element_is_scrolling_root(ctx, this_val)) {
+    if (ns_element_is_scrolling_root(this_val)) {
         ns_js_scroll_viewport(js_from_ctx(ctx), v,
                               ns_window_scroll_prop(ctx, "scrollY"));
         return JS_UNDEFINED;
@@ -45042,9 +45025,8 @@ ns_document_get_fonts(JSContext *ctx, JSValueConst this_val)
 }
 
 static gboolean
-ns_point_in_hit_bounds(ns_js *js, double x, double y)
+ns_point_in_hit_bounds(double x, double y)
 {
-    (void)js;
     double w = ns_css_viewport_w();
     double h = ns_css_viewport_h();
     return x <= w && y <= h;
@@ -45070,7 +45052,7 @@ ns_hit_point_to_layout(JSContext *ctx, ns_js *js, const ns_node *scope,
 {
     const ns_node *iframe = ns_node_owner_iframe(scope);
     if (!iframe) {
-        if (!ns_point_in_hit_bounds(js, *x, *y)) return FALSE;
+        if (!ns_point_in_hit_bounds(*x, *y)) return FALSE;
         *x += ns_window_scroll_prop(ctx, "scrollX");
         *y += ns_window_scroll_prop(ctx, "scrollY");
         return TRUE;
@@ -47987,9 +47969,8 @@ ns_zlib_run(JSContext *ctx, ns_zlib_codec *c, const uint8_t *in,
 }
 
 static ns_zlib_codec *
-ns_zlib_unwrap(JSContext *ctx, JSValueConst v)
+ns_zlib_unwrap(JSValueConst v)
 {
-    (void)ctx;
     return ns_zlib_class_id ? JS_GetOpaque(v, ns_zlib_class_id) : NULL;
 }
 
@@ -47999,7 +47980,7 @@ ns_zlib_push(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     (void)this_val;
     if (argc < 2)
         return JS_ThrowTypeError(ctx, "zlib push: codec and data required");
-    ns_zlib_codec *c = ns_zlib_unwrap(ctx, argv[0]);
+    ns_zlib_codec *c = ns_zlib_unwrap(argv[0]);
     if (!c) return JS_ThrowTypeError(ctx, "zlib push: invalid codec");
 
     size_t off = 0, len = 0, bpe = 0;
@@ -48025,7 +48006,7 @@ ns_zlib_finish(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     (void)this_val;
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "zlib finish: codec required");
-    ns_zlib_codec *c = ns_zlib_unwrap(ctx, argv[0]);
+    ns_zlib_codec *c = ns_zlib_unwrap(argv[0]);
     if (!c) return JS_ThrowTypeError(ctx, "zlib finish: invalid codec");
     return ns_zlib_run(ctx, c, (const uint8_t *)"", 0, TRUE);
 }
@@ -48275,7 +48256,7 @@ ns_install_tostringtag(JSContext *ctx, JSValueConst global)
 }
 
 static void
-ns_install_web_api_shapes(JSContext *ctx, JSValueConst global)
+ns_install_web_api_shapes(JSContext *ctx)
 {
     static const char *const source =
         "(function(){"
@@ -48347,7 +48328,6 @@ ns_install_web_api_shapes(JSContext *ctx, JSValueConst global)
                              "<web-api-shapes>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result)) JS_FreeValue(ctx, JS_GetException(ctx));
     JS_FreeValue(ctx, result);
-    (void)global;
 }
 
 static void
@@ -53603,7 +53583,7 @@ ns_js_install_document(ns_js *js, ns_node *doc, const char *base_url,
         ns_document_use_xml_document_prototype(ctx, active_document);
         JS_FreeValue(ctx, active_document);
     }
-    ns_install_web_api_shapes(ctx, global);
+    ns_install_web_api_shapes(ctx);
     ns_bind_ctor(ctx, global, "FontFace", ns_window_fontface_ctor, 3);
     {
         JSValue ctor = JS_GetPropertyStr(ctx, global, "CSSStyleDeclaration");
@@ -54145,8 +54125,7 @@ ns_js_profile_enabled(void)
 
 static gboolean
 ns_js_eval_bytecode_cached(ns_js *js, const char *src, gsize len,
-                           const char *origin, JSValue *out_value,
-                           gboolean *out_compiled)
+                           JSValue *out_value, gboolean *out_compiled)
 {
     if (out_compiled) *out_compiled = FALSE;
     if (len < 1024) return FALSE;
@@ -54161,7 +54140,6 @@ ns_js_eval_bytecode_cached(ns_js *js, const char *src, gsize len,
     }
     *out_value = JS_EvalFunction(js->ctx, fn);
     if (out_compiled) *out_compiled = TRUE;
-    (void)origin;
     return TRUE;
 }
 
@@ -54326,7 +54304,7 @@ ns_js_eval(ns_js *js, const char *src, gsize len, const char *origin)
     gboolean cache_hit = FALSE;
     int src_line = (js->current_script && js->current_script->src_line > 0)
                        ? js->current_script->src_line : 1;
-    if (!(ns_js_eval_bytecode_cached(js, copy, len, origin, &v, &cache_hit) &&
+    if (!(ns_js_eval_bytecode_cached(js, copy, len, &v, &cache_hit) &&
           cache_hit)) {
         JSValue geval = JS_GetGlobalObject(js->ctx);
         JSEvalOptions opts = {

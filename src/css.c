@@ -15350,9 +15350,8 @@ substitute_vars_tracked(const char *vtext, const ns_var_map *map,
 }
 
 static char *
-substitute_vars_with(const char *vtext, const ns_var_map *map, int depth)
+substitute_vars_with(const char *vtext, const ns_var_map *map)
 {
-    (void)depth;
     ns_var_budget budget = { 0 };
     return substitute_vars_tracked(vtext, map, &budget);
 }
@@ -15360,7 +15359,7 @@ substitute_vars_with(const char *vtext, const ns_var_map *map, int depth)
 char *
 ns_css_resolve_style_vars(const char *text, const ns_style *style)
 {
-    return substitute_vars_with(text, style ? style->vars : NULL, 0);
+    return substitute_vars_with(text, style ? style->vars : NULL);
 }
 
 static gboolean
@@ -16699,7 +16698,7 @@ ns_css_border_image_shorthand_serialize(const char *source, const char *slice,
     return g_string_free(out, FALSE);
 }
 
-typedef struct { const char *name; ns_css_prop t, r, b, l; } border_side_map;
+typedef struct { const char *name; ns_css_prop t, r, b; } border_side_map;
 
 static void
 parse_border_shorthand(const border_side_map *side, const char *vtext,
@@ -17342,30 +17341,26 @@ parse_declaration_block(const char **pp, const char *end,
 
         static const border_side_map border_sides[] = {
             { "border-top",    NS_CSS_BORDER_TOP_WIDTH,    NS_CSS_BORDER_TOP_COLOR,
-                               NS_CSS_BORDER_TOP_STYLE,    NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_TOP_STYLE },
             { "border-right",  NS_CSS_BORDER_RIGHT_WIDTH,  NS_CSS_BORDER_RIGHT_COLOR,
-                               NS_CSS_BORDER_RIGHT_STYLE,  NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_RIGHT_STYLE },
             { "border-bottom", NS_CSS_BORDER_BOTTOM_WIDTH, NS_CSS_BORDER_BOTTOM_COLOR,
-                               NS_CSS_BORDER_BOTTOM_STYLE, NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_BOTTOM_STYLE },
             { "border-left",   NS_CSS_BORDER_LEFT_WIDTH,   NS_CSS_BORDER_LEFT_COLOR,
-                               NS_CSS_BORDER_LEFT_STYLE,   NS_CSS_PROP_COUNT },
+                               NS_CSS_BORDER_LEFT_STYLE },
             { "border-inline-start", NS_CSS_BORDER_INLINE_START_WIDTH,
                                       NS_CSS_BORDER_INLINE_START_COLOR,
-                                      NS_CSS_BORDER_INLINE_START_STYLE,
-                                      NS_CSS_PROP_COUNT },
+                                      NS_CSS_BORDER_INLINE_START_STYLE },
             { "border-inline-end",   NS_CSS_BORDER_INLINE_END_WIDTH,
                                       NS_CSS_BORDER_INLINE_END_COLOR,
-                                      NS_CSS_BORDER_INLINE_END_STYLE,
-                                      NS_CSS_PROP_COUNT },
+                                      NS_CSS_BORDER_INLINE_END_STYLE },
             { "border-block-start",  NS_CSS_BORDER_BLOCK_START_WIDTH,
                                       NS_CSS_BORDER_BLOCK_START_COLOR,
-                                      NS_CSS_BORDER_BLOCK_START_STYLE,
-                                      NS_CSS_PROP_COUNT },
+                                      NS_CSS_BORDER_BLOCK_START_STYLE },
             { "border-block-end",    NS_CSS_BORDER_BLOCK_END_WIDTH,
                                       NS_CSS_BORDER_BLOCK_END_COLOR,
-                                      NS_CSS_BORDER_BLOCK_END_STYLE,
-                                      NS_CSS_PROP_COUNT },
-            { NULL, 0, 0, 0, 0 },
+                                      NS_CSS_BORDER_BLOCK_END_STYLE },
+            { NULL, 0, 0, 0 },
         };
 
         gboolean is_border_side = FALSE;
@@ -19012,7 +19007,7 @@ ns_css_keyframes_resolve(const ns_css_keyframes *kf,
     for (int i = 0; i < out->n_stops; i++) {
         ns_css_keyframe_stop *s = &out->stops[i];
         const char *rawp = s->raw_props;
-        s->raw_props = rawp ? substitute_vars_with(rawp, vars, 0) : NULL;
+        s->raw_props = rawp ? substitute_vars_with(rawp, vars) : NULL;
     }
     return out;
 }
@@ -22547,7 +22542,6 @@ ns_css_rule_index_build(const ns_css_stylesheet *sheet)
             if (sel && sel->pseudo_element != NS_CSS_PE_NONE) {
                 ((ns_css_stylesheet *)sheet)->pseudo_mask |=
                     (1u << sel->pseudo_element);
-                ((ns_css_rule *)r)->pe_mask |= (1u << sel->pseudo_element);
             }
             if (!sel || sel->compounds->len == 0) {
                 index_add_candidate_array(idx->universal, ri, si);
@@ -28154,7 +28148,7 @@ var_map_apply_unregistered(GHashTable *own, const ns_var_map *parent,
     if (kind == NS_CUSTOM_WIDE_NONE && strstr(resolved->text, "var(")) {
         ns_var_map scope = { .ref = 1, .own = own,
                              .parent = (ns_var_map *)parent };
-        expanded = substitute_vars_with(value_text, &scope, 0);
+        expanded = substitute_vars_with(value_text, &scope);
         kind = custom_prop_wide_kind(expanded);
     }
     if (kind == NS_CUSTOM_WIDE_REVERT ||
@@ -28216,7 +28210,7 @@ var_map_apply_registered(GHashTable *vars, const ns_var_map *parent,
     if (kind == NS_CUSTOM_WIDE_NONE && strstr(resolved->text, "var(")) {
         ns_var_map scope = { .ref = 1, .own = vars,
                              .parent = (ns_var_map *)parent };
-        expanded = substitute_vars_with(value_text, &scope, 0);
+        expanded = substitute_vars_with(value_text, &scope);
         kind = custom_prop_wide_kind(expanded);
     }
     if (kind == NS_CUSTOM_WIDE_REVERT ||
@@ -28959,7 +28953,7 @@ pending_substituted_value(const pending_match *pm, const ns_var_map *vars,
                           const ns_node *node)
 {
     gboolean custom = pm->pd->pname[0] == '-' && pm->pd->pname[1] == '-';
-    char *substituted = substitute_vars_with(pm->pd->raw_vtext, vars, 0);
+    char *substituted = substitute_vars_with(pm->pd->raw_vtext, vars);
     if (substituted && strstr(substituted, "attr(")) {
         gboolean tainted = FALSE;
         char *with_attrs = substitute_attrs(substituted, node, 0, &tainted);

@@ -422,7 +422,7 @@ calc_simplify_sum(calc_node *n, gboolean *ok)
 }
 
 static calc_node *
-calc_simplify_product(calc_node *n, gboolean *ok)
+calc_simplify_product(calc_node *n)
 {
     calc_flatten(n);
     double factor = 1;
@@ -459,7 +459,6 @@ calc_simplify_product(calc_node *n, gboolean *ok)
     }
     if (numbers > 0 && !(factor == 1 && n->children->len > 0))
         g_ptr_array_insert(n->children, 0, calc_numeric(factor, ""));
-    (void)ok;
     return n;
 }
 
@@ -483,7 +482,7 @@ calc_less_signed(double a, double b)
 }
 
 static calc_node *
-calc_simplify_function(calc_node *n, gboolean *ok)
+calc_simplify_function(calc_node *n)
 {
     const char *name = n->text;
     if (strcmp(name, "calc") == 0 && n->children->len == 1)
@@ -516,7 +515,6 @@ calc_simplify_function(calc_node *n, gboolean *ok)
         r->value = fabs(r->value);
         return r;
     }
-    (void)ok;
     return n;
 }
 
@@ -556,9 +554,9 @@ calc_simplify(calc_node *n, gboolean *ok)
     case CALC_NODE_SUM:
         return calc_simplify_sum(n, ok);
     case CALC_NODE_PRODUCT:
-        return calc_simplify_product(n, ok);
+        return calc_simplify_product(n);
     case CALC_NODE_FUNCTION:
-        return calc_simplify_function(n, ok);
+        return calc_simplify_function(n);
     default:
         return n;
     }
