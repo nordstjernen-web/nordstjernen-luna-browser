@@ -4,6 +4,16 @@ Significant changes in each release:
 
 1.0.15:
 =======
+* Security: a local HTML file can no longer read other local files
+  through a frame or a canvas. `ns_js_urls_same_origin` compared non-HTTP
+  URLs by scheme alone, so it called any two `file:` URLs same-origin: a
+  page opened from the downloads folder could embed another program's
+  file under `~/.config` in an iframe and read its `contentDocument`, and
+  a local image from another folder drawn into a canvas did not taint it.
+  Every `file:` URL is now its own origin there too, as `fetch()` and
+  `XMLHttpRequest` already treated it. A local page still loads its own
+  scripts, style sheets and images. Nordstjernen and Southstar take the
+  same fix, where `fetch()` and XHR could read the files directly.
 
 1.0.14:
 =======
