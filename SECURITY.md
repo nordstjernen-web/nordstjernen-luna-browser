@@ -325,8 +325,10 @@ worker use the same check.
   and web content cannot navigate to any about: page other than
   `about:blank` and the start page.
 - A `file:` document may embed local files as images, scripts,
-  stylesheets and frames, but `fetch()` and `XMLHttpRequest` receive
-  only an opaque response for a `file:` URL, directory listings are
+  stylesheets and frames, but every `file:` document is an opaque
+  origin: `fetch()` and `XMLHttpRequest` receive only an opaque response
+  for a `file:` URL, a `file:` frame is cross-origin to its embedder, a
+  `file:` image drawn into a canvas taints it, directory listings are
   synthesized only for navigations, and an `http(s)` page cannot navigate
   to, or play media from, a `file:` URL.
 - CSP (`src/csp.c`) is parsed from headers and `<meta>` and enforced for
