@@ -31,7 +31,6 @@ struct ns_mse_buffer {
     double            group_end;
     double            last_dts;
     double            last_duration;
-    guint             generation;
     ns_mse_buffer    *companion;
 };
 
@@ -43,7 +42,6 @@ struct ns_mse_source {
     gboolean   has_live_seekable;
     double     live_seekable_start;
     double     live_seekable_end;
-    guint      generation;
 };
 
 static gboolean
@@ -227,7 +225,6 @@ ns_mse_source_set_duration(ns_mse_source *source, double duration)
 {
     if (!source) return;
     source->duration = duration;
-    source->generation++;
 }
 
 void
@@ -255,15 +252,8 @@ ns_mse_source_ended(const ns_mse_source *source)
 void
 ns_mse_source_set_ended(ns_mse_source *source, gboolean ended)
 {
-    if (!source || source->ended == ended) return;
+    if (!source) return;
     source->ended = ended;
-    source->generation++;
-}
-
-guint
-ns_mse_source_generation(const ns_mse_source *source)
-{
-    return source ? source->generation : 0;
 }
 
 static ns_mse_buffer *
@@ -288,7 +278,6 @@ ns_mse_source_add_buffer(ns_mse_source *source, const char *type)
     else buffer->demuxer = ns_mp4_demuxer_new();
     g_free(lower);
     g_ptr_array_add(source->buffers, buffer);
-    source->generation++;
     return buffer;
 }
 
@@ -300,7 +289,6 @@ ns_mse_source_add_file_buffer(ns_mse_source *source, gboolean webm)
     if (webm) buffer->webm = ns_webm_demuxer_new();
     else buffer->demuxer = ns_mp4_demuxer_new();
     g_ptr_array_add(source->buffers, buffer);
-    source->generation++;
     return buffer;
 }
 
@@ -308,7 +296,7 @@ void
 ns_mse_source_remove_buffer(ns_mse_source *source, ns_mse_buffer *buffer)
 {
     if (!source || !buffer) return;
-    if (g_ptr_array_remove(source->buffers, buffer)) source->generation++;
+    g_ptr_array_remove(source->buffers, buffer);
 }
 
 ns_mse_buffer *
@@ -419,8 +407,6 @@ batch_fits(const ns_mse_buffer *buffer, GArray *batch)
 static void
 buffer_commit(ns_mse_buffer *buffer, GArray *batch)
 {
-    buffer->generation++;
-    buffer->source->generation++;
     if (batch->len == 0) {
         g_array_free(batch, TRUE);
         return;
@@ -566,8 +552,6 @@ ns_mse_buffer_remove(ns_mse_buffer *buffer, double start, double end)
     if (!buffer) return;
     buffer_remove_range(buffer, start, end);
     buffer->last_dts = NAN;
-    buffer->generation++;
-    buffer->source->generation++;
     if (buffer->companion) ns_mse_buffer_remove(buffer->companion, start, end);
 }
 
@@ -700,12 +684,6 @@ ns_mse_source_seekable(ns_mse_source *source)
     return result;
 }
 
-ns_mse_track_kind
-ns_mse_buffer_kind(const ns_mse_buffer *buffer)
-{
-    return buffer ? buffer->kind : NS_MSE_TRACK_NONE;
-}
-
 guint
 ns_mse_buffer_n_frames(const ns_mse_buffer *buffer)
 {
@@ -764,27 +742,4 @@ ns_mse_buffer_keyframe_at_or_before(const ns_mse_buffer *buffer, gssize index)
     for (gssize i = index; i >= 0; i--)
         if (g_array_index(buffer->frames, ns_mse_frame, i).keyframe) return i;
     return -1;
-}
-
-double
-ns_mse_buffer_end_of_range(const ns_mse_buffer *buffer, double t)
-{
-    GArray *ranges = track_ranges(buffer);
-    double end = -1.0;
-    for (guint i = 0; i + 1 < ranges->len; i += 2) {
-        double start = g_array_index(ranges, double, i);
-        double stop = g_array_index(ranges, double, i + 1);
-        if (t >= start - NS_MSE_RANGE_GAP_S && t <= stop) {
-            end = stop;
-            break;
-        }
-    }
-    g_array_free(ranges, TRUE);
-    return end;
-}
-
-guint
-ns_mse_buffer_generation(const ns_mse_buffer *buffer)
-{
-    return buffer ? buffer->generation : 0;
 }

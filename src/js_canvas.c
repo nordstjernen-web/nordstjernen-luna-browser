@@ -17,9 +17,48 @@
 #include "texture.h"
 #include "image.h"
 
+typedef struct ns_path2d {
+    cairo_surface_t *rs;
+    cairo_t         *cr;
+} ns_path2d;
+
+typedef struct ns_image_bitmap {
+    cairo_surface_t *surf;
+    int w, h;
+    gboolean origin_clean;
+} ns_image_bitmap;
+
+typedef void (*ns_ctx_drawfn)(cairo_t *cr, void *ud);
+
+typedef struct ns_draw_rect_ud {
+    double x, y, w, h, lw;
+    JSContext *ctx;
+    JSValueConst this_val;
+    ns_canvas_state *st;
+} ns_draw_rect_ud;
+
+typedef struct ns_draw_path_ud {
+    JSContext *ctx;
+    JSValueConst this_val;
+    ns_canvas_state *st;
+    double lw;
+    cairo_path_t *snapshot;
+    cairo_fill_rule_t fill_rule;
+} ns_draw_path_ud;
+
+static cairo_surface_t *ns_ctx_drawimage_source(JSContext *ctx,
+                                                JSValueConst src, int *out_w,
+                                                int *out_h,
+                                                gboolean *origin_clean);
+static JSValue ns_dommatrix_make(JSContext *ctx, double a, double b, double c,
+                                 double d, double e, double f,
+                                 gboolean readonly);
+static JSValue ns_offscreen_convertToBlob(JSContext *ctx, JSValueConst this_val,
+                                          int argc, JSValueConst *argv);
+
 static JSClassID ns_path2d_class_id;
 
-void
+static void
 ns_path2d_finalizer(JSRuntime *rt, JSValue val)
 {
     (void)rt;
@@ -37,7 +76,7 @@ static JSClassDef ns_path2d_class = {
 
 static JSClassID ns_image_bitmap_class_id;
 
-void
+static void
 ns_image_bitmap_finalizer(JSRuntime *rt, JSValue val)
 {
     (void)rt;
@@ -52,7 +91,7 @@ static JSClassDef ns_image_bitmap_class = {
     .finalizer = ns_image_bitmap_finalizer,
 };
 
-void
+static void
 ns_canvas_state_free(gpointer data)
 {
     ns_canvas_state *st = data;
@@ -114,7 +153,7 @@ ns_image_bitmap_is(JSValueConst v)
     return JS_GetOpaque(v, ns_image_bitmap_class_id) != NULL;
 }
 
-JSValue
+static JSValue
 ns_image_bitmap_close(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
 {
@@ -128,7 +167,7 @@ ns_image_bitmap_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_image_bitmap_make(JSContext *ctx, cairo_surface_t *surf, int w, int h,
                      gboolean origin_clean)
 {
@@ -149,7 +188,7 @@ ns_image_bitmap_make(JSContext *ctx, cairo_surface_t *surf, int w, int h,
     return obj;
 }
 
-cairo_surface_t *
+static cairo_surface_t *
 ns_image_bitmap_from_imagedata(JSContext *ctx, JSValueConst src,
                                int *out_w, int *out_h)
 {
@@ -203,9 +242,8 @@ ns_image_bitmap_from_imagedata(JSContext *ctx, JSValueConst src,
     return surf;
 }
 
-cairo_surface_t *
-ns_image_bitmap_crop(cairo_surface_t *src, int sw, int sh,
-                     int sx, int sy, int rw, int rh)
+static cairo_surface_t *
+ns_image_bitmap_crop(cairo_surface_t *src, int sx, int sy, int rw, int rh)
 {
     cairo_surface_t *out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, rw, rh);
     if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
@@ -216,7 +254,6 @@ ns_image_bitmap_crop(cairo_surface_t *src, int sw, int sh,
     cairo_set_source_surface(cr, src, -sx, -sy);
     cairo_paint(cr);
     cairo_destroy(cr);
-    (void)sw; (void)sh;
     return out;
 }
 
@@ -380,7 +417,7 @@ ns_window_create_image_bitmap(JSContext *ctx, JSValueConst this_val,
         return promise;
     }
     if (crop) {
-        cairo_surface_t *out = ns_image_bitmap_crop(surf, sw, sh, sx, sy, rw, rh);
+        cairo_surface_t *out = ns_image_bitmap_crop(surf, sx, sy, rw, rh);
         cairo_surface_destroy(surf);
         if (!out) {
             ns_js_promise_reject(ctx, resolvers, "createImageBitmap: crop failed");
@@ -397,7 +434,7 @@ ns_window_create_image_bitmap(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
-JSValue
+static JSValue
 ns_offscreen_transferToImageBitmap(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
 {
@@ -424,7 +461,7 @@ ns_offscreen_transferToImageBitmap(JSContext *ctx, JSValueConst this_val,
     return ns_image_bitmap_make(ctx, copy, w, h, !st || st->origin_clean);
 }
 
-void
+static void
 ns_dommatrix_read(JSContext *ctx, JSValueConst v, double *a, double *b,
                   double *c, double *d, double *e, double *f)
 {
@@ -439,7 +476,7 @@ ns_dommatrix_read(JSContext *ctx, JSValueConst v, double *a, double *b,
     t = JS_GetPropertyStr(ctx, v, "f"); if (!JS_IsUndefined(t) && !JS_IsNull(t)) JS_ToFloat64(ctx, f, t); JS_FreeValue(ctx, t);
 }
 
-void
+static void
 ns_dommatrix_write(JSContext *ctx, JSValueConst obj, double a, double b,
                    double c, double d, double e, double f)
 {
@@ -461,7 +498,7 @@ ns_dommatrix_write(JSContext *ctx, JSValueConst obj, double a, double b,
         ? JS_TRUE : JS_FALSE);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_multiply(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
 {
@@ -480,7 +517,7 @@ ns_dommatrix_multiply(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, a, b, c, d, e, f, FALSE);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_multiplySelf(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
 {
@@ -495,7 +532,7 @@ ns_dommatrix_multiplySelf(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_translate(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
 {
@@ -507,7 +544,7 @@ ns_dommatrix_translate(JSContext *ctx, JSValueConst this_val,
                              f + b * tx + d * ty, FALSE);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_scale(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
 {
@@ -518,7 +555,7 @@ ns_dommatrix_scale(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, a * sx, b * sx, c * sy, d * sy, e, f, FALSE);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_rotate(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -534,7 +571,7 @@ ns_dommatrix_rotate(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, na, nb, nc, nd, e, f, FALSE);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_inverse(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
@@ -554,7 +591,7 @@ ns_dommatrix_inverse(JSContext *ctx, JSValueConst this_val,
         (c * f - d * e) * inv, (b * e - a * f) * inv, FALSE);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_invertSelf(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
 {
@@ -573,7 +610,7 @@ ns_dommatrix_invertSelf(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
-void
+static void
 ns_obj_double(JSContext *ctx, JSValueConst obj, const char *key, double *out)
 {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
@@ -581,7 +618,7 @@ ns_obj_double(JSContext *ctx, JSValueConst obj, const char *key, double *out)
     JS_FreeValue(ctx, v);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_transformPoint(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
@@ -602,7 +639,7 @@ ns_dommatrix_transformPoint(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
-JSValue
+static JSValue
 ns_dommatrix_toString(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
 {
@@ -615,7 +652,7 @@ ns_dommatrix_toString(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, buf);
 }
 
-JSValue
+static JSValue
 ns_dommatrix_make(JSContext *ctx, double a, double b, double c, double d,
                   double e, double f, gboolean readonly)
 {
@@ -636,7 +673,7 @@ ns_dommatrix_make(JSContext *ctx, double a, double b, double c, double d,
     return obj;
 }
 
-JSValue
+static JSValue
 ns_dommatrix_ctor_impl(JSContext *ctx, int argc, JSValueConst *argv,
                        gboolean readonly)
 {
@@ -700,7 +737,7 @@ ns_window_offscreen_canvas_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
-int
+static int
 ns_canvas_dim_from_attr(const ns_node *el, const char *name, int defv)
 {
     const char *v = ns_element_get_attr(el, name);
@@ -710,7 +747,7 @@ ns_canvas_dim_from_attr(const ns_node *el, const char *name, int defv)
     return n;
 }
 
-gboolean
+static gboolean
 ns_canvas_parse_color(const char *s, double *r, double *g, double *b, double *a)
 {
     guint8 cr, cg, cb, ca;
@@ -751,7 +788,7 @@ ns_js_canvas_surface(ns_js *js, const ns_node *n)
     return st ? st->surf : NULL;
 }
 
-ns_canvas_state *
+static ns_canvas_state *
 ns_ctx_state(JSContext *ctx, JSValueConst this_val)
 {
     if (!js_from_ctx(ctx)) return NULL;
@@ -867,7 +904,7 @@ ns_ctx_build_conic_pattern(JSContext *ctx, JSValueConst obj)
     return pat;
 }
 
-cairo_pattern_t *
+static cairo_pattern_t *
 ns_ctx_build_pattern(JSContext *ctx, JSValueConst obj, gboolean *origin_clean)
 {
     *origin_clean = TRUE;
@@ -967,7 +1004,7 @@ ns_ctx_build_pattern(JSContext *ctx, JSValueConst obj, gboolean *origin_clean)
     return pat;
 }
 
-double
+static double
 ns_ctx_global_alpha(JSContext *ctx, JSValueConst this_val)
 {
     JSValue v = JS_GetPropertyStr(ctx, this_val, "globalAlpha");
@@ -979,7 +1016,7 @@ ns_ctx_global_alpha(JSContext *ctx, JSValueConst this_val)
     return ga;
 }
 
-cairo_operator_t
+static cairo_operator_t
 ns_ctx_parse_composite(const char *s)
 {
     if (!s)                                    return CAIRO_OPERATOR_OVER;
@@ -1012,7 +1049,7 @@ ns_ctx_parse_composite(const char *s)
     return CAIRO_OPERATOR_OVER;
 }
 
-void
+static void
 ns_ctx_apply_composite(JSContext *ctx, JSValueConst this_val, cairo_t *cr)
 {
     JSValue v = JS_GetPropertyStr(ctx, this_val, "globalCompositeOperation");
@@ -1025,7 +1062,7 @@ ns_ctx_apply_composite(JSContext *ctx, JSValueConst this_val, cairo_t *cr)
     cairo_set_operator(cr, op);
 }
 
-gboolean
+static gboolean
 ns_ctx_image_smoothing(JSContext *ctx, JSValueConst this_val)
 {
     JSValue v = JS_GetPropertyStr(ctx, this_val, "imageSmoothingEnabled");
@@ -1036,7 +1073,7 @@ ns_ctx_image_smoothing(JSContext *ctx, JSValueConst this_val)
     return on;
 }
 
-void
+static void
 ns_ctx_sync_styles(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
 {
     JSValue v;
@@ -1169,14 +1206,14 @@ ns_ctx_sync_styles(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
     JS_FreeValue(ctx, v);
 }
 
-gboolean
+static gboolean
 ns_ctx_has_shadow(const ns_canvas_state *st)
 {
     if (!st || st->shadow_a <= 0) return FALSE;
     return st->shadow_ox != 0 || st->shadow_oy != 0 || st->shadow_blur > 0;
 }
 
-void
+static void
 ns_box_blur_argb(uint8_t *data, int w, int h, int stride, int radius)
 {
     if (radius <= 0 || w <= 0 || h <= 0) return;
@@ -1222,9 +1259,8 @@ ns_box_blur_argb(uint8_t *data, int w, int h, int stride, int radius)
     (void)span;
 }
 
-void
-ns_ctx_with_shadow(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st,
-                   ns_ctx_drawfn draw, void *ud)
+static void
+ns_ctx_with_shadow(ns_canvas_state *st, ns_ctx_drawfn draw, void *ud)
 {
     if (!ns_ctx_has_shadow(st)) {
         draw(st->cr, ud);
@@ -1274,10 +1310,9 @@ ns_ctx_with_shadow(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st,
     cairo_restore(st->cr);
     cairo_surface_destroy(off);
     draw(st->cr, ud);
-    (void)ctx; (void)this_val;
 }
 
-void
+static void
 ns_ctx_set_fill_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
 {
     double ga = ns_ctx_global_alpha(ctx, this_val);
@@ -1286,7 +1321,7 @@ ns_ctx_set_fill_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *s
                                st->fill_a * ga);
 }
 
-void
+static void
 ns_ctx_set_stroke_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
 {
     double ga = ns_ctx_global_alpha(ctx, this_val);
@@ -1295,7 +1330,7 @@ ns_ctx_set_stroke_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state 
                                st->stroke_a * ga);
 }
 
-void
+static void
 ns_draw_fillrect(cairo_t *cr, void *vud)
 {
     ns_draw_rect_ud *u = vud;
@@ -1311,7 +1346,7 @@ ns_draw_fillrect(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
-void
+static void
 ns_draw_strokerect(cairo_t *cr, void *vud)
 {
     ns_draw_rect_ud *u = vud;
@@ -1328,7 +1363,7 @@ ns_draw_strokerect(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
-JSValue
+static JSValue
 ns_ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 4) return JS_UNDEFINED;
@@ -1340,12 +1375,12 @@ ns_ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
         .w = ns_arg_d(ctx, argv[2]), .h = ns_arg_d(ctx, argv[3]),
         .lw = st->line_width, .ctx = ctx, .this_val = this_val, .st = st,
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_fillrect, &u);
+    ns_ctx_with_shadow(st, ns_draw_fillrect, &u);
     ns_ctx_request_repaint(ctx, this_val);
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 4) return JS_UNDEFINED;
@@ -1357,12 +1392,12 @@ ns_ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
         .w = ns_arg_d(ctx, argv[2]), .h = ns_arg_d(ctx, argv[3]),
         .lw = st->line_width, .ctx = ctx, .this_val = this_val, .st = st,
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_strokerect, &u);
+    ns_ctx_with_shadow(st, ns_draw_strokerect, &u);
     ns_ctx_request_repaint(ctx, this_val);
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_clearRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 4) return JS_UNDEFINED;
@@ -1379,7 +1414,7 @@ ns_ctx_clearRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_beginPath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)argc; (void)argv;
@@ -1388,7 +1423,7 @@ ns_ctx_beginPath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_closePath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)argc; (void)argv;
@@ -1397,7 +1432,7 @@ ns_ctx_closePath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_moveTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_UNDEFINED;
@@ -1406,7 +1441,7 @@ ns_ctx_moveTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_lineTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_UNDEFINED;
@@ -1415,7 +1450,7 @@ ns_ctx_lineTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_arc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 5) return JS_UNDEFINED;
@@ -1435,7 +1470,7 @@ ns_ctx_arc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 4) return JS_UNDEFINED;
@@ -1447,14 +1482,14 @@ ns_ctx_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
-gboolean
+static gboolean
 ns_value_is_path2d(JSValueConst v)
 {
     if (!JS_IsObject(v)) return FALSE;
     return JS_GetOpaque(v, ns_path2d_class_id) != NULL;
 }
 
-void
+static void
 ns_replay_path2d(cairo_t *target, JSValueConst path_v)
 {
     ns_path2d *p = JS_GetOpaque(path_v, ns_path2d_class_id);
@@ -1465,14 +1500,14 @@ ns_replay_path2d(cairo_t *target, JSValueConst path_v)
     cairo_path_destroy(cp);
 }
 
-cairo_fill_rule_t
+static cairo_fill_rule_t
 ns_parse_fill_rule(const char *s)
 {
     if (s && !strcmp(s, "evenodd")) return CAIRO_FILL_RULE_EVEN_ODD;
     return CAIRO_FILL_RULE_WINDING;
 }
 
-cairo_path_t *
+static cairo_path_t *
 ns_ctx_prepare_path_and_rule(JSContext *ctx, cairo_t *cr,
                              int argc, JSValueConst *argv)
 {
@@ -1495,7 +1530,7 @@ ns_ctx_prepare_path_and_rule(JSContext *ctx, cairo_t *cr,
     return saved;
 }
 
-void
+static void
 ns_ctx_restore_path(cairo_t *cr, cairo_path_t *saved)
 {
     if (!saved) return;
@@ -1504,7 +1539,7 @@ ns_ctx_restore_path(cairo_t *cr, cairo_path_t *saved)
     cairo_path_destroy(saved);
 }
 
-void
+static void
 ns_draw_fillpath(cairo_t *cr, void *vud)
 {
     ns_draw_path_ud *u = vud;
@@ -1523,7 +1558,7 @@ ns_draw_fillpath(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
-void
+static void
 ns_draw_strokepath(cairo_t *cr, void *vud)
 {
     ns_draw_path_ud *u = vud;
@@ -1542,7 +1577,7 @@ ns_draw_strokepath(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
-JSValue
+static JSValue
 ns_ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     ns_canvas_state *st = ns_ctx_state(ctx, this_val);
@@ -1555,14 +1590,14 @@ ns_ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
         .lw = st->line_width, .snapshot = snap,
         .fill_rule = cairo_get_fill_rule(st->cr),
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_fillpath, &u);
+    ns_ctx_with_shadow(st, ns_draw_fillpath, &u);
     if (snap) cairo_path_destroy(snap);
     ns_ctx_restore_path(st->cr, saved);
     ns_ctx_request_repaint(ctx, this_val);
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     ns_canvas_state *st = ns_ctx_state(ctx, this_val);
@@ -1579,7 +1614,7 @@ ns_ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
         .lw = st->line_width, .snapshot = snap,
         .fill_rule = cairo_get_fill_rule(st->cr),
     };
-    ns_ctx_with_shadow(ctx, this_val, st, ns_draw_strokepath, &u);
+    ns_ctx_with_shadow(st, ns_draw_strokepath, &u);
     if (snap) cairo_path_destroy(snap);
     ns_ctx_restore_path(st->cr, saved);
     ns_ctx_request_repaint(ctx, this_val);
@@ -1600,7 +1635,7 @@ static const char *ns_ctx_savable_props[] = {
     "_dashes",
 };
 
-JSValue
+static JSValue
 ns_ctx_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)argc; (void)argv;
@@ -1628,7 +1663,7 @@ ns_ctx_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_restore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)argc; (void)argv;
@@ -1656,7 +1691,7 @@ ns_ctx_restore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_translate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_UNDEFINED;
@@ -1665,7 +1700,7 @@ ns_ctx_translate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_scale(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_UNDEFINED;
@@ -1674,7 +1709,7 @@ ns_ctx_scale(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_rotate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 1) return JS_UNDEFINED;
@@ -1683,7 +1718,7 @@ ns_ctx_rotate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
-NsPangoFontDescription *
+static NsPangoFontDescription *
 ns_canvas_font_desc(const char *css_font)
 {
     const char *src = css_font && *css_font ? css_font : "10px sans-serif";
@@ -1730,7 +1765,7 @@ ns_canvas_font_desc(const char *css_font)
     return desc;
 }
 
-gboolean
+static gboolean
 ns_ctx_direction_is_rtl(JSContext *ctx, JSValueConst this_val)
 {
     JSValue v = JS_GetPropertyStr(ctx, this_val, "direction");
@@ -1743,7 +1778,7 @@ ns_ctx_direction_is_rtl(JSContext *ctx, JSValueConst this_val)
     return rtl;
 }
 
-void
+static void
 ns_ctx_paint_text(JSContext *ctx, JSValueConst this_val,
                   ns_canvas_state *st, const char *text,
                   double x, double y, double max_width,
@@ -1816,7 +1851,7 @@ ns_ctx_paint_text(JSContext *ctx, JSValueConst this_val,
     g_object_unref(layout);
 }
 
-JSValue
+static JSValue
 ns_ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc < 3) return JS_UNDEFINED;
@@ -1834,7 +1869,7 @@ ns_ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     JSValue obj = JS_NewObject(ctx);
@@ -1882,7 +1917,7 @@ ns_ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return obj;
 }
 
-JSValue
+static JSValue
 ns_ctx_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
 {
@@ -1902,7 +1937,7 @@ ns_ctx_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
@@ -1915,7 +1950,7 @@ ns_ctx_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_arcTo(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
 {
@@ -1962,7 +1997,7 @@ ns_ctx_arcTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_ellipse(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
 {
@@ -1990,7 +2025,7 @@ ns_ctx_ellipse(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_clip(JSContext *ctx, JSValueConst this_val,
             int argc, JSValueConst *argv)
 {
@@ -2002,7 +2037,7 @@ ns_ctx_clip(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-gboolean
+static gboolean
 ns_matrix_from_obj(JSContext *ctx, JSValueConst v, cairo_matrix_t *m)
 {
     if (!JS_IsObject(v)) return FALSE;
@@ -2018,7 +2053,7 @@ ns_matrix_from_obj(JSContext *ctx, JSValueConst v, cairo_matrix_t *m)
     return TRUE;
 }
 
-JSValue
+static JSValue
 ns_ctx_setTransform(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -2043,7 +2078,7 @@ ns_ctx_setTransform(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_transform(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
@@ -2059,7 +2094,7 @@ ns_ctx_transform(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_resetTransform(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
 {
@@ -2069,7 +2104,7 @@ ns_ctx_resetTransform(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_setLineDash(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
 {
@@ -2095,7 +2130,7 @@ ns_ctx_setLineDash(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_getLineDash(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
 {
@@ -2115,7 +2150,7 @@ ns_ctx_getLineDash(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
-JSValue
+static JSValue
 ns_ctx_gradient_addColorStop(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
@@ -2153,7 +2188,7 @@ ns_ctx_gradient_addColorStop(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-cairo_surface_t *
+static cairo_surface_t *
 ns_ctx_drawimage_source(JSContext *ctx, JSValueConst src, int *out_w, int *out_h,
                         gboolean *origin_clean)
 {
@@ -2236,7 +2271,7 @@ ns_ctx_drawimage_source(JSContext *ctx, JSValueConst src, int *out_w, int *out_h
     return surf;
 }
 
-JSValue
+static JSValue
 ns_ctx_drawImage(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
@@ -2307,7 +2342,7 @@ ns_ctx_drawImage(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_createPattern(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
@@ -2338,7 +2373,7 @@ ns_ctx_createPattern(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
-JSValue
+static JSValue
 ns_ctx_createLinearGradient(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
@@ -2355,7 +2390,7 @@ ns_ctx_createLinearGradient(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
-JSValue
+static JSValue
 ns_ctx_createRadialGradient(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
@@ -2379,7 +2414,7 @@ ns_ctx_createRadialGradient(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
-JSValue
+static JSValue
 ns_ctx_createConicGradient(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
 {
@@ -2425,7 +2460,7 @@ ns_image_data_wrap(JSContext *ctx, int w, int h, JSValue data)
     return obj;
 }
 
-JSValue
+static JSValue
 ns_image_data_make(JSContext *ctx, int w, int h, const uint8_t *rgba)
 {
     if (w <= 0 || h <= 0) return JS_NULL;
@@ -2531,7 +2566,7 @@ ns_image_data_install(JSContext *ctx, JSValueConst global)
                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
-JSValue
+static JSValue
 ns_ctx_createImageData(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
 {
@@ -2556,7 +2591,7 @@ ns_ctx_createImageData(JSContext *ctx, JSValueConst this_val,
     return ns_image_data_make(ctx, (int)aw, (int)ah, NULL);
 }
 
-JSValue
+static JSValue
 ns_ctx_getImageData(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -2628,7 +2663,7 @@ ns_ctx_getImageData(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
-JSValue
+static JSValue
 ns_ctx_putImageData(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -2708,7 +2743,7 @@ ns_ctx_putImageData(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_strokeText(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
 {
@@ -2727,7 +2762,7 @@ ns_ctx_strokeText(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-void
+static void
 ns_round_rect_subpath(cairo_t *cr, double x, double y, double w, double h,
                       double rtl, double rtr, double rbr, double rbl)
 {
@@ -2748,7 +2783,7 @@ ns_round_rect_subpath(cairo_t *cr, double x, double y, double w, double h,
     cairo_close_path(cr);
 }
 
-gboolean
+static gboolean
 ns_extract_radii(JSContext *ctx, JSValueConst v,
                  double *rtl, double *rtr, double *rbr, double *rbl)
 {
@@ -2773,7 +2808,7 @@ ns_extract_radii(JSContext *ctx, JSValueConst v,
     return !(*rtl < 0 || *rtr < 0 || *rbr < 0 || *rbl < 0);
 }
 
-JSValue
+static JSValue
 ns_ctx_roundRect(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
@@ -2791,7 +2826,7 @@ ns_ctx_roundRect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_reset(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
 {
@@ -2846,7 +2881,7 @@ ns_ctx_reset(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_ctx_getTransform(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -2857,7 +2892,7 @@ ns_ctx_getTransform(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, m.xx, m.yx, m.xy, m.yy, m.x0, m.y0, FALSE);
 }
 
-JSValue
+static JSValue
 ns_ctx_isPointInPath(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
@@ -2885,7 +2920,7 @@ ns_ctx_isPointInPath(JSContext *ctx, JSValueConst this_val,
     return in ? JS_TRUE : JS_FALSE;
 }
 
-JSValue
+static JSValue
 ns_ctx_isPointInStroke(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
 {
@@ -2908,7 +2943,7 @@ ns_ctx_isPointInStroke(JSContext *ctx, JSValueConst this_val,
     return in ? JS_TRUE : JS_FALSE;
 }
 
-JSValue
+static JSValue
 ns_path2d_get_cr(JSContext *ctx, JSValueConst this_val, cairo_t **out)
 {
     ns_path2d *p = JS_GetOpaque(this_val, ns_path2d_class_id);
@@ -2917,7 +2952,7 @@ ns_path2d_get_cr(JSContext *ctx, JSValueConst this_val, cairo_t **out)
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_moveTo(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
@@ -2929,7 +2964,7 @@ ns_path2d_moveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_lineTo(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
@@ -2943,7 +2978,7 @@ ns_path2d_lineTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_closePath(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -2955,7 +2990,7 @@ ns_path2d_closePath(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
 {
@@ -2970,7 +3005,7 @@ ns_path2d_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
 {
@@ -2990,7 +3025,7 @@ ns_path2d_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_arc(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
 {
@@ -3009,7 +3044,7 @@ ns_path2d_arc(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_arcTo(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
 {
@@ -3051,7 +3086,7 @@ ns_path2d_arcTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_ellipse(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
 {
@@ -3077,7 +3112,7 @@ ns_path2d_ellipse(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_rect(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
 {
@@ -3091,7 +3126,7 @@ ns_path2d_rect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_roundRect(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -3110,7 +3145,7 @@ ns_path2d_roundRect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-JSValue
+static JSValue
 ns_path2d_addPath(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
 {
@@ -3141,7 +3176,7 @@ ns_path2d_addPath(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-void
+static void
 ns_path2d_attach_methods(JSContext *ctx, JSValueConst obj)
 {
     ns_bind_fn(ctx, obj, "moveTo",          ns_path2d_moveTo,          2);
@@ -3157,14 +3192,14 @@ ns_path2d_attach_methods(JSContext *ctx, JSValueConst obj)
     ns_bind_fn(ctx, obj, "addPath",         ns_path2d_addPath,         2);
 }
 
-const char *
+static const char *
 ns_svg_skip_ws(const char *p)
 {
     while (*p && (g_ascii_isspace(*p) || *p == ',')) p++;
     return p;
 }
 
-gboolean
+static gboolean
 ns_svg_read_number(const char **pp, double *out)
 {
     const char *p = ns_svg_skip_ws(*pp);
@@ -3176,7 +3211,7 @@ ns_svg_read_number(const char **pp, double *out)
     return TRUE;
 }
 
-void
+static void
 ns_path2d_arc_svg(cairo_t *cr, double x1, double y1,
                   double rx, double ry, double phi_deg,
                   gboolean large_arc, gboolean sweep,
@@ -3221,7 +3256,7 @@ ns_path2d_arc_svg(cairo_t *cr, double x1, double y1,
     cairo_restore(cr);
 }
 
-void
+static void
 ns_path2d_parse_svg(cairo_t *cr, const char *d)
 {
     if (!d) return;
@@ -3365,7 +3400,7 @@ ns_path2d_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
-JSValue
+static JSValue
 ns_ctx_get_attrs(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
 {
@@ -3381,7 +3416,7 @@ ns_ctx_get_attrs(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
-JSValue
+static JSValue
 ns_ctx_is_context_lost(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
 {
@@ -3389,7 +3424,7 @@ ns_ctx_is_context_lost(JSContext *ctx, JSValueConst this_val,
     return JS_FALSE;
 }
 
-JSValue
+static JSValue
 ns_ctx_draw_focus_if_needed(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
@@ -3617,7 +3652,7 @@ ns_canvas_blob_from_surface(JSContext *ctx, cairo_surface_t *surface)
     return blob;
 }
 
-JSValue
+static JSValue
 ns_offscreen_convertToBlob(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
 {

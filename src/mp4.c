@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+static double ns_mp4_time_to_seconds(gint64 time, guint32 timescale);
+
 #define NS_MP4_FOURCC(a, b, c, d)                                     \
     (((guint32)(guint8)(a) << 24) | ((guint32)(guint8)(b) << 16) |    \
      ((guint32)(guint8)(c) << 8) | (guint32)(guint8)(d))
@@ -16,7 +18,6 @@ enum {
     NS_MP4_MAX_MDAT_BUFFER_BYTES = 512 * 1024 * 1024,
     NS_MP4_MAX_TRACKS = 64,
     NS_MP4_MAX_PENDING_SAMPLES = 1 << 18,
-    NS_MP4_MAX_DESCRIPTOR_DEPTH = 8,
     NS_MP4_MAX_INDEXED_SAMPLES = 1 << 21,
 };
 
@@ -51,8 +52,6 @@ typedef struct {
 
 typedef struct {
     ns_mp4_track public;
-    gboolean     has_trex;
-    guint32      default_sample_description_index;
     guint32      default_sample_duration;
     guint32      default_sample_size;
     guint32      default_sample_flags;
@@ -84,7 +83,6 @@ typedef struct {
 
 typedef struct {
     guint32 track_id;
-    guint32 sample_description_index;
     guint32 default_duration;
     guint32 default_size;
     guint32 default_flags;
@@ -122,7 +120,6 @@ struct ns_mp4_demuxer {
     gboolean    mdat_unbounded;
     GPtrArray  *tracks;
     gboolean    has_init;
-    guint32     movie_timescale;
     GArray     *pending;
     guint       pending_head;
     GQueue     *ready;
@@ -291,8 +288,8 @@ demux_track_free(gpointer data)
     g_free(track);
 }
 
-static void
-ready_sample_free(gpointer data)
+void
+ns_mp4_sample_free(gpointer data)
 {
     ns_mp4_sample *sample = data;
     if (!sample) return;
@@ -354,8 +351,7 @@ find_descriptor(byte_cursor *c, guint8 wanted_tag, byte_cursor *found)
 static void
 parse_decoder_config_descriptor(demux_track *track, byte_cursor *c)
 {
-    track->public.object_type_indication = cursor_u8(c);
-    if (!cursor_skip(c, 12)) return;
+    if (!cursor_skip(c, 13)) return;
     byte_cursor specific_info;
     if (!find_descriptor(c, 0x05, &specific_info)) return;
     if (track->public.codec_config) g_bytes_unref(track->public.codec_config);
@@ -874,7 +870,7 @@ parse_mvex(GArray *extends, const child_box *mvex)
         cursor_skip(&body, 4);
         track_extends entry;
         entry.track_id = cursor_u32(&body);
-        entry.sample_description_index = cursor_u32(&body);
+        cursor_skip(&body, 4);
         entry.default_duration = cursor_u32(&body);
         entry.default_size = cursor_u32(&body);
         entry.default_flags = cursor_u32(&body);
@@ -924,21 +920,13 @@ parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
 {
     GPtrArray *tracks = g_ptr_array_new_with_free_func(demux_track_free);
     GArray *extends = g_array_new(FALSE, FALSE, sizeof(track_extends));
-    guint32 movie_timescale = 0;
     gboolean ok = TRUE;
     byte_cursor c;
     cursor_init(&c, payload, length);
     child_box child;
     int status = 0;
     while (ok && (status = cursor_next_box(&c, &child)) > 0) {
-        if (child.type == NS_MP4_FOURCC('m', 'v', 'h', 'd')) {
-            byte_cursor body;
-            cursor_init(&body, child.payload, child.payload_length);
-            guint8 version = cursor_u8(&body);
-            cursor_skip(&body, 3 + (version == 1 ? 16 : 8));
-            movie_timescale = cursor_u32(&body);
-            ok = !body.overrun;
-        } else if (child.type == NS_MP4_FOURCC('t', 'r', 'a', 'k')) {
+        if (child.type == NS_MP4_FOURCC('t', 'r', 'a', 'k')) {
             demux_track *track = parse_trak(&child);
             ok = track && tracks->len < NS_MP4_MAX_TRACKS &&
                  !find_track(tracks, track->public.id);
@@ -956,9 +944,6 @@ parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
             track_extends *entry = &g_array_index(extends, track_extends, i);
             demux_track *track = find_track(tracks, entry->track_id);
             if (!track) continue;
-            track->has_trex = TRUE;
-            track->default_sample_description_index =
-                entry->sample_description_index;
             track->default_sample_duration = entry->default_duration;
             track->default_sample_size = entry->default_size;
             track->default_sample_flags = entry->default_flags;
@@ -967,7 +952,6 @@ parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
         d->index = merge_sample_indexes(tracks);
         if (d->tracks) g_ptr_array_unref(d->tracks);
         d->tracks = tracks;
-        d->movie_timescale = movie_timescale;
         d->has_init = TRUE;
     } else {
         g_ptr_array_unref(tracks);
@@ -1386,7 +1370,7 @@ ns_mp4_demuxer_free(ns_mp4_demuxer *d)
     g_byte_array_unref(d->input);
     g_ptr_array_unref(d->tracks);
     g_array_unref(d->pending);
-    g_queue_free_full(d->ready, ready_sample_free);
+    g_queue_free_full(d->ready, ns_mp4_sample_free);
     if (d->index) g_array_unref(d->index);
     g_free(d);
 }
@@ -1418,12 +1402,6 @@ ns_mp4_demuxer_has_init(const ns_mp4_demuxer *d)
     return d && d->has_init;
 }
 
-gboolean
-ns_mp4_demuxer_has_error(const ns_mp4_demuxer *d)
-{
-    return !d || d->state == PARSE_ERROR;
-}
-
 guint
 ns_mp4_demuxer_n_tracks(const ns_mp4_demuxer *d)
 {
@@ -1436,14 +1414,6 @@ ns_mp4_demuxer_track(const ns_mp4_demuxer *d, guint index)
     if (!d || !d->has_init || index >= d->tracks->len) return NULL;
     demux_track *track = g_ptr_array_index(d->tracks, index);
     return &track->public;
-}
-
-const ns_mp4_track *
-ns_mp4_demuxer_track_by_id(const ns_mp4_demuxer *d, guint32 id)
-{
-    if (!d || !d->has_init) return NULL;
-    demux_track *track = find_track(d->tracks, id);
-    return track ? &track->public : NULL;
 }
 
 gboolean
@@ -1559,15 +1529,7 @@ ns_mp4_demuxer_index_extract(ns_mp4_demuxer *d, guint64 position,
     return NS_MP4_INDEX_END;
 }
 
-void
-ns_mp4_sample_clear(ns_mp4_sample *sample)
-{
-    if (!sample) return;
-    if (sample->data) g_bytes_unref(sample->data);
-    memset(sample, 0, sizeof *sample);
-}
-
-double
+static double
 ns_mp4_time_to_seconds(gint64 time, guint32 timescale)
 {
     return timescale ? (double)time / (double)timescale : 0.0;

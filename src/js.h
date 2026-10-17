@@ -69,8 +69,6 @@ ns_js *ns_js_new(ns_js_log_cb      log_cb,  gpointer log_user_data,
                  ns_js_navigate_cb nav_cb,  gpointer nav_user_data,
                  const ns_js_navigation_timing *navigation_timing);
 
-
-
 void   ns_js_set_form_submit_cb(ns_js *js, ns_js_form_submit_cb cb, gpointer user_data);
 void   ns_js_set_download_cb(ns_js *js, ns_js_download_cb cb, gpointer user_data);
 void   ns_js_set_selection(ns_js *js, const char *text, gboolean has_range,
@@ -94,14 +92,11 @@ void   ns_js_set_load_delay_cb(ns_js *js, gboolean (*cb)(gpointer), gpointer use
 void   ns_js_set_style_flush_cb(ns_js *js, ns_js_layout_flush_cb cb, gpointer user_data);
 void   ns_js_set_early_inject_src(ns_js *js, const char *src);
 void   ns_js_add_csp_header(ns_js *js, const char *header_value);
+void   ns_js_apply_meta_csp(ns_js *js, const ns_node *doc);
 gboolean ns_js_csp_form_action_allowed(const ns_js *js, const char *action_url);
 const char *ns_js_current_url(const ns_js *js);
 const char *ns_js_storage_partition(const ns_js *js);
-void   ns_js_dispatch_hashchange(ns_js *js,
-                                 const char *old_url, const char *new_url);
 void   ns_js_free(ns_js *js);
-
-gboolean ns_js_in_pump(const ns_js *js);
 
 void     ns_js_run_scripts_in_doc(ns_js *js, ns_node *doc,
                                   const char *base_url, const char *charset,
@@ -151,8 +146,6 @@ gboolean ns_js_dispatch_submit_event(ns_js *js, const ns_node *form,
 void     ns_js_form_reset(ns_js *js, ns_node *form);
 gboolean ns_js_activate_summary(ns_js *js, const ns_node *el);
 
-void ns_js_dialog_close(ns_js *js, ns_node *dialog, const char *return_value);
-
 void           ns_js_set_focus(ns_js *js, const ns_node *el);
 void           ns_js_note_pointer_input(ns_js *js, gboolean pointer);
 void           ns_js_set_focused_node(ns_js *js, const ns_node *el);
@@ -160,7 +153,6 @@ const ns_node *ns_js_focused_node(const ns_js *js);
 void           ns_js_focus_from_pointer(ns_js *js, const ns_node *target);
 const ns_node *ns_js_sequential_focus_target(ns_js *js, gboolean backward);
 gboolean       ns_node_is_focusable(const ns_node *el);
-void           ns_js_refresh_top_layer(ns_js *js);
 gboolean       ns_js_process_close_request(ns_js *js);
 
 void ns_js_details_toggle_open(ns_js *js, ns_node *details, gboolean open);
@@ -278,7 +270,6 @@ gboolean            ns_js_dispatch_drag_event(ns_js *js, ns_js_drag_session *ses
                                               gboolean alt, gboolean meta,
                                               const ns_node *related,
                                               gboolean *default_prevented);
-
 
 G_END_DECLS
 

@@ -49,7 +49,6 @@ gboolean ns_video_layer_detached(ns_video_layer *layer);
 
 void     ns_video_layer_set_clock(ns_video_layer *layer,
                                   const ns_video_clock *clock);
-double   ns_video_layer_position(ns_video_layer *layer, gint64 now_us);
 
 gboolean     ns_video_layer_present(ns_video_layer *layer, double t);
 gboolean     ns_video_layer_present_now(ns_video_layer *layer, gint64 now_us);

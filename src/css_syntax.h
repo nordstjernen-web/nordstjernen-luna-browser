@@ -36,7 +36,6 @@ typedef struct ns_css_component {
 
 GPtrArray *ns_css_component_values_parse(const char *input, gssize len,
                                          gboolean *valid);
-void ns_css_component_free(ns_css_component *component);
 const char *ns_css_syntax_scan(const char *input, const char *end,
                                const char *terminators, char *terminator);
 gboolean ns_css_component_value_valid(const char *input);

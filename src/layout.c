@@ -1101,24 +1101,8 @@ ns_layout_reads_label_attr(const ns_node *n, const char *name)
 }
 
 static gboolean
-style_has_atomic_inline_box(const ns_style *s)
+style_has_visible_border(const ns_style *s)
 {
-    if (!s) return FALSE;
-    const ns_css_value *w = s->values[NS_CSS_WIDTH];
-    const ns_css_value *h = s->values[NS_CSS_HEIGHT];
-    gboolean has_w = w && (w->kind == NS_CSS_V_LENGTH || w->kind == NS_CSS_V_CALC);
-    gboolean has_h = h && (h->kind == NS_CSS_V_LENGTH || h->kind == NS_CSS_V_CALC);
-    if (has_w || has_h) return TRUE;
-    if (s->values[NS_CSS_BACKGROUND_IMAGE] &&
-        (s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_URL ||
-         s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_GRADIENT))
-        return TRUE;
-    if (s->values[NS_CSS_BORDER_RADIUS] ||
-        s->values[NS_CSS_BORDER_TOP_LEFT_RADIUS] ||
-        s->values[NS_CSS_BORDER_TOP_RIGHT_RADIUS] ||
-        s->values[NS_CSS_BORDER_BOTTOM_RIGHT_RADIUS] ||
-        s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS])
-        return TRUE;
     const ns_css_prop widths[4] = {
         NS_CSS_BORDER_TOP_WIDTH,
         NS_CSS_BORDER_RIGHT_WIDTH,
@@ -1137,6 +1121,30 @@ style_has_atomic_inline_box(const ns_style *s)
         if (!keyword_is(st, "none") && !keyword_is(st, "hidden"))
             return TRUE;
     }
+    return FALSE;
+}
+
+static gboolean
+style_has_atomic_inline_box(const ns_style *s)
+{
+    if (!s) return FALSE;
+    const ns_css_value *w = s->values[NS_CSS_WIDTH];
+    const ns_css_value *h = s->values[NS_CSS_HEIGHT];
+    gboolean has_w = w && (w->kind == NS_CSS_V_LENGTH || w->kind == NS_CSS_V_CALC);
+    gboolean has_h = h && (h->kind == NS_CSS_V_LENGTH || h->kind == NS_CSS_V_CALC);
+    if (has_w || has_h) return TRUE;
+    if (s->values[NS_CSS_BACKGROUND_IMAGE] &&
+        (s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_URL ||
+         s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_GRADIENT))
+        return TRUE;
+    if (s->values[NS_CSS_BORDER_RADIUS] ||
+        s->values[NS_CSS_BORDER_TOP_LEFT_RADIUS] ||
+        s->values[NS_CSS_BORDER_TOP_RIGHT_RADIUS] ||
+        s->values[NS_CSS_BORDER_BOTTOM_RIGHT_RADIUS] ||
+        s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS])
+        return TRUE;
+    if (style_has_visible_border(s))
+        return TRUE;
     const ns_css_value *bg = s->values[NS_CSS_BACKGROUND_COLOR];
     return bg && bg->kind == NS_CSS_V_COLOR && bg->u.color.a > 0;
 }
@@ -1866,7 +1874,7 @@ ns_control_css_extra_w(const ns_node *dom, const ns_style *s)
     return p.left + p.right + b.left + b.right;
 }
 
-double
+static double
 ns_control_css_extra_h(const ns_node *dom, const ns_style *s)
 {
     if (!s || control_is_border_box(dom, s)) return 0;
@@ -1908,25 +1916,7 @@ style_has_visible_control_box(const ns_style *s)
         length_or(s->values[NS_CSS_BORDER_BOTTOM_RIGHT_RADIUS], 0) > 0 ||
         length_or(s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS], 0) > 0)
         return TRUE;
-    const ns_css_prop widths[4] = {
-        NS_CSS_BORDER_TOP_WIDTH,
-        NS_CSS_BORDER_RIGHT_WIDTH,
-        NS_CSS_BORDER_BOTTOM_WIDTH,
-        NS_CSS_BORDER_LEFT_WIDTH,
-    };
-    const ns_css_prop styles_p[4] = {
-        NS_CSS_BORDER_TOP_STYLE,
-        NS_CSS_BORDER_RIGHT_STYLE,
-        NS_CSS_BORDER_BOTTOM_STYLE,
-        NS_CSS_BORDER_LEFT_STYLE,
-    };
-    for (int i = 0; i < 4; i++) {
-        if (length_or(s->values[widths[i]], 0) <= 0) continue;
-        const ns_css_value *st = s->values[styles_p[i]];
-        if (!keyword_is(st, "none") && !keyword_is(st, "hidden"))
-            return TRUE;
-    }
-    return FALSE;
+    return style_has_visible_border(s);
 }
 
 static gboolean
@@ -2503,32 +2493,14 @@ apply_text_transform(const char *src, const char *tt)
     return NULL;
 }
 
-typedef struct ns_progress_state {
-    gboolean determinate;
-    double max;
-    double value;
-    double frac;
-} ns_progress_state;
-
-typedef struct ns_meter_state {
-    double min;
-    double max;
-    double value;
-    double low;
-    double high;
-    double optimum;
-    double frac;
-    int quality;
-} ns_meter_state;
-
 static gboolean
 parse_float_attr(const ns_node *n, const char *attr, double *out)
 {
     return ns_html_parse_float(ns_element_get_attr(n, attr), out);
 }
 
-static ns_progress_state
-progress_state_for(const ns_node *n)
+ns_progress_state
+ns_progress_state_for(const ns_node *n)
 {
     ns_progress_state st = {0};
     double parsed;
@@ -2545,8 +2517,8 @@ progress_state_for(const ns_node *n)
     return st;
 }
 
-static ns_meter_state
-meter_state_for(const ns_node *n)
+ns_meter_state
+ns_meter_state_for(const ns_node *n)
 {
     ns_meter_state st = {0};
     double parsed;
@@ -2852,14 +2824,14 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
         double frac = 0;
         guint8 r = 0, g = 0, b = 0, alpha = 0;
         if (is_meter) {
-            ns_meter_state st = meter_state_for(n);
+            ns_meter_state st = ns_meter_state_for(n);
             frac = st.frac;
             if (st.quality == 0) { r = 0x2e; g = 0x9d; b = 0x54; }
             else if (st.quality == 1) { r = 0xd0; g = 0xa4; b = 0x1f; }
             else { r = 0xc4; g = 0x43; b = 0x3c; }
             alpha = 255;
         } else {
-            ns_progress_state st = progress_state_for(n);
+            ns_progress_state st = ns_progress_state_for(n);
             frac = st.frac;
         }
         ns_inline_attr attr = {
@@ -3665,7 +3637,7 @@ build_inline_run_impl(const ns_node *first, const ns_node *last_excl,
             prev_ws = TRUE;
             continue;
         }
-        gboolean ws = (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f');
+        gboolean ws = ns_is_ascii_ws(c);
         if (ws) {
             if (!prev_ws) {
                 map[i] = collapsed->len;
@@ -3930,12 +3902,6 @@ typedef struct {
 } srcset_candidate;
 
 static gboolean
-srcset_is_space(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
-}
-
-static gboolean
 srcset_valid_integer(const char *s, gsize n)
 {
     if (n == 0) return FALSE;
@@ -4018,13 +3984,13 @@ typedef enum {
 static const char *
 srcset_tokenize_descriptors(const char *p, GPtrArray *descriptors)
 {
-    while (srcset_is_space(*p)) p++;
+    while (ns_is_ascii_ws(*p)) p++;
     GString *cur = g_string_new(NULL);
     srcset_state state = SRCSET_IN_DESCRIPTOR;
     for (;; p++) {
         char c = *p;
         if (state == SRCSET_IN_DESCRIPTOR) {
-            if (srcset_is_space(c)) {
+            if (ns_is_ascii_ws(c)) {
                 if (cur->len) {
                     g_ptr_array_add(descriptors, g_strdup(cur->str));
                     g_string_truncate(cur, 0);
@@ -4045,7 +4011,7 @@ srcset_tokenize_descriptors(const char *p, GPtrArray *descriptors)
             if (c == ')') state = SRCSET_IN_DESCRIPTOR;
         } else {
             if (c == '\0') break;
-            if (!srcset_is_space(c)) {
+            if (!ns_is_ascii_ws(c)) {
                 state = SRCSET_IN_DESCRIPTOR;
                 p--;
             }
@@ -4062,10 +4028,10 @@ srcset_parse(const char *input)
     GArray *out = g_array_new(FALSE, FALSE, sizeof(srcset_candidate));
     const char *p = input ? input : "";
     for (;;) {
-        while (srcset_is_space(*p) || *p == ',') p++;
+        while (ns_is_ascii_ws(*p) || *p == ',') p++;
         if (!*p) break;
         const char *url_s = p;
-        while (*p && !srcset_is_space(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         gsize url_len = (gsize)(p - url_s);
         GPtrArray *descriptors = g_ptr_array_new_with_free_func(g_free);
         if (url_s[url_len - 1] == ',') {
@@ -5671,7 +5637,7 @@ inline_textarea_total_height(const ns_box *box, const ns_style *parent_style)
 }
 
 static gboolean
-inline_attr_cacheable_kind(ns_inline_attr_kind k)
+inline_attr_is_text_only(ns_inline_attr_kind k)
 {
     switch (k) {
     case NS_INLINE_INPUT_FIELD:
@@ -5722,7 +5688,7 @@ inline_box_measure_cacheable(const ns_box *box)
     for (guint i = 0; i < box->attrs->len; i++) {
         const ns_inline_attr *a =
             &g_array_index(box->attrs, ns_inline_attr, i);
-        if (!inline_attr_cacheable_kind(a->kind)) return FALSE;
+        if (!inline_attr_is_text_only(a->kind)) return FALSE;
     }
     return TRUE;
 }
@@ -6395,21 +6361,7 @@ inline_box_form_hit(const ns_box *box, double local_x, double local_y,
     apply_inline_layout_attrs(i18n, box);
     ns_inline_layout_set_attrs(layout, i18n, box);
     ns_pango_attr_list_unref(i18n);
-    const ns_css_value *ta_v =
-        parent_style ? parent_style->values[NS_CSS_TEXT_ALIGN] : NULL;
-    gboolean rtl = ns_pango_context_get_base_dir(
-        ns_pango_layout_get_context(layout)) == NS_PANGO_DIRECTION_RTL;
-    if (keyword_is(ta_v, "center"))
-        ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_CENTER);
-    else if (keyword_is(ta_v, "right") ||
-             (keyword_is(ta_v, "end") && !rtl) ||
-             (keyword_is(ta_v, "start") && rtl) ||
-             (!ta_v && rtl))
-        ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_RIGHT);
-    else if (keyword_is(ta_v, "justify"))
-        ns_pango_layout_set_justify(layout, TRUE);
-    else
-        ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_LEFT);
+    ns_paint_apply_text_align(layout, parent_style);
     ns_paint_start_align_overflowing_lines(layout);
 
     int index = 0, trailing = 0;
@@ -6487,27 +6439,6 @@ inline_box_form_hit(const ns_box *box, double local_x, double local_y,
 }
 
 static gboolean
-inline_attr_can_fragment(ns_inline_attr_kind k)
-{
-    switch (k) {
-    case NS_INLINE_INPUT_FIELD:
-    case NS_INLINE_INPUT_FIELD_FOCUSED:
-    case NS_INLINE_BUTTON:
-    case NS_INLINE_CHECKBOX:
-    case NS_INLINE_CHECKBOX_CHECKED:
-    case NS_INLINE_RADIO:
-    case NS_INLINE_RADIO_CHECKED:
-    case NS_INLINE_PROGRESS:
-    case NS_INLINE_METER:
-    case NS_INLINE_CARET:
-    case NS_INLINE_SELECTION:
-        return FALSE;
-    default:
-        return TRUE;
-    }
-}
-
-static gboolean
 inline_box_can_fragment(const ns_box *box, const ns_style *style,
                         double basis)
 {
@@ -6528,7 +6459,7 @@ inline_box_can_fragment(const ns_box *box, const ns_style *style,
         for (guint i = 0; i < box->attrs->len; i++) {
             const ns_inline_attr *a =
                 &g_array_index(box->attrs, ns_inline_attr, i);
-            if (!inline_attr_can_fragment(a->kind)) return FALSE;
+            if (!inline_attr_is_text_only(a->kind)) return FALSE;
         }
     }
     return TRUE;
@@ -6711,8 +6642,8 @@ overflow_axis_keyword(const ns_style *s, ns_css_prop axis)
     return v;
 }
 
-static gboolean
-overflow_kw_clips(const char *ov)
+gboolean
+ns_overflow_keyword_clips(const char *ov)
 {
     return ov && (g_ascii_strcasecmp(ov, "hidden") == 0 ||
                   g_ascii_strcasecmp(ov, "clip")   == 0 ||
@@ -6733,8 +6664,8 @@ box_clips_children(const ns_box *b)
     if (!b || !b->style) return FALSE;
     if (b->kind != NS_BOX_BLOCK && b->kind != NS_BOX_TABLE_CAPTION &&
         b->kind != NS_BOX_TABLE_CELL) return FALSE;
-    return overflow_kw_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_X)) ||
-           overflow_kw_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_Y));
+    return ns_overflow_keyword_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_X)) ||
+           ns_overflow_keyword_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_Y));
 }
 
 static gboolean
@@ -7032,7 +6963,6 @@ typedef struct float_ref {
     ns_box *box;
     int side;
     double top, bottom;
-    double outer_w;
     double left_edge, right_edge;
     gboolean intruding;
 } float_ref;
@@ -13100,7 +13030,6 @@ layout_block(ns_box *box, double parent_content_width, const ns_style *inherited
                     + c->padding.top + c->padding.bottom
                     + c->border.top + c->border.bottom
                     + c->margin.top + c->margin.bottom,
-                .outer_w = actual_outer,
                 .left_edge = c->x,
                 .right_edge = c->x + actual_outer,
             };
@@ -15543,7 +15472,7 @@ ns_box_match_ordinal(const ns_box *root, const char *needle,
     return 0;
 }
 
-const ns_node *
+static const ns_node *
 ns_box_hit_form_dom(const ns_box *root, double x, double y)
 {
     return ns_form_hit_walk(root, x, y, NULL);
@@ -15859,7 +15788,7 @@ sticky_inset(const ns_css_value *v, double basis, gboolean *set, double *out)
     *set = isfinite(*out);
 }
 
-void
+static void
 ns_box_sticky_offset_in(const ns_box *b, double sp_x0, double sp_y0,
                         double sp_x1, double sp_y1,
                         double *out_dx, double *out_dy)
@@ -16338,7 +16267,7 @@ ns_box_hit_dom_stack(const ns_box *root, double x, double y)
     return hits;
 }
 
-const ns_link_range *
+static const ns_link_range *
 ns_box_hit_link_range(const ns_box *root, double x, double y)
 {
     if (!root) return NULL;
@@ -16407,7 +16336,7 @@ ns_box_hit_link(const ns_box *root, double x, double y)
     return live && *live ? live : r->href;
 }
 
-const ns_node *
+static const ns_node *
 ns_box_hit_inline_dom(const ns_box *root, double x, double y)
 {
     if (!root) return NULL;

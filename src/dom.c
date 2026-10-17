@@ -12,6 +12,10 @@
 #include <math.h>
 #include <string.h>
 
+static void ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node);
+static void ns_doc_id_index_unregister(ns_node *doc, const char *id,
+                                       const ns_node *node);
+
 static void ns_class_set_clear(ns_node *el);
 static void ns_doc_id_index_attr_write(ns_node *el, const char *name,
                                        const char *value);
@@ -1084,30 +1088,24 @@ typedef struct ns_class_set {
 
 static ns_class_set g_nd_empty_class_set;
 
-static inline gboolean
-ns_clsset_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
 static ns_class_set *
 ns_class_set_build(const char *cls)
 {
     guint n = 0;
     for (const char *s = cls; *s; ) {
-        while (*s && ns_clsset_ws(*s)) s++;
+        while (*s && ns_is_ascii_ws(*s)) s++;
         if (!*s) break;
-        while (*s && !ns_clsset_ws(*s)) s++;
+        while (*s && !ns_is_ascii_ws(*s)) s++;
         n++;
     }
     if (n == 0) return &g_nd_empty_class_set;
     ns_class_set *cs = g_malloc(sizeof *cs + (gsize)n * sizeof cs->tok[0]);
     cs->n = 0;
     for (const char *s = cls; *s; ) {
-        while (*s && ns_clsset_ws(*s)) s++;
+        while (*s && ns_is_ascii_ws(*s)) s++;
         if (!*s) break;
         const char *t = s;
-        while (*s && !ns_clsset_ws(*s)) s++;
+        while (*s && !ns_is_ascii_ws(*s)) s++;
         cs->tok[cs->n].p = t;
         cs->tok[cs->n].len = (guint)(s - t);
         cs->n++;
@@ -1641,7 +1639,7 @@ ns_input_is_one_line_text(const ns_node *n)
     return TRUE;
 }
 
-static gboolean
+gboolean
 ns_node_is_embedded_document(const ns_node *n)
 {
     return n && n->kind == NS_NODE_DOCUMENT && n->parent != NULL;
@@ -1681,10 +1679,9 @@ ns_node_find_first_element(const ns_node *root, const char *tag)
     return ns_node_find_first_element_depth(root, tag, 0);
 }
 
-static gboolean ns_node_contains(const ns_node *ancestor, const ns_node *node);
 
-static gboolean
-ns_node_is_shadow_root_marked(const ns_node *n)
+gboolean
+ns_node_is_shadow_root(const ns_node *n)
 {
     return n && n->kind == NS_NODE_ELEMENT &&
            ns_element_get_attr(n, NS_SHADOW_ATTR) != NULL;
@@ -1694,7 +1691,7 @@ static ns_node *
 ns_node_find_by_id_depth(const ns_node *root, const char *id, int depth)
 {
     if (!root || !id || depth >= NS_DOM_MAX_DEPTH) return NULL;
-    if (depth > 0 && ns_node_is_shadow_root_marked(root)) return NULL;
+    if (depth > 0 && ns_node_is_shadow_root(root)) return NULL;
     if (root->kind == NS_NODE_ELEMENT) {
         const char *eid = ns_element_get_attr(root, "id");
         if (eid && strcmp(eid, id) == 0) return (ns_node *)root;
@@ -1744,7 +1741,7 @@ ns_doc_id_index_count(ns_node *doc, const char *id, int delta)
                             GUINT_TO_POINTER(cur - 1));
 }
 
-void
+static void
 ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node)
 {
     if (!doc || !doc->id_index || !id || !*id || !node) return;
@@ -1753,7 +1750,7 @@ ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node)
     g_hash_table_insert(doc->id_index, g_strdup(id), node);
 }
 
-void
+static void
 ns_doc_id_index_unregister(ns_node *doc, const char *id, const ns_node *node)
 {
     if (!doc || !doc->id_index || !id || !*id) return;
@@ -1767,7 +1764,7 @@ ns_doc_id_index_add_subtree(ns_node *doc, ns_node *n, int depth)
 {
     if (!n || depth >= NS_DOM_MAX_DEPTH) return;
     if (n != doc && ns_node_is_embedded_document(n)) return;
-    if (n != doc && ns_node_is_shadow_root_marked(n)) return;
+    if (n != doc && ns_node_is_shadow_root(n)) return;
     if (n->kind == NS_NODE_ELEMENT) {
         const char *eid = ns_element_get_attr(n, "id");
         if (eid && *eid) ns_doc_id_index_register(doc, eid, n);
@@ -1796,7 +1793,7 @@ ns_doc_id_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
 {
     if (!n || depth >= NS_DOM_MAX_DEPTH) return;
     if (n != doc && ns_node_is_embedded_document(n)) return;
-    if (n != doc && ns_node_is_shadow_root_marked(n)) return;
+    if (n != doc && ns_node_is_shadow_root(n)) return;
     if (n->kind == NS_NODE_ELEMENT) {
         const char *eid = ns_element_get_attr(n, "id");
         if (eid && *eid) ns_doc_id_index_unregister(doc, eid, n);
@@ -1809,7 +1806,7 @@ static gboolean
 ns_node_inside_shadow_root(const ns_node *n, const ns_node *stop)
 {
     for (const ns_node *p = n ? n->parent : NULL; p && p != stop; p = p->parent)
-        if (ns_node_is_shadow_root_marked(p)) return TRUE;
+        if (ns_node_is_shadow_root(p)) return TRUE;
     return FALSE;
 }
 
@@ -2077,22 +2074,16 @@ ns_doc_class_index_remove_token(GHashTable *map, const char *tok, gsize tok_len,
     if (bucket) ns_doc_index_bucket_remove(bucket, node);
 }
 
-static gboolean
-ns_class_is_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
 void
 ns_doc_class_index_register(ns_node *doc, const char *class_attr, ns_node *node)
 {
     if (!doc || !doc->class_index || !class_attr || !node) return;
     const char *p = class_attr;
     while (*p) {
-        while (*p && ns_class_is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !ns_class_is_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         ns_doc_class_index_add_token(doc->class_index, tok, (gsize)(p - tok), node);
     }
 }
@@ -2103,10 +2094,10 @@ ns_doc_class_index_unregister(ns_node *doc, const char *class_attr, ns_node *nod
     if (!doc || !doc->class_index || !class_attr || !node) return;
     const char *p = class_attr;
     while (*p) {
-        while (*p && ns_class_is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !ns_class_is_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         ns_doc_class_index_remove_token(doc->class_index, tok, (gsize)(p - tok), node);
     }
 }
@@ -2657,7 +2648,7 @@ ns_form_reset_owned_controls(ns_node *form, ns_node *root, const ns_node *doc)
     ns_form_reset_walk(form, root ? root : form, doc ? doc : form, 0);
 }
 
-static gboolean
+gboolean
 ns_node_contains(const ns_node *ancestor, const ns_node *node)
 {
     for (const ns_node *p = node; p; p = p->parent)
@@ -2769,7 +2760,7 @@ collect_all_text(const ns_node *n, GString *out, int depth)
         return;
     }
     for (const ns_node *c = n->first_child; c; c = c->next_sibling)
-        if (!ns_node_is_shadow_root_marked(c))
+        if (!ns_node_is_shadow_root(c))
             collect_all_text(c, out, depth + 1);
 }
 
@@ -2792,6 +2783,7 @@ ns_node_collect_all_text_len(const ns_node *root, size_t *out_len)
 }
 
 #include "html.h"
+
 #define is_void_tag ns_html_is_void
 
 static gboolean
@@ -2836,6 +2828,28 @@ ns_shadow_root_included(const ns_node *sr, const ns_html_ser_opts *opts)
            ns_element_get_attr(sr, "data-nd-shadow-serializable") != NULL;
 }
 
+static void
+serialize_doctype(const ns_node *n, GString *out)
+{
+    g_string_append(out, "<!DOCTYPE ");
+    g_string_append(out, n->name ? n->name : "");
+    if (n->public_id && *n->public_id) {
+        g_string_append(out, " PUBLIC \"");
+        g_string_append(out, n->public_id);
+        g_string_append_c(out, '"');
+        if (n->system_id && *n->system_id) {
+            g_string_append(out, " \"");
+            g_string_append(out, n->system_id);
+            g_string_append_c(out, '"');
+        }
+    } else if (n->system_id && *n->system_id) {
+        g_string_append(out, " SYSTEM \"");
+        g_string_append(out, n->system_id);
+        g_string_append_c(out, '"');
+    }
+    g_string_append_c(out, '>');
+}
+
 static void serialize_node_opts(const ns_node *n, GString *out,
                                 gboolean include_self, int depth,
                                 const ns_html_ser_opts *opts);
@@ -2876,23 +2890,7 @@ serialize_node_opts(const ns_node *n, GString *out, gboolean include_self,
         return;
     }
     if (n->kind == NS_NODE_DOCTYPE) {
-        g_string_append(out, "<!DOCTYPE ");
-        g_string_append(out, n->name ? n->name : "");
-        if (n->public_id && *n->public_id) {
-            g_string_append(out, " PUBLIC \"");
-            g_string_append(out, n->public_id);
-            g_string_append_c(out, '"');
-            if (n->system_id && *n->system_id) {
-                g_string_append(out, " \"");
-                g_string_append(out, n->system_id);
-                g_string_append_c(out, '"');
-            }
-        } else if (n->system_id && *n->system_id) {
-            g_string_append(out, " SYSTEM \"");
-            g_string_append(out, n->system_id);
-            g_string_append_c(out, '"');
-        }
-        g_string_append_c(out, '>');
+        serialize_doctype(n, out);
         return;
     }
     gboolean raw_text = serialize_raw_text(n);
@@ -3170,23 +3168,7 @@ xml_serialize_node(const ns_node *n, GString *out, const char *parent_ns,
         return;
     }
     if (n->kind == NS_NODE_DOCTYPE) {
-        g_string_append(out, "<!DOCTYPE ");
-        g_string_append(out, n->name ? n->name : "");
-        if (n->public_id && *n->public_id) {
-            g_string_append(out, " PUBLIC \"");
-            g_string_append(out, n->public_id);
-            g_string_append_c(out, '"');
-            if (n->system_id && *n->system_id) {
-                g_string_append(out, " \"");
-                g_string_append(out, n->system_id);
-                g_string_append_c(out, '"');
-            }
-        } else if (n->system_id && *n->system_id) {
-            g_string_append(out, " SYSTEM \"");
-            g_string_append(out, n->system_id);
-            g_string_append_c(out, '"');
-        }
-        g_string_append_c(out, '>');
+        serialize_doctype(n, out);
         return;
     }
     if (n->kind == NS_NODE_DOCUMENT) {

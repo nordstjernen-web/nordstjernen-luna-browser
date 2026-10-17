@@ -50,6 +50,5 @@ gboolean ns_audio_context_status(NsAudioContext *context, const char *token,
     out->error = NS_AUDIO_ERROR_NO_DEVICE;
     return TRUE;
 }
-void ns_audio_context_reset(NsAudioContext *context) { (void)context; }
 void ns_audio_context_destroy(NsAudioContext *context) { g_free(context); }
 void ns_audio_shutdown(void) {}

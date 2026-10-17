@@ -84,7 +84,6 @@ typedef struct ns_response {
     int   redirect_count;
 } ns_response;
 
-
 void ns_response_free(ns_response *resp);
 
 char *ns_build_error_page(const char *url, long status,
@@ -105,12 +104,6 @@ typedef GBytes *(*ns_net_blob_resolver)(const char *url, char **out_type,
                                         gpointer user_data);
 void ns_net_set_blob_resolver(ns_net_blob_resolver resolver, gpointer user_data);
 GBytes *ns_net_resolve_blob(const char *url, char **out_type);
-
-void ns_net_fetch_async(const char        *url,
-                        const char        *top_url,
-                        GCancellable      *cancellable,
-                        GAsyncReadyCallback callback,
-                        gpointer            user_data);
 
 void ns_net_preconnect_async(const char *url);
 
@@ -164,7 +157,6 @@ ns_response *ns_net_request_blocking(const char        *url,
                                      GCancellable      *cancellable,
                                      GError           **error);
 
-char    *ns_net_hsts_upgrade(const char *url);
 gboolean ns_net_hsts_should_upgrade(const char *host);
 char    *ns_net_https_first_upgrade(const char *url);
 gboolean ns_net_header_is_nosniff(const char *value);
@@ -192,7 +184,6 @@ char    *ns_url_resolve_encoded(const char *base, const char *href,
 char    *ns_url_set_component_len(const char *href, const char *component,
                                   const char *value, size_t value_len);
 
-
 typedef struct ns_url_parts {
     char *href;
     char *protocol;
@@ -214,9 +205,8 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(ns_url_parts, ns_url_parts_free)
 char *ns_net_cookies_for_js(const char *url);
 gboolean ns_net_cookie_jar_version(const char *url, guint64 *version);
 void  ns_net_cookie_store_from_js(const char *url, const char *cookie);
-void  ns_net_cookies_clear(void);
-void  ns_net_site_storage_clear(void);
 
+void  ns_rmrf(const char *path);
 void  ns_net_set_proxy_override(const char *proxy_url);
 void  ns_net_set_allow_file_urls(gboolean allow);
 gboolean ns_net_file_urls_allowed(void);
@@ -227,11 +217,6 @@ char *ns_net_proxy_mask(const char *proxy_url);
 char *ns_executable_dir(void);
 void  ns_net_apply_curl_proxy(void *curl_handle, const char *url);
 void  ns_net_apply_curl_tls(void *curl_handle);
-const char *ns_net_proxy_override(void);
-const char *ns_net_http_proxy(void);
-const char *ns_net_https_proxy(void);
-const char *ns_net_no_proxy(void);
-const char *ns_net_ca_bundle_path(void);
 
 gboolean ns_address_is_search(const char *s);
 char *ns_search_url_for(const char *query);
@@ -241,7 +226,6 @@ char *ns_url_from_local_path(const char *path);
 char *ns_multipart_boundary(void);
 void  ns_multipart_quote_field(GString *out, const char *s);
 
-void  ns_form_urlencoded_append(GString *out, const char *s);
 void  ns_form_set_submission_charset(const char *charset);
 void  ns_form_urlencoded_append_pair(GString *out, gboolean *first,
                                      const char *name, const char *value);

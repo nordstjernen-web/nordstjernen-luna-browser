@@ -31,6 +31,36 @@ Significant changes in each release:
   `XMLHttpRequest` already treated it. A local page still loads its own
   scripts, style sheets and images. Nordstjernen and Southstar take the
   same fix, where `fetch()` and XHR could read the files directly.
+* A source-wide sweep for unused, duplicated and bloated code removes
+  about 2,250 lines from the engine without changing what pages see.
+  - A link with section garbage collection found 24 functions nothing
+    called, and 183 functions were exported through headers but only
+    used in their own file (117 of them canvas internals that
+    `js_internal.h` still declared from before `js_canvas.c` was split
+    out of `js.c`). The dead ones are gone and the rest are static.
+    Fields and counters that were written and never read, 27 functions'
+    unused parameters, a no-op `ns_idb_db_close()` called 19 times and
+    the native `__ndMseRanges` binding no script called went with them.
+  - Shared helpers replace copies: one SQLite open/harden/exec helper
+    for the cache, history and IndexedDB; one ASCII-whitespace test for
+    eleven; one implementation each of `addEventListener` and
+    `removeEventListener` for elements, documents and windows; one
+    directory-listing page for `file:` and `ftp:`; one Wuffs decoder
+    setup for still and animated images; and single copies of the
+    iframe location/history shim, the `<progress>`/`<meter>` state
+    algorithms, the meta-CSP walk and the recursive delete.
+  - The HTML charset prescan used its own outdated copy of the Encoding
+    Standard's label table and now uses the full one in `encoding.c`, so
+    labels it lacked, such as `unicode-1-1-utf-8`, `ucs-2` and
+    `csunicode`, are recognised.
+  - Caret placement, word selection and selection extents no longer
+    create and destroy a throwaway Cairo surface on every call.
+  - The microphone module only held stubs that produced the same
+    analyser output as no microphone, and is removed. Granting a page
+    the camera no longer opens `/dev/video0` and starts V4L2 streaming,
+    since no frame was ever read from it; device enumeration and the
+    per-site permission are unchanged. The `camera_enabled` config key,
+    written on every grant and never read, is gone.
 
 1.0.14:
 =======

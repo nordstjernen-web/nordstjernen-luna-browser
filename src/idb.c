@@ -14,6 +14,7 @@
 #include "config.h"
 #include "js.h"
 #include "quickjs_compat.h"
+#include "sqlite_db.h"
 
 typedef struct ns_idb_db {
     sqlite3 *db;
@@ -36,12 +37,6 @@ ns_idb_db_free(ns_idb_db *h)
     if (h->db) sqlite3_close(h->db);
     g_free(h->path);
     g_free(h);
-}
-
-static void
-ns_idb_db_close(ns_idb_db *h)
-{
-    (void)h;
 }
 
 static void
@@ -142,34 +137,11 @@ ns_idb_path_for_name(JSContext *ctx, const char *name)
 static gboolean
 ns_idb_exec(sqlite3 *db, const char *sql)
 {
-    char *err = NULL;
-    int rc = sqlite3_exec(db, sql, NULL, NULL, &err);
-    if (rc != SQLITE_OK)
-        g_warning("idb: sqlite exec failed: %s", err ? err : sqlite3_errstr(rc));
-    if (err) sqlite3_free(err);
-    return rc == SQLITE_OK;
+    return ns_sqlite_exec(db, "idb", sql);
 }
 
 #define NS_IDB_MAX_PAGES 65536
 #define NS_IDB_MAX_ORIGIN_PAGES (256 * 1024)
-
-static void
-ns_idb_configure(sqlite3 *db)
-{
-#ifdef SQLITE_DBCONFIG_DEFENSIVE
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, 1, NULL);
-#endif
-    sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 0, NULL);
-#ifdef SQLITE_DBCONFIG_TRUSTED_SCHEMA
-    sqlite3_db_config(db, SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0, NULL);
-#endif
-#ifdef SQLITE_DBCONFIG_DQS_DDL
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DQS_DDL, 0, NULL);
-#endif
-#ifdef SQLITE_DBCONFIG_DQS_DML
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DQS_DML, 0, NULL);
-#endif
-}
 
 static gboolean
 ns_idb_schema(sqlite3 *db)
@@ -248,16 +220,8 @@ ns_idb_open_db(JSContext *ctx, const char *name)
     }
     g_autofree char *path = ns_idb_path_for_name(ctx, name);
     if (!path) return NULL;
-    sqlite3 *db = NULL;
-    int rc = sqlite3_open_v2(path, &db, NS_IDB_OPEN_FLAGS, NULL);
-    if (rc != SQLITE_OK) {
-        g_warning("idb: could not open %s: %s", path,
-                  db ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
-        if (db) sqlite3_close(db);
-        return NULL;
-    }
-    ns_idb_configure(db);
-    sqlite3_busy_timeout(db, 2500);
+    sqlite3 *db = ns_sqlite_open("idb", path, NS_IDB_OPEN_FLAGS);
+    if (!db) return NULL;
     if (!ns_idb_schema(db)) {
         sqlite3_close(db);
         return NULL;
@@ -421,7 +385,6 @@ ns_idb_backend_open(JSContext *ctx, JSValueConst this_val,
     }
     JSValue out = ns_idb_info_for(ctx, h, name);
     JS_FreeCString(ctx, name);
-    ns_idb_db_close(h);
     return out;
 }
 
@@ -443,7 +406,6 @@ ns_idb_backend_set_version(JSContext *ctx, JSValueConst this_val,
     char buf[64];
     g_snprintf(buf, sizeof(buf), "%" G_GINT64_FORMAT, (gint64)version);
     gboolean ok = ns_idb_set_meta(h->db, "version", buf);
-    ns_idb_db_close(h);
     return JS_NewBool(ctx, ok);
 }
 
@@ -478,14 +440,12 @@ ns_idb_backend_create_store(JSContext *ctx, JSValueConst this_val,
         ok = sqlite3_step(st) == SQLITE_DONE;
         if (!ok && sqlite3_errcode(h->db) == SQLITE_CONSTRAINT) {
             sqlite3_finalize(st);
-            ns_idb_db_close(h);
             ns_idb_free_cstrings(ctx, 2, store, key_path);
             return ns_idb_throw(ctx, "ConstraintError", "Object store already exists");
         }
     }
     if (st) sqlite3_finalize(st);
     JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 2, store, key_path);
     return out;
 }
@@ -517,7 +477,6 @@ ns_idb_backend_delete_store(JSContext *ctx, JSValueConst this_val,
     }
     if (st) sqlite3_finalize(st);
     JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     JS_FreeCString(ctx, store);
     return out;
 }
@@ -558,14 +517,12 @@ ns_idb_backend_create_index(JSContext *ctx, JSValueConst this_val,
         ok = sqlite3_step(st) == SQLITE_DONE;
         if (!ok && sqlite3_errcode(h->db) == SQLITE_CONSTRAINT) {
             sqlite3_finalize(st);
-            ns_idb_db_close(h);
             ns_idb_free_cstrings(ctx, 3, store, name, key_path);
             return ns_idb_throw(ctx, "ConstraintError", "Index already exists");
         }
     }
     if (st) sqlite3_finalize(st);
     JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 3, store, name, key_path);
     return out;
 }
@@ -600,7 +557,6 @@ ns_idb_backend_delete_index(JSContext *ctx, JSValueConst this_val,
     }
     if (st) sqlite3_finalize(st);
     JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 2, store, name);
     return out;
 }
@@ -625,7 +581,6 @@ ns_idb_backend_next_key(JSContext *ctx, JSValueConst this_val,
     }
     if (sqlite3_exec(h->db, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK) {
         JSValue e = ns_idb_throw_sql(ctx, h->db);
-        ns_idb_db_close(h);
         JS_FreeCString(ctx, store);
         return e;
     }
@@ -654,7 +609,6 @@ ns_idb_backend_next_key(JSContext *ctx, JSValueConst this_val,
     if (st) sqlite3_finalize(st);
     sqlite3_exec(h->db, ok ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
     JSValue out = ok ? JS_NewInt64(ctx, key) : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     JS_FreeCString(ctx, store);
     return out;
 }
@@ -814,7 +768,6 @@ ns_idb_backend_put(JSContext *ctx, JSValueConst this_val,
     gboolean ok = TRUE;
     if (sqlite3_exec(h->db, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK) {
         JSValue e = ns_idb_throw_sql(ctx, h->db);
-        ns_idb_db_close(h);
         ns_idb_free_cstrings(ctx, 2, store, key);
         return e;
     }
@@ -829,7 +782,6 @@ ns_idb_backend_put(JSContext *ctx, JSValueConst this_val,
             if (sqlite3_step(exists) == SQLITE_ROW) {
                 sqlite3_finalize(exists);
                 sqlite3_exec(h->db, "ROLLBACK", NULL, NULL, NULL);
-                ns_idb_db_close(h);
                 ns_idb_free_cstrings(ctx, 2, store, key);
                 return ns_idb_throw(ctx, "ConstraintError", "Key already exists");
             }
@@ -886,7 +838,6 @@ ns_idb_backend_put(JSContext *ctx, JSValueConst this_val,
     JSValue out = ok ? JS_TRUE
                      : (JS_HasException(ctx) ? JS_EXCEPTION
                                              : ns_idb_throw_sql(ctx, h->db));
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 2, store, key);
     return out;
 }
@@ -922,7 +873,6 @@ ns_idb_backend_get(JSContext *ctx, JSValueConst this_val,
                                     sqlite3_column_bytes(st, 0));
     }
     if (st) sqlite3_finalize(st);
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 2, store, key);
     return out;
 }
@@ -963,7 +913,6 @@ ns_idb_backend_records(JSContext *ctx, JSValueConst this_val,
         }
     }
     if (st) sqlite3_finalize(st);
-    ns_idb_db_close(h);
     JS_FreeCString(ctx, store);
     return arr;
 }
@@ -1029,7 +978,6 @@ ns_idb_backend_index_records(JSContext *ctx, JSValueConst this_val,
         }
     }
     if (st) sqlite3_finalize(st);
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 3, store, index, only_key);
     return arr;
 }
@@ -1064,7 +1012,6 @@ ns_idb_backend_delete_record(JSContext *ctx, JSValueConst this_val,
     }
     if (st) sqlite3_finalize(st);
     JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     ns_idb_free_cstrings(ctx, 2, store, key);
     return out;
 }
@@ -1097,7 +1044,6 @@ ns_idb_backend_clear(JSContext *ctx, JSValueConst this_val,
     }
     if (st) sqlite3_finalize(st);
     JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
-    ns_idb_db_close(h);
     JS_FreeCString(ctx, store);
     return out;
 }
@@ -1116,7 +1062,6 @@ ns_idb_backend_info(JSContext *ctx, JSValueConst this_val,
         return ns_idb_throw(ctx, "UnknownError", "Could not open IndexedDB database");
     }
     JSValue out = ns_idb_info_for(ctx, h, name);
-    ns_idb_db_close(h);
     JS_FreeCString(ctx, name);
     return out;
 }
@@ -1165,7 +1110,7 @@ ns_idb_backend_databases(JSContext *ctx, JSValueConst this_val,
             if (db) sqlite3_close(db);
             continue;
         }
-        ns_idb_configure(db);
+        ns_sqlite_harden(db);
         g_autofree char *name = ns_idb_get_meta(db, "name");
         int64_t version = ns_idb_get_version(db);
         sqlite3_close(db);
