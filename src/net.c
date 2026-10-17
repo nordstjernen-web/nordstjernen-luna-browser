@@ -1431,12 +1431,15 @@ cookie_partition_get(const char *site)
     return p;
 }
 
+static gint ns_cookie_writes;
+
 static void
 cookie_partition_flush(ns_cookie_partition *p)
 {
     if (!p || !p->holder) return;
     g_mutex_lock(&p->lock);
     curl_easy_setopt(p->holder, CURLOPT_COOKIELIST, "FLUSH");
+    g_atomic_int_inc(&ns_cookie_writes);
     g_mutex_unlock(&p->lock);
 }
 
@@ -1458,7 +1461,17 @@ cookie_partition_add(ns_cookie_partition *p, const char *line)
     g_mutex_lock(&p->lock);
     curl_easy_setopt(p->holder, CURLOPT_COOKIELIST, line);
     curl_easy_setopt(p->holder, CURLOPT_COOKIELIST, "FLUSH");
+    g_atomic_int_inc(&ns_cookie_writes);
     g_mutex_unlock(&p->lock);
+}
+
+gboolean
+ns_net_cookie_jar_version(const char *url, guint64 *version)
+{
+    g_autofree char *site = url ? ns_url_site_from(url) : NULL;
+    if (!site || !*site) return FALSE;
+    *version = (guint64)(guint)g_atomic_int_get(&ns_cookie_writes) + 1;
+    return TRUE;
 }
 
 static void

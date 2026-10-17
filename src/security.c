@@ -23,10 +23,12 @@
 #ifdef __linux__
 #include <sys/random.h>
 #include <linux/landlock.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #ifdef NS_HAVE_SECCOMP
+#include <linux/seccomp.h>
 #include <seccomp.h>
 #endif
 #endif
@@ -825,6 +827,10 @@ ns_security_seccomp_init(void)
         if (nr == __NR_SCMP_ERROR) continue;
         (void)seccomp_rule_add(ctx, SCMP_ACT_ALLOW, nr, 0);
     }
+    int filter_nr = seccomp_syscall_resolve_name("seccomp");
+    if (filter_nr != __NR_SCMP_ERROR)
+        (void)seccomp_rule_add(ctx, SCMP_ACT_ALLOW, filter_nr, 1,
+                               SCMP_A0(SCMP_CMP_EQ, SECCOMP_SET_MODE_FILTER, 0));
 
     int rc = seccomp_load(ctx);
     if (rc != 0) {
@@ -832,6 +838,51 @@ ns_security_seccomp_init(void)
                   g_strerror(-rc));
     }
     seccomp_release(ctx);
+#endif
+}
+
+#ifdef NS_HAVE_SECCOMP
+static void
+seccomp_deny_exec(scmp_filter_ctx ctx, const char *name, gboolean anonymous_only)
+{
+    int nr = seccomp_syscall_resolve_name(name);
+    if (nr == __NR_SCMP_ERROR) return;
+    if (anonymous_only)
+        (void)seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EACCES), nr, 2,
+                               SCMP_A2(SCMP_CMP_MASKED_EQ, PROT_EXEC, PROT_EXEC),
+                               SCMP_A3(SCMP_CMP_MASKED_EQ, MAP_ANONYMOUS,
+                                       MAP_ANONYMOUS));
+    else
+        (void)seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EACCES), nr, 1,
+                               SCMP_A2(SCMP_CMP_MASKED_EQ, PROT_EXEC, PROT_EXEC));
+}
+#endif
+
+void
+ns_security_deny_exec_memory(gboolean whole_process)
+{
+    if (g_getenv("NS_NO_SANDBOX")) return;
+    if (g_getenv("NS_NO_SECCOMP")) return;
+
+#ifdef NS_HAVE_SECCOMP
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return;
+    scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
+    if (!ctx) return;
+    if (whole_process)
+        (void)seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
+#ifndef __i386__
+    seccomp_deny_exec(ctx, "mmap", TRUE);
+#endif
+    seccomp_deny_exec(ctx, "mmap2", TRUE);
+    seccomp_deny_exec(ctx, "mprotect", FALSE);
+    seccomp_deny_exec(ctx, "pkey_mprotect", FALSE);
+    int rc = seccomp_load(ctx);
+    if (rc != 0)
+        g_info("seccomp: executable-memory filter not loaded: %s",
+               g_strerror(-rc));
+    seccomp_release(ctx);
+#else
+    (void)whole_process;
 #endif
 }
 
@@ -921,6 +972,12 @@ ns_security_seccomp_init(void)
 {
 }
 
+void
+ns_security_deny_exec_memory(gboolean whole_process)
+{
+    (void)whole_process;
+}
+
 #else
 
 void
@@ -932,6 +989,12 @@ ns_security_sandbox_init(const char *self_exe)
 void
 ns_security_seccomp_init(void)
 {
+}
+
+void
+ns_security_deny_exec_memory(gboolean whole_process)
+{
+    (void)whole_process;
 }
 
 #endif

@@ -531,6 +531,8 @@ main(int argc, char **argv)
     if (proc_mode)
         ns_security_add_writable_dir("/dev/shm");
     ns_security_sandbox_init(g_self_exe);
+    if (!proc_mode)
+        ns_security_deny_exec_memory(TRUE);
     ns_security_seccomp_init();
     ns_debug_log_init();
     g_log_set_writer_func(ns_log_writer, NULL, NULL);

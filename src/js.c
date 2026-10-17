@@ -2603,6 +2603,7 @@ ns_partition_apply(ns_js *js, const char *new_url)
 
     g_free(js->cookie_value);
     js->cookie_value = NULL;
+    js->cookie_version = 0;
     if (js->cookie_buckets) {
         const char *cv = g_hash_table_lookup(js->cookie_buckets, new_key);
         if (cv) js->cookie_value = g_strdup(cv);
@@ -41441,6 +41442,9 @@ ns_js_urls_same_origin(const char *a, const char *b)
     if (ns_js_urls_share_http_authority(a, b)) return TRUE;
     if (ns_url_is_http_or_https(a) || ns_url_is_http_or_https(b))
         return ns_url_same_origin(a, b);
+    if (g_ascii_strncasecmp(a, "file:", 5) == 0 ||
+        g_ascii_strncasecmp(b, "file:", 5) == 0)
+        return FALSE;
     const char *ca = strchr(a, ':'), *cb = strchr(b, ':');
     return ca && cb && ca - a == cb - b &&
            g_ascii_strncasecmp(a, b, (gsize)(ca - a)) == 0;
@@ -51795,13 +51799,28 @@ ns_document_is_other_document(ns_js *js, JSValueConst this_val)
     return js && node && js->main_document && node != js->main_document;
 }
 
+static void
+ns_document_refresh_cookie(ns_js *js)
+{
+    guint64 version;
+    if (!js->current_url || !*js->current_url ||
+        !ns_net_cookie_jar_version(js->current_url, &version) ||
+        version == js->cookie_version)
+        return;
+    char *visible = ns_net_cookies_for_js(js->current_url);
+    g_free(js->cookie_value);
+    js->cookie_value = visible ? visible : g_strdup("");
+    js->cookie_version = version;
+}
+
 static JSValue
 ns_document_get_cookie(JSContext *ctx, JSValueConst this_val)
 {
-    if (!js_from_ctx(ctx) ||
-        ns_document_is_other_document(js_from_ctx(ctx), this_val))
+    ns_js *js = js_from_ctx(ctx);
+    if (!js || ns_document_is_other_document(js, this_val))
         return JS_NewString(ctx, "");
-    return JS_NewString(ctx, js_from_ctx(ctx)->cookie_value ? js_from_ctx(ctx)->cookie_value : "");
+    ns_document_refresh_cookie(js);
+    return JS_NewString(ctx, js->cookie_value ? js->cookie_value : "");
 }
 
 static void
@@ -51948,6 +51967,7 @@ ns_document_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     js->cookie_value = jar;
     if (js->current_url && *js->current_url) {
         ns_net_cookie_store_from_js(js->current_url, s);
+        ns_net_cookie_jar_version(js->current_url, &js->cookie_version);
         char *visible = ns_net_cookies_for_js(js->current_url);
         g_free(js->cookie_value);
         js->cookie_value = visible ? visible : g_strdup("");
@@ -53138,6 +53158,7 @@ static void
 ns_js_seed_cookies_from_jar(ns_js *js)
 {
     if (!js || !js->current_url || !*js->current_url) return;
+    ns_net_cookie_jar_version(js->current_url, &js->cookie_version);
     char *jar = ns_net_cookies_for_js(js->current_url);
     if (!jar) return;
     if (!*jar) { g_free(jar); return; }
