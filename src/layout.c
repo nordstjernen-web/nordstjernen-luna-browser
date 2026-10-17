@@ -3665,7 +3665,7 @@ build_inline_run_impl(const ns_node *first, const ns_node *last_excl,
             prev_ws = TRUE;
             continue;
         }
-        gboolean ws = (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f');
+        gboolean ws = ns_is_ascii_ws(c);
         if (ws) {
             if (!prev_ws) {
                 map[i] = collapsed->len;
@@ -3930,12 +3930,6 @@ typedef struct {
 } srcset_candidate;
 
 static gboolean
-srcset_is_space(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
-}
-
-static gboolean
 srcset_valid_integer(const char *s, gsize n)
 {
     if (n == 0) return FALSE;
@@ -4018,13 +4012,13 @@ typedef enum {
 static const char *
 srcset_tokenize_descriptors(const char *p, GPtrArray *descriptors)
 {
-    while (srcset_is_space(*p)) p++;
+    while (ns_is_ascii_ws(*p)) p++;
     GString *cur = g_string_new(NULL);
     srcset_state state = SRCSET_IN_DESCRIPTOR;
     for (;; p++) {
         char c = *p;
         if (state == SRCSET_IN_DESCRIPTOR) {
-            if (srcset_is_space(c)) {
+            if (ns_is_ascii_ws(c)) {
                 if (cur->len) {
                     g_ptr_array_add(descriptors, g_strdup(cur->str));
                     g_string_truncate(cur, 0);
@@ -4045,7 +4039,7 @@ srcset_tokenize_descriptors(const char *p, GPtrArray *descriptors)
             if (c == ')') state = SRCSET_IN_DESCRIPTOR;
         } else {
             if (c == '\0') break;
-            if (!srcset_is_space(c)) {
+            if (!ns_is_ascii_ws(c)) {
                 state = SRCSET_IN_DESCRIPTOR;
                 p--;
             }
@@ -4062,10 +4056,10 @@ srcset_parse(const char *input)
     GArray *out = g_array_new(FALSE, FALSE, sizeof(srcset_candidate));
     const char *p = input ? input : "";
     for (;;) {
-        while (srcset_is_space(*p) || *p == ',') p++;
+        while (ns_is_ascii_ws(*p) || *p == ',') p++;
         if (!*p) break;
         const char *url_s = p;
-        while (*p && !srcset_is_space(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         gsize url_len = (gsize)(p - url_s);
         GPtrArray *descriptors = g_ptr_array_new_with_free_func(g_free);
         if (url_s[url_len - 1] == ',') {

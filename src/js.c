@@ -2083,22 +2083,16 @@ ns_tlist_node(JSValueConst this_val, const char **out_attr)
 }
 
 static gboolean
-ns_ascii_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
-}
-
-static gboolean
 class_attr_contains(const char *cls, const char *token, gsize tlen,
                     const char **out_start, gsize *out_len)
 {
     if (!cls) return FALSE;
     const char *p = cls;
     while (*p) {
-        while (ns_ascii_ws(*p)) p++;
+        while (ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !ns_ascii_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         if ((gsize)(p - tok) == tlen && strncmp(tok, token, tlen) == 0) {
             if (out_start) *out_start = tok;
             if (out_len)   *out_len = (gsize)(p - tok);
@@ -2118,7 +2112,7 @@ ns_tlist_validate(JSContext *ctx, const char *token)
         return -1;
     }
     for (const char *p = token; *p; p++)
-        if (ns_ascii_ws(*p)) {
+        if (ns_is_ascii_ws(*p)) {
             ns_throw_dom_exception(ctx, "InvalidCharacterError", 5,
                 "The token provided contains HTML space characters, "
                 "which are not valid in tokens.");
@@ -2134,10 +2128,10 @@ ns_tlist_set_parse(const char *cls)
     if (!cls) return set;
     const char *p = cls;
     while (*p) {
-        while (ns_ascii_ws(*p)) p++;
+        while (ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !ns_ascii_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         gsize len = (gsize)(p - tok);
         gboolean dup = FALSE;
         for (guint i = 0; i < set->len && !dup; i++) {
@@ -2275,7 +2269,7 @@ ns_tlist_replace(JSContext *ctx, JSValueConst this_val,
     for (guint ti = 0; ti < 2; ti++) {
         const char *t = g_ptr_array_index(toks, ti);
         for (const char *p = t; *p; p++) {
-            if (ns_ascii_ws(*p)) {
+            if (ns_is_ascii_ws(*p)) {
                 g_ptr_array_free(toks, TRUE);
                 ns_throw_dom_exception(ctx, "InvalidCharacterError", 5,
                     "The token provided contains HTML space characters, "
@@ -4887,7 +4881,7 @@ ns_html_parse_int(const char *s, gint64 *out)
 {
     if (!s) return FALSE;
     const char *p = s;
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\f' || *p == '\r')
+    while (ns_is_ascii_ws(*p))
         p++;
     gint64 sign = 1;
     if (*p == '-') { sign = -1; p++; }
@@ -16011,7 +16005,7 @@ ns_window_atob(JSContext *ctx, JSValueConst this_val,
     GString *clean = g_string_sized_new(slen + 4);
     for (size_t i = 0; i < slen; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') continue;
+        if (ns_is_ascii_ws(c)) continue;
         g_string_append_c(clean, (char)c);
     }
     if (clean->len % 4 == 0) {
@@ -31101,12 +31095,6 @@ ns_collect_by_tag(const ns_node *n, const char *tag, JSContext *ctx,
 }
 
 static gboolean
-class_is_ascii_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
-}
-
-static gboolean
 element_has_class_token(const ns_node *n, const char *want, gsize wl,
                         gboolean ci)
 {
@@ -31114,9 +31102,9 @@ element_has_class_token(const ns_node *n, const char *want, gsize wl,
     if (!cls) return FALSE;
     const char *p = cls;
     while (*p) {
-        while (class_is_ascii_ws(*p)) p++;
+        while (ns_is_ascii_ws(*p)) p++;
         const char *tok = p;
-        while (*p && !class_is_ascii_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         if ((gsize)(p - tok) == wl &&
             (ci ? g_ascii_strncasecmp(tok, want, wl) == 0
                 : strncmp(tok, want, wl) == 0))
@@ -31131,10 +31119,10 @@ element_has_class(const ns_node *n, const char *want, gboolean ci)
     const char *p = want;
     gboolean any = FALSE;
     while (*p) {
-        while (class_is_ascii_ws(*p)) p++;
+        while (ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !class_is_ascii_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         gsize wl = (gsize)(p - tok);
         if (wl == 0) continue;
         any = TRUE;
@@ -31412,7 +31400,7 @@ ns_element_has_class(const ns_node *n, const char *cls)
     gsize cls_len = strlen(cls);
     const char *p = list;
     while (*p) {
-        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f') p++;
+        while (ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
         while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '\f') p++;
@@ -43159,62 +43147,63 @@ ns_iframe_ensure_content_root(ns_node *iframe)
     return root;
 }
 
+#define NS_IFRAME_LOCATION_HISTORY_JS \
+    "  var url = initialURL || 'about:blank';" \
+    "  var hashL = [], popL = [], onhash = null, onpop = null, state = null;" \
+    "  var msgL = [], onmsg = null;" \
+    "  function mk(u, b){ try { return new realWin.URL(u, b || url); } catch(e){ return null; } }" \
+    "  function fire(list, on, ev){" \
+    "    var c = list.slice();" \
+    "    for (var i=0;i<c.length;i++){ try { c[i].call(win, ev); } catch(e){} }" \
+    "    if (on) { try { on.call(win, ev); } catch(e){} }" \
+    "  }" \
+    "  function evt(type, props){" \
+    "    var e = null;" \
+    "    try { if (realWin.Event) { e = new realWin.Event(type); } } catch(x){}" \
+    "    if (!e) e = { type: type };" \
+    "    if (props) for (var k in props) { try { e[k] = props[k]; } catch(x){} }" \
+    "    return e;" \
+    "  }" \
+    "  function fireHash(o, n){ fire(hashL, onhash, evt('hashchange', {oldURL:o, newURL:n})); }" \
+    "  function firePop(){ fire(popL, onpop, evt('popstate', {state:state})); }" \
+    "  function sameDoc(a, b){ var ua=mk(a), ub=mk(b);" \
+    "    return !!ua && !!ub && ua.origin===ub.origin && ua.pathname===ub.pathname && ua.search===ub.search; }" \
+    "  var loc = {};" \
+    "  ['protocol','host','hostname','port','pathname','search','origin'].forEach(function(p){" \
+    "    Object.defineProperty(loc, p, { configurable:true, enumerable:true," \
+    "      get: function(){ var u=mk(url); return u ? u[p] : ''; } }); });" \
+    "  Object.defineProperty(loc, 'href', { configurable:true, enumerable:true," \
+    "    get: function(){ return url; }," \
+    "    set: function(v){ var u=mk(v);" \
+    "      if(!u) throw new DOMException('location: invalid URL','SyntaxError');" \
+    "      var o=url; url=u.href;" \
+    "      if (o!==url && sameDoc(o,url)) fireHash(o,url); } });" \
+    "  Object.defineProperty(loc, 'hash', { configurable:true, enumerable:true," \
+    "    get: function(){ var u=mk(url); return u ? u.hash : ''; }," \
+    "    set: function(v){ var u=mk(url); if(!u) return; u.hash=v; var o=url; url=u.href;" \
+    "      if (o!==url) fireHash(o,url); } });" \
+    "  loc.assign = function(v){ this.href = v; };" \
+    "  loc.replace = function(v){ this.href = v; };" \
+    "  loc.reload = function(){};" \
+    "  loc.toString = function(){ return url; };" \
+    "  function realHist(name, self, args){" \
+    "    var h = realWin.History && realWin.History.prototype;" \
+    "    if (!h || typeof h[name] !== 'function') throw new TypeError('Illegal invocation');" \
+    "    return h[name].apply(self, args);" \
+    "  }" \
+    "  var hist = {" \
+    "    get state(){ return state; }, get length(){ return 1; }, scrollRestoration:'auto'," \
+    "    pushState: function(s,t,u){ if(this!==hist) return realHist('pushState',this,arguments); state=s; if(u!=null){ var n=mk(u); if(n) url=n.href; } }," \
+    "    replaceState: function(s,t,u){ if(this!==hist) return realHist('replaceState',this,arguments); state=s; if(u!=null){ var n=mk(u); if(n) url=n.href; } }," \
+    "    back: function(){ if(this!==hist) return realHist('back',this,arguments); firePop(); }," \
+    "    forward: function(){ if(this!==hist) return realHist('forward',this,arguments); firePop(); }," \
+    "    go: function(){ if(this!==hist) return realHist('go',this,arguments); firePop(); }" \
+    "  };"
+
 static const char ns_iframe_scope_bootstrap[] =
     "(function(realWin, iframeDoc, initialURL, sandbox, frameFetch){"
-    "  var url = initialURL || 'about:blank';"
-    "  var hashL = [], popL = [], onhash = null, onpop = null, state = null;"
-    "  var msgL = [], onmsg = null;"
     "  var win;"
-    "  function mk(u, b){ try { return new realWin.URL(u, b || url); } catch(e){ return null; } }"
-    "  function fire(list, on, ev){"
-    "    var c = list.slice();"
-    "    for (var i=0;i<c.length;i++){ try { c[i].call(win, ev); } catch(e){} }"
-    "    if (on) { try { on.call(win, ev); } catch(e){} }"
-    "  }"
-    "  function evt(type, props){"
-    "    var e = null;"
-    "    try { if (realWin.Event) { e = new realWin.Event(type); } } catch(x){}"
-    "    if (!e) e = { type: type };"
-    "    if (props) for (var k in props) { try { e[k] = props[k]; } catch(x){} }"
-    "    return e;"
-    "  }"
-    "  function fireHash(o, n){ fire(hashL, onhash, evt('hashchange', {oldURL:o, newURL:n})); }"
-    "  function firePop(){ fire(popL, onpop, evt('popstate', {state:state})); }"
-    "  function sameDoc(a, b){ var ua=mk(a), ub=mk(b);"
-    "    return !!ua && !!ub && ua.origin===ub.origin && ua.pathname===ub.pathname && ua.search===ub.search; }"
-    "  var loc = {};"
-    "  ['protocol','host','hostname','port','pathname','search','origin'].forEach(function(p){"
-    "    Object.defineProperty(loc, p, { configurable:true, enumerable:true,"
-    "      get: function(){ var u=mk(url); return u ? u[p] : ''; } }); });"
-    "  Object.defineProperty(loc, 'href', { configurable:true, enumerable:true,"
-    "    get: function(){ return url; },"
-    "    set: function(v){ var u=mk(v);"
-    "      if(!u) throw new DOMException('location: invalid URL','SyntaxError');"
-    "      var o=url; url=u.href;"
-    "      if (o!==url && sameDoc(o,url)) fireHash(o,url); } });"
-    "  Object.defineProperty(loc, 'hash', { configurable:true, enumerable:true,"
-    "    get: function(){ var u=mk(url); return u ? u.hash : ''; },"
-    "    set: function(v){ var u=mk(url); if(!u) return; u.hash=v; var o=url; url=u.href;"
-    "      if (o!==url) fireHash(o,url); } });"
-    "  loc.assign = function(v){ this.href = v; };"
-    "  loc.replace = function(v){ this.href = v; };"
-    "  loc.reload = function(){};"
-    "  loc.toString = function(){ return url; };"
-    /* Methods taken from a frame and called on another window's history
-     * (how libraries get unpatched functions) act on that history. */
-    "  function realHist(name, self, args){"
-    "    var h = realWin.History && realWin.History.prototype;"
-    "    if (!h || typeof h[name] !== 'function') throw new TypeError('Illegal invocation');"
-    "    return h[name].apply(self, args);"
-    "  }"
-    "  var hist = {"
-    "    get state(){ return state; }, get length(){ return 1; }, scrollRestoration:'auto',"
-    "    pushState: function(s,t,u){ if(this!==hist) return realHist('pushState',this,arguments); state=s; if(u!=null){ var n=mk(u); if(n) url=n.href; } },"
-    "    replaceState: function(s,t,u){ if(this!==hist) return realHist('replaceState',this,arguments); state=s; if(u!=null){ var n=mk(u); if(n) url=n.href; } },"
-    "    back: function(){ if(this!==hist) return realHist('back',this,arguments); firePop(); },"
-    "    forward: function(){ if(this!==hist) return realHist('forward',this,arguments); firePop(); },"
-    "    go: function(){ if(this!==hist) return realHist('go',this,arguments); firePop(); }"
-    "  };"
+    NS_IFRAME_LOCATION_HISTORY_JS
     "  var ov = {"
     "    location: loc, history: hist, document: iframeDoc,"
     "    fetch: function(input, init){"
@@ -43335,60 +43324,8 @@ ns_iframe_make_scope(JSContext *ctx, JSValue iframe_doc, const char *initial_url
 
 static const char ns_iframe_global_bootstrap[] =
     "(function(G, realWin, iframeDoc, initialURL, sandbox, platformNames, frameFetch){"
-    "  var url = initialURL || 'about:blank';"
-    "  var hashL = [], popL = [], onhash = null, onpop = null, state = null;"
-    "  var msgL = [], onmsg = null;"
     "  var win = G;"
-    "  function mk(u, b){ try { return new realWin.URL(u, b || url); } catch(e){ return null; } }"
-    "  function fire(list, on, ev){"
-    "    var c = list.slice();"
-    "    for (var i=0;i<c.length;i++){ try { c[i].call(win, ev); } catch(e){} }"
-    "    if (on) { try { on.call(win, ev); } catch(e){} }"
-    "  }"
-    "  function evt(type, props){"
-    "    var e = null;"
-    "    try { if (realWin.Event) { e = new realWin.Event(type); } } catch(x){}"
-    "    if (!e) e = { type: type };"
-    "    if (props) for (var k in props) { try { e[k] = props[k]; } catch(x){} }"
-    "    return e;"
-    "  }"
-    "  function fireHash(o, n){ fire(hashL, onhash, evt('hashchange', {oldURL:o, newURL:n})); }"
-    "  function firePop(){ fire(popL, onpop, evt('popstate', {state:state})); }"
-    "  function sameDoc(a, b){ var ua=mk(a), ub=mk(b);"
-    "    return !!ua && !!ub && ua.origin===ub.origin && ua.pathname===ub.pathname && ua.search===ub.search; }"
-    "  var loc = {};"
-    "  ['protocol','host','hostname','port','pathname','search','origin'].forEach(function(p){"
-    "    Object.defineProperty(loc, p, { configurable:true, enumerable:true,"
-    "      get: function(){ var u=mk(url); return u ? u[p] : ''; } }); });"
-    "  Object.defineProperty(loc, 'href', { configurable:true, enumerable:true,"
-    "    get: function(){ return url; },"
-    "    set: function(v){ var u=mk(v);"
-    "      if(!u) throw new DOMException('location: invalid URL','SyntaxError');"
-    "      var o=url; url=u.href;"
-    "      if (o!==url && sameDoc(o,url)) fireHash(o,url); } });"
-    "  Object.defineProperty(loc, 'hash', { configurable:true, enumerable:true,"
-    "    get: function(){ var u=mk(url); return u ? u.hash : ''; },"
-    "    set: function(v){ var u=mk(url); if(!u) return; u.hash=v; var o=url; url=u.href;"
-    "      if (o!==url) fireHash(o,url); } });"
-    "  loc.assign = function(v){ this.href = v; };"
-    "  loc.replace = function(v){ this.href = v; };"
-    "  loc.reload = function(){};"
-    "  loc.toString = function(){ return url; };"
-    /* Methods taken from a frame and called on another window's history
-     * (how libraries get unpatched functions) act on that history. */
-    "  function realHist(name, self, args){"
-    "    var h = realWin.History && realWin.History.prototype;"
-    "    if (!h || typeof h[name] !== 'function') throw new TypeError('Illegal invocation');"
-    "    return h[name].apply(self, args);"
-    "  }"
-    "  var hist = {"
-    "    get state(){ return state; }, get length(){ return 1; }, scrollRestoration:'auto',"
-    "    pushState: function(s,t,u){ if(this!==hist) return realHist('pushState',this,arguments); state=s; if(u!=null){ var n=mk(u); if(n) url=n.href; } },"
-    "    replaceState: function(s,t,u){ if(this!==hist) return realHist('replaceState',this,arguments); state=s; if(u!=null){ var n=mk(u); if(n) url=n.href; } },"
-    "    back: function(){ if(this!==hist) return realHist('back',this,arguments); firePop(); },"
-    "    forward: function(){ if(this!==hist) return realHist('forward',this,arguments); firePop(); },"
-    "    go: function(){ if(this!==hist) return realHist('go',this,arguments); firePop(); }"
-    "  };"
+    NS_IFRAME_LOCATION_HISTORY_JS
     "  function def(name, d){ d.configurable = true; try { Object.defineProperty(G, name, d); } catch(e){} }"
     "  def('window',     { value: win, writable: true });"
     "  def('self',       { value: win, writable: true });"

@@ -14,6 +14,7 @@
 #include "config.h"
 #include "js.h"
 #include "quickjs_compat.h"
+#include "sqlite_db.h"
 
 typedef struct ns_idb_db {
     sqlite3 *db;
@@ -142,34 +143,11 @@ ns_idb_path_for_name(JSContext *ctx, const char *name)
 static gboolean
 ns_idb_exec(sqlite3 *db, const char *sql)
 {
-    char *err = NULL;
-    int rc = sqlite3_exec(db, sql, NULL, NULL, &err);
-    if (rc != SQLITE_OK)
-        g_warning("idb: sqlite exec failed: %s", err ? err : sqlite3_errstr(rc));
-    if (err) sqlite3_free(err);
-    return rc == SQLITE_OK;
+    return ns_sqlite_exec(db, "idb", sql);
 }
 
 #define NS_IDB_MAX_PAGES 65536
 #define NS_IDB_MAX_ORIGIN_PAGES (256 * 1024)
-
-static void
-ns_idb_configure(sqlite3 *db)
-{
-#ifdef SQLITE_DBCONFIG_DEFENSIVE
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, 1, NULL);
-#endif
-    sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 0, NULL);
-#ifdef SQLITE_DBCONFIG_TRUSTED_SCHEMA
-    sqlite3_db_config(db, SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0, NULL);
-#endif
-#ifdef SQLITE_DBCONFIG_DQS_DDL
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DQS_DDL, 0, NULL);
-#endif
-#ifdef SQLITE_DBCONFIG_DQS_DML
-    sqlite3_db_config(db, SQLITE_DBCONFIG_DQS_DML, 0, NULL);
-#endif
-}
 
 static gboolean
 ns_idb_schema(sqlite3 *db)
@@ -248,16 +226,8 @@ ns_idb_open_db(JSContext *ctx, const char *name)
     }
     g_autofree char *path = ns_idb_path_for_name(ctx, name);
     if (!path) return NULL;
-    sqlite3 *db = NULL;
-    int rc = sqlite3_open_v2(path, &db, NS_IDB_OPEN_FLAGS, NULL);
-    if (rc != SQLITE_OK) {
-        g_warning("idb: could not open %s: %s", path,
-                  db ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
-        if (db) sqlite3_close(db);
-        return NULL;
-    }
-    ns_idb_configure(db);
-    sqlite3_busy_timeout(db, 2500);
+    sqlite3 *db = ns_sqlite_open("idb", path, NS_IDB_OPEN_FLAGS);
+    if (!db) return NULL;
     if (!ns_idb_schema(db)) {
         sqlite3_close(db);
         return NULL;
@@ -1165,7 +1135,7 @@ ns_idb_backend_databases(JSContext *ctx, JSValueConst this_val,
             if (db) sqlite3_close(db);
             continue;
         }
-        ns_idb_configure(db);
+        ns_sqlite_harden(db);
         g_autofree char *name = ns_idb_get_meta(db, "name");
         int64_t version = ns_idb_get_version(db);
         sqlite3_close(db);

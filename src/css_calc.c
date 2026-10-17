@@ -87,16 +87,10 @@ calc_take_child(calc_node *n, guint i)
 }
 
 static gboolean
-calc_is_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
-static gboolean
 calc_skip_ws(calc_cursor *c)
 {
     const char *start = c->p;
-    while (c->p < c->end && calc_is_ws(*c->p)) c->p++;
+    while (c->p < c->end && ns_is_ascii_ws(*c->p)) c->p++;
     return c->p > start;
 }
 
@@ -346,7 +340,7 @@ calc_parse_sum(calc_cursor *c)
         const char *save = c->p;
         gboolean spaced = calc_skip_ws(c);
         if (c->p >= c->end || (*c->p != '+' && *c->p != '-') || !spaced ||
-            c->p + 1 >= c->end || !calc_is_ws(c->p[1])) {
+            c->p + 1 >= c->end || !ns_is_ascii_ws(c->p[1])) {
             c->p = save;
             break;
         }
@@ -769,9 +763,9 @@ ns_css_calc_canonical(const char *text)
 {
     if (!text) return NULL;
     const char *p = text;
-    while (calc_is_ws(*p)) p++;
+    while (ns_is_ascii_ws(*p)) p++;
     const char *end = p + strlen(p);
-    while (end > p && calc_is_ws(end[-1])) end--;
+    while (end > p && ns_is_ascii_ws(end[-1])) end--;
     const char *name_end = p;
     while (name_end < end && calc_ident_char(*name_end)) name_end++;
     if (name_end == p || name_end >= end || *name_end != '(') return NULL;

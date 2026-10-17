@@ -106,6 +106,7 @@ northstar_engine_sources = files(
   'security.c',
   'selection.c',
   'spellcheck.c',
+  'sqlite_db.c',
   'texture.c',
   'trace.c',
   'wasm.c',

@@ -1,6 +1,7 @@
 /* Northstar — CSS Syntax tokenizer and component-value parser. */
 
 #include "css_syntax.h"
+#include "dom.h"
 
 #include <string.h>
 
@@ -13,12 +14,6 @@ typedef struct ns_css_syntax_parser {
     int depth;
     gboolean valid;
 } ns_css_syntax_parser;
-
-static gboolean
-css_syntax_whitespace(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
 
 static gboolean
 css_syntax_name_start(guchar c)
@@ -45,7 +40,7 @@ css_syntax_escape_end(const char *input, gsize length, gsize offset)
             offset++;
             digits++;
         }
-        if (offset < length && css_syntax_whitespace(input[offset])) offset++;
+        if (offset < length && ns_is_ascii_ws(input[offset])) offset++;
         return offset;
     }
     if (input[offset] == '\n' || input[offset] == '\r' ||
@@ -263,9 +258,9 @@ css_syntax_consume(ns_css_syntax_parser *parser)
 {
     gsize start = parser->offset;
     char c = parser->input[parser->offset];
-    if (css_syntax_whitespace(c)) {
+    if (ns_is_ascii_ws(c)) {
         while (parser->offset < parser->length &&
-               css_syntax_whitespace(parser->input[parser->offset]))
+               ns_is_ascii_ws(parser->input[parser->offset]))
             parser->offset++;
         ns_css_component *component =
             css_component_new(NS_CSS_COMPONENT_WHITESPACE, start);

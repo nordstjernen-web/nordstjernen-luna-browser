@@ -617,6 +617,20 @@ typedef enum ns_css_unit {
     NS_CSS_UNIT_FR,
 } ns_css_unit;
 
+#define NS_CSS_CASE_VIEWPORT_UNITS \
+    case NS_CSS_UNIT_VW: case NS_CSS_UNIT_SVW: \
+    case NS_CSS_UNIT_LVW: case NS_CSS_UNIT_DVW: \
+    case NS_CSS_UNIT_VH: case NS_CSS_UNIT_SVH: \
+    case NS_CSS_UNIT_LVH: case NS_CSS_UNIT_DVH: \
+    case NS_CSS_UNIT_VI: case NS_CSS_UNIT_SVI: \
+    case NS_CSS_UNIT_LVI: case NS_CSS_UNIT_DVI: \
+    case NS_CSS_UNIT_VB: case NS_CSS_UNIT_SVB: \
+    case NS_CSS_UNIT_LVB: case NS_CSS_UNIT_DVB: \
+    case NS_CSS_UNIT_VMIN: case NS_CSS_UNIT_SVMIN: \
+    case NS_CSS_UNIT_LVMIN: case NS_CSS_UNIT_DVMIN: \
+    case NS_CSS_UNIT_VMAX: case NS_CSS_UNIT_SVMAX: \
+    case NS_CSS_UNIT_LVMAX: case NS_CSS_UNIT_DVMAX
+
 typedef enum ns_css_color_space {
     NS_CSS_COLOR_LEGACY,
     NS_CSS_COLOR_SRGB,
