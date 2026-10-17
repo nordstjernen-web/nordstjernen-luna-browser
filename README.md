@@ -37,7 +37,7 @@ See [SECURITY.md](SECURITY.md) for the exact per-mode posture.
 the main thread and the page engine on one dedicated thread with its own
 main loop, so a slow page never freezes the window; the shell posts
 requests to that thread and gets rendered frames back, all inside the
-same process. The engine is a compact body of C — about 191,000 lines of
+same process. The engine is a compact body of C — about 189,000 lines of
 original C, excluding the vendored WAMR, Wuffs and audio decoders —
 small enough for one person to read and audit end-to-end. See
 [docs/architecture.md](docs/architecture.md) for how it fits together.
@@ -51,9 +51,10 @@ It deliberately omits tabs, per-tab renderer processes, WebGL, WebGPU,
 an embedded PDF viewer and AI-style web APIs. It does not send telemetry
 or update pings.
 
-Audio still plays in-process (MP3, MP2, Ogg Opus/Vorbis). Images decode
-in-tree (PNG/APNG, GIF, BMP, JPEG and WebP via Wuffs, AVIF through
-libavif when available, and SVG in the engine).
+Audio and video still play in-process (MP3, MP2, AAC, Ogg Opus/Vorbis;
+MPEG-1, and AV1, VP9 and H.264 when their decoders are present). Images
+decode in-tree (PNG/APNG, GIF, BMP, JPEG and WebP via Wuffs, AVIF
+through libavif when available, and SVG in the engine).
 
 ## Browser features
 
@@ -96,14 +97,17 @@ libavif when available, and SVG in the engine).
 - **Media** — images (PNG/APNG, GIF, BMP, JPEG, WebP, optional AVIF,
   SVG); audio (`<audio>`) decodes and plays in the browser process,
   alongside a Web Audio graph.
-  `<video>` plays MPEG-1 (`video/mpeg`), decoded in-tree by the same
-  pl_mpeg that already handles MP2 audio. Frames are decoded as the clip
-  plays, so memory holds one frame whatever its length; a program
-  stream's MP2 track plays alongside it, and `controls` draws a
-  play/pause button, seek bar, time and mute button. MPEG-1 is an ISO standard whose
-  patents have expired, so it costs no dependency and no licence; it is
-  also not a format the modern web serves, so this is video support for
-  local and self-hosted clips rather than for streaming sites.
+  `<video>` plays MPEG-1 (`video/mpeg`) decoded in-tree by the same
+  pl_mpeg that already handles MP2 audio, a program stream's MP2 track
+  included, with no extra dependency or licence. Streaming sites play
+  through Media Source Extensions: `MediaSource` and `SourceBuffer`
+  demux fragmented MP4 and WebM, a decoder thread per video decodes AV1
+  (libdav1d), VP9 (libvpx) or H.264 (OpenH264) a few frames ahead, and
+  the sound decodes AAC-LC (in-tree) or Opus (libopus). A plain MP4 or
+  WebM file in `<video src>` is fetched progressively with HTTP range
+  requests and plays through the same path. Decoded pictures are kept
+  only a few frames ahead of the playhead, and `controls` draws a
+  play/pause button, seek bar, time and mute button.
 - **Printing** — `Ctrl+P` lays the page out for paper and hands the sheets
   to the operating system's own print dialog through `GtkPrintOperation`:
   CUPS on Linux, the Win32 dialog on Windows, the Cocoa panel on macOS.
@@ -161,8 +165,11 @@ single page can also be rendered directly:
 ./builddir/src/gtk/northstar --headless --dump=text about:start
 ```
 
-Meson feature options include `-Davif=disabled`, `-Daudio=disabled` and
-`-Dwasm=disabled` for smaller builds. `-Djs_engine=quickjs` builds on
+Meson feature options include `-Davif=disabled`, `-Daudio=disabled`,
+`-Dwasm=disabled`, `-Dav1=disabled`, `-Dvp9=disabled` and
+`-Dh264=disabled` for smaller builds; only Cisco's prebuilt OpenH264
+binaries carry Cisco's H.264 patent licence, so `-Dh264=disabled` drops
+it where that matters. `-Djs_engine=quickjs` builds on
 Fabrice Bellard's original QuickJS instead of the default quickjs-ng.
 
 WAMR, Wuffs, pl_mpeg and minimp3 are vendored in-tree. ns-pango, lexbor
@@ -212,9 +219,10 @@ symbol in the fork is renamed. Linux builds also require libseccomp.
 SDL2 provides audio output: it is picked up when present and required
 with `-Daudio=enabled`.
 
-**Optional** (auto-detected): libavif (AVIF images), opusfile /
-vorbisfile (in-process Ogg audio), Enchant (spell-checking) and libthai
-(Thai line breaking).
+**Optional** (auto-detected): libdav1d, libvpx and OpenH264 (AV1, VP9
+and H.264 video), libopus (Opus audio in WebM and MP4), libavif (AVIF
+images), opusfile / vorbisfile (in-process Ogg audio), Enchant
+(spell-checking) and libthai (Thai line breaking).
 
 ## License
 
