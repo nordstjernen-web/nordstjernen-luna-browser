@@ -4103,12 +4103,6 @@
                         stop: function () {
                             if (track.readyState === 'ended') return;
                             track.readyState = 'ended';
-                            if (kind === 'video' &&
-                                typeof globalThis.__nd_camera_release === 'function')
-                                globalThis.__nd_camera_release();
-                            if (kind === 'audio' &&
-                                typeof globalThis.__nd_mic_release === 'function')
-                                globalThis.__nd_mic_release();
                             track.dispatchEvent({ type: 'ended' });
                         }
                     };

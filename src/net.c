@@ -2188,39 +2188,6 @@ ns_net_apply_curl_proxy(void *curl_handle, const char *url)
         curl_easy_setopt(curl, CURLOPT_NOPROXY, no_proxy);
 }
 
-const char *
-ns_net_proxy_override(void)
-{
-    return g_proxy_override;
-}
-
-const char *
-ns_net_http_proxy(void)
-{
-    const ns_config *cfg = ns_config_get();
-    return cfg ? cfg->http_proxy : NULL;
-}
-
-const char *
-ns_net_https_proxy(void)
-{
-    const ns_config *cfg = ns_config_get();
-    return cfg ? cfg->https_proxy : NULL;
-}
-
-const char *
-ns_net_no_proxy(void)
-{
-    const ns_config *cfg = ns_config_get();
-    return cfg ? cfg->no_proxy : NULL;
-}
-
-const char *
-ns_net_ca_bundle_path(void)
-{
-    return g_ca_bundle;
-}
-
 void
 ns_net_apply_curl_tls(void *curl_handle)
 {

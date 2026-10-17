@@ -887,7 +887,6 @@ typedef struct ns_css_simple {
     GPtrArray *has_groups;
     gboolean   never_match;
     gboolean   namespace_any;
-    gboolean   ns_none;
 } ns_css_simple;
 
 typedef enum ns_css_comb {
@@ -1070,7 +1069,6 @@ gboolean           ns_css_supports_declaration(const char *property,
                                                const char *value);
 gboolean           ns_css_supports_condition(const char *condition,
                                              gboolean allow_bare_declaration);
-ns_css_stylesheet *ns_css_stylesheet_from_style_element_cached(ns_node *style);
 ns_css_stylesheet *ns_css_stylesheet_from_style_text_cached(ns_node *style,
                                                            const char *css);
 char              *ns_css_style_element_text(ns_node *style);

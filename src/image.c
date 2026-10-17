@@ -475,7 +475,6 @@ ns_image_apply_decoded_state(ns_image *img, ns_img_decoded *d,
         img->natural_height = d->h;
         img->anim_total_ms = ns_video_stream_duration_ms(d->video);
         img->anim_start_us = g_get_monotonic_time();
-        img->anim_video = TRUE;
         img->anim_loop = FALSE;
         img->anim_paused = TRUE;
         img->anim_paused_phase_ms = 0;
@@ -493,7 +492,6 @@ ns_image_apply_decoded_state(ns_image *img, ns_img_decoded *d,
             total += g_array_index(d->frames, ns_image_anim_frame, i).delay_ms;
         img->anim_total_ms = (int)CLAMP(total, 1, G_MAXINT / 2);
         img->anim_start_us = g_get_monotonic_time();
-        img->anim_video = FALSE;
         img->anim_loop = TRUE;
         img->anim_paused = FALSE;
         img->anim_paused_phase_ms = 0;
@@ -972,24 +970,6 @@ ns_image_cache_has_pending(const ns_image_cache *cache)
     return cache && cache->pending->len > 0;
 }
 
-ns_image *
-ns_image_cache_insert_loaded(ns_image_cache *cache, const char *url,
-                             ns_texture *texture, int width, int height)
-{
-    if (!cache || !url || !texture) return NULL;
-    ns_image *existing = g_hash_table_lookup(cache->by_url, url);
-    if (existing) return existing;
-    ns_image *img = g_new0(ns_image, 1);
-    img->url = g_strdup(url);
-    img->texture = texture;
-    img->natural_width = width;
-    img->natural_height = height;
-    img->loaded = TRUE;
-    g_hash_table_insert(cache->by_url, g_strdup(url), img);
-    ns_image_cache_account(cache, img);
-    return img;
-}
-
 struct ns_image_decoding {
     ns_img_decoded decoded;
 };
@@ -1059,7 +1039,6 @@ ns_image_cache_insert_stream(ns_image_cache *cache, const char *url,
     img->texture = ns_video_stream_texture(stream);
     img->anim_total_ms = ns_video_stream_duration_ms(stream);
     img->anim_start_us = g_get_monotonic_time();
-    img->anim_video = TRUE;
     img->anim_paused = TRUE;
     img->anim_paused_phase_ms = 0;
     img->anim_loop = FALSE;

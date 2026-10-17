@@ -59,7 +59,6 @@ northstar_engine_sources = files(
   'fetch_policy.c',
   'forms.c',
   'camera.c',
-  'mic.c',
   'font.c',
   'history.c',
   'html.c',

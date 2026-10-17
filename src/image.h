@@ -56,7 +56,6 @@ struct ns_image {
     gboolean     anim_paused;
     int          anim_paused_phase_ms;
     gboolean     anim_loop;
-    gboolean     anim_video;
     guint        anim_seek_gen;
     ns_video_stream *video;
 };
@@ -77,12 +76,6 @@ void            ns_image_cache_cancel_cb(ns_image_cache *cache,
                                          gpointer user_data);
 
 ns_image       *ns_image_cache_peek(ns_image_cache *cache, const char *url);
-
-ns_image       *ns_image_cache_insert_loaded(ns_image_cache *cache,
-                                             const char     *url,
-                                             ns_texture     *texture,
-                                             int             width,
-                                             int             height);
 
 ns_image       *ns_image_cache_insert_stream(ns_image_cache  *cache,
                                              const char      *url,

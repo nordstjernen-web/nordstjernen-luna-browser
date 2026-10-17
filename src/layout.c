@@ -7032,7 +7032,6 @@ typedef struct float_ref {
     ns_box *box;
     int side;
     double top, bottom;
-    double outer_w;
     double left_edge, right_edge;
     gboolean intruding;
 } float_ref;
@@ -13100,7 +13099,6 @@ layout_block(ns_box *box, double parent_content_width, const ns_style *inherited
                     + c->padding.top + c->padding.bottom
                     + c->border.top + c->border.bottom
                     + c->margin.top + c->margin.bottom,
-                .outer_w = actual_outer,
                 .left_edge = c->x,
                 .right_edge = c->x + actual_outer,
             };

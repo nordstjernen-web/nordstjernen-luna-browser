@@ -390,14 +390,6 @@ media_video_failed(ns_media_player *p)
                    (img->loaded && !ns_image_is_animation(img)));
 }
 
-ns_image *
-ns_media_animation_for(JSContext *ctx, JSValueConst this_val)
-{
-    ns_node *el = (ns_node *)ns_unwrap_element(this_val);
-    ns_media_player *p = media_player_find(js_from_ctx(ctx), el);
-    return p ? media_video_frames(p) : NULL;
-}
-
 static void
 media_close_backend(ns_media_player *p)
 {

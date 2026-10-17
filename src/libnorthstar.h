@@ -41,9 +41,6 @@ int ns_browser_snap_document(ns_browser *browser, double viewport_w,
                              int *scroll_x, int *scroll_y);
 int ns_browser_set_viewport(ns_browser *browser, int css_width,
                             double css_height);
-int ns_browser_render_argb32(ns_browser *browser, int scroll_x, int scroll_y,
-                             int width, int height, double scale,
-                             unsigned char *out, int stride);
 int ns_browser_render_argb32_rects(ns_browser *browser, int scroll_x,
                                    int scroll_y, int width, int height,
                                    int pad, double scale, unsigned char *out,

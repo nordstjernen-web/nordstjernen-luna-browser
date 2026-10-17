@@ -2373,16 +2373,6 @@ ns_browser_scroll_blit_bands(ns_browser *browser, GArray *out_bands)
     return 1;
 }
 
-int
-ns_browser_render_argb32(ns_browser *browser, int scroll_x, int scroll_y,
-                         int width, int height, double scale,
-                         unsigned char *out, int stride)
-{
-    return ns_browser_render_argb32_rects(browser, scroll_x, scroll_y, width,
-                                          height, 0, scale, out, stride, NULL,
-                                          0);
-}
-
 static void
 browser_paint_rect(ns_browser *browser, cairo_surface_t *surf, int scroll_x,
                    int scroll_y, double scale, int x, int y, int w, int h)

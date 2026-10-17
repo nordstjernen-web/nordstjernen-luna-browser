@@ -29,7 +29,6 @@
 #include "anim.h"
 #include "bytecode_cache.h"
 #include "camera.h"
-#include "mic.h"
 #include "config.h"
 #include "css.h"
 #include "datetime.h"
@@ -9661,35 +9660,13 @@ ns_returns_resolved_empty_array(JSContext *ctx, JSValueConst this_val,
 static JSValue
 ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    (void)this_val;
-    ns_js *js = js_from_ctx(ctx);
-    gboolean want_video = argc > 0 && JS_ToBool(ctx, argv[0]);
-    gboolean want_audio = argc > 1 && JS_ToBool(ctx, argv[1]);
-    int d = ns_camera_permission(js);
-    if (d == 1) {
-        if (want_video) ns_camera_acquire();
-        if (want_audio) ns_mic_acquire();
+    (void)this_val; (void)argc; (void)argv;
+    int d = ns_camera_permission(js_from_ctx(ctx));
+    if (d == 1)
         return JS_NewString(ctx, "granted");
-    }
     if (d == 0)
         return JS_NewString(ctx, "denied");
     return JS_NewString(ctx, "pending");
-}
-
-static JSValue
-ns_cam_release(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    (void)ctx; (void)this_val; (void)argc; (void)argv;
-    ns_camera_release();
-    return JS_UNDEFINED;
-}
-
-static JSValue
-ns_mic_release_js(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    (void)ctx; (void)this_val; (void)argc; (void)argv;
-    ns_mic_release();
-    return JS_UNDEFINED;
 }
 
 static gboolean
@@ -9710,32 +9687,14 @@ ns_audio_u8_buffer(JSContext *ctx, JSValueConst arg, uint8_t **data, size_t *len
     return *data != NULL;
 }
 
-static gboolean
-ns_audio_node_is_mic(JSContext *ctx, JSValueConst node)
-{
-    JSValue s = JS_GetPropertyStr(ctx, node, "_micSrc");
-    gboolean mic = JS_ToBool(ctx, s);
-    JS_FreeValue(ctx, s);
-    if (!mic) {
-        JSValue t = JS_GetPropertyStr(ctx, node, "_micTaint");
-        mic = JS_ToBool(ctx, t);
-        JS_FreeValue(ctx, t);
-    }
-    return mic;
-}
-
 static JSValue
 ns_audio_get_byte_time_domain(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
 {
-    gboolean mic = ns_audio_node_is_mic(ctx, this_val);
+    (void)this_val;
     uint8_t *data = NULL; size_t len = 0;
-    if (argc >= 1 && ns_audio_u8_buffer(ctx, argv[0], &data, &len) && data) {
-        if (mic)
-            ns_mic_fill_time_domain(data, (int)len);
-        else
-            memset(data, 128, len);
-    }
+    if (argc >= 1 && ns_audio_u8_buffer(ctx, argv[0], &data, &len) && data)
+        memset(data, 128, len);
     return JS_UNDEFINED;
 }
 
@@ -9743,14 +9702,10 @@ static JSValue
 ns_audio_get_byte_frequency(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
-    gboolean mic = ns_audio_node_is_mic(ctx, this_val);
+    (void)this_val;
     uint8_t *data = NULL; size_t len = 0;
-    if (argc >= 1 && ns_audio_u8_buffer(ctx, argv[0], &data, &len) && data) {
-        if (mic)
-            ns_mic_fill_frequency(data, (int)len);
-        else
-            memset(data, 0, len);
-    }
+    if (argc >= 1 && ns_audio_u8_buffer(ctx, argv[0], &data, &len) && data)
+        memset(data, 0, len);
     return JS_UNDEFINED;
 }
 
@@ -9758,19 +9713,9 @@ static JSValue
 ns_cam_label(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
-    ns_camera *cam = ns_camera_active();
     GPtrArray *list = ns_camera_enumerate();
     const char *label = NULL;
-    if (cam) {
-        for (guint i = 0; i < list->len; i++) {
-            ns_camera_info *info = g_ptr_array_index(list, i);
-            if (g_strcmp0(info->device, ns_camera_device(cam)) == 0) {
-                label = info->label;
-                break;
-            }
-        }
-    }
-    if (!label && list->len > 0)
+    if (list->len > 0)
         label = ((ns_camera_info *)g_ptr_array_index(list, 0))->label;
     JSValue r = JS_NewString(ctx, label ? label : "Camera");
     for (guint i = 0; i < list->len; i++)
@@ -10583,8 +10528,6 @@ ns_audio_node_connect(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
 {
     if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
-        if (JS_IsObject(argv[0]) && ns_audio_node_is_mic(ctx, this_val))
-            JS_SetPropertyStr(ctx, argv[0], "_micTaint", JS_TRUE);
         if (JS_IsObject(argv[0])) {
             JSValue ins = JS_GetPropertyStr(ctx, argv[0], "_inputs");
             if (JS_IsObject(ins)) {
@@ -10757,17 +10700,6 @@ ns_audio_create_node(JSContext *ctx, JSValueConst this_val,
 }
 
 static JSValue
-ns_audio_create_mediastream_source(JSContext *ctx, JSValueConst this_val,
-                                   int argc, JSValueConst *argv)
-{
-    (void)this_val;
-    JSValue n = ns_audio_make_node(ctx, "mediastreamsource");
-    if (argc >= 1 && JS_IsObject(argv[0]))
-        JS_SetPropertyStr(ctx, n, "_micSrc", JS_TRUE);
-    return n;
-}
-
-static JSValue
 ns_audio_make_buffer(JSContext *ctx, uint32_t channels,
                      uint32_t length, double sample_rate)
 {
@@ -10933,8 +10865,6 @@ ns_audio_context_build(JSContext *ctx, double sample_rate)
             JS_NewCFunctionMagic(ctx, ns_audio_create_node,
                                  node_methods[i].name, node_methods[i].argc,
                                  JS_CFUNC_generic_magic, (int)i));
-    ns_bind_fn(ctx, a, "createMediaStreamSource",
-               ns_audio_create_mediastream_source, 1);
     ns_set_tostring_tag(ctx, a, "AudioContext");
     return a;
 }
@@ -49447,8 +49377,6 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     JS_SetPropertyStr(ctx, navigator, "mediaDevices", media_devices);
 
     ns_bind_fn(ctx, global, "__nd_camera_request",   ns_cam_request,   2);
-    ns_bind_fn(ctx, global, "__nd_camera_release",   ns_cam_release,   0);
-    ns_bind_fn(ctx, global, "__nd_mic_release",      ns_mic_release_js, 0);
     ns_bind_fn(ctx, global, "__nd_camera_label",     ns_cam_label,     0);
     ns_bind_fn(ctx, global, "__nd_camera_enumerate", ns_cam_enumerate, 0);
 

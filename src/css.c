@@ -4314,10 +4314,8 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                 if (p < end && *p == '|' && !(p + 1 < end && p[1] == '=')) {
                     g_clear_pointer(&cmp->namespace_uri, g_free);
                     cmp->namespace_any = cc == '*';
-                    if (cc == '|') {
-                        cmp->ns_none = TRUE;
+                    if (cc == '|')
                         cmp->namespace_any = FALSE;
-                    }
                     p++;
                     if (p < end && *p == '*') {
                         p++;
@@ -4400,7 +4398,6 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                         g_clear_pointer(&cmp->namespace_uri, g_free);
                         cmp->namespace_uri = g_strdup(namespace_uri);
                         cmp->namespace_any = FALSE;
-                        cmp->ns_none = FALSE;
                     }
                     p++;
                     if (p < end && *p == '*') {
@@ -35104,13 +35101,6 @@ style_sheet_cached_take(ns_node *style, char *css)
     ne->media = media;
     g_hash_table_replace(g_style_el_cache, style, ne);
     return sh;
-}
-
-ns_css_stylesheet *
-ns_css_stylesheet_from_style_element_cached(ns_node *style)
-{
-    char *css = style_element_final_css(style);
-    return css ? style_sheet_cached_take(style, css) : NULL;
 }
 
 ns_css_stylesheet *
