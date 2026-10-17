@@ -236,15 +236,6 @@ js_mse_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
 }
 
 static JSValue
-js_mse_ranges(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    (void)this_val;
-    mse_handle *handle = argc >= 1 ? mse_lookup(ctx, argv[0]) : NULL;
-    if (!handle || !handle->buffer) return JS_NewArray(ctx);
-    return ranges_to_array(ctx, ns_mse_buffer_ranges(handle->buffer));
-}
-
-static JSValue
 js_mse_set_duration(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv)
 {
@@ -308,7 +299,6 @@ ns_js_mse_install(JSContext *ctx, JSValueConst global)
     ns_bind_fn(ctx, global, "__ndMseAppend",        js_mse_append,         6);
     ns_bind_fn(ctx, global, "__ndMseRemove",        js_mse_remove,         3);
     ns_bind_fn(ctx, global, "__ndMseAbort",         js_mse_abort,          1);
-    ns_bind_fn(ctx, global, "__ndMseRanges",        js_mse_ranges,         1);
     ns_bind_fn(ctx, global, "__ndMseSetDuration",   js_mse_set_duration,   2);
     ns_bind_fn(ctx, global, "__ndMseSetEnded",      js_mse_set_ended,      2);
     ns_bind_fn(ctx, global, "__ndMseSetLiveSeekableRange",

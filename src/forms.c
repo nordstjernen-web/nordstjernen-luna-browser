@@ -200,18 +200,16 @@ ns_value_matches_type(const ns_node *n, const char *value, const char *type)
 }
 
 static gboolean
-ns_value_matches_range(const ns_node *n, const char *value, const char *type)
+ns_value_matches_range(const ns_node *n, const char *value)
 {
-    (void)type;
     gboolean under = FALSE, over = FALSE;
     if (!ns_input_value_range_state(n, value, &under, &over)) return TRUE;
     return !under && !over;
 }
 
 static gboolean
-ns_value_matches_step(const ns_node *n, const char *value, const char *type)
+ns_value_matches_step(const ns_node *n, const char *value)
 {
-    (void)type;
     return !ns_input_value_step_mismatch(n, value);
 }
 
@@ -270,11 +268,11 @@ ns_form_first_invalid_depth(const ns_node *form, const ns_node *n,
                             g_free(collected);
                             return n;
                         }
-                        if (is_input && !ns_value_matches_range(n, value, type)) {
+                        if (is_input && !ns_value_matches_range(n, value)) {
                             g_free(collected);
                             return n;
                         }
-                        if (is_input && !ns_value_matches_step(n, value, type)) {
+                        if (is_input && !ns_value_matches_step(n, value)) {
                             g_free(collected);
                             return n;
                         }

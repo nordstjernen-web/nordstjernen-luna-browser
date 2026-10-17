@@ -291,9 +291,8 @@ ns_net_multi_start(void)
 }
 
 static CURLcode
-ns_net_multi_perform(CURL *easy, GCancellable *cancellable)
+ns_net_multi_perform(CURL *easy)
 {
-    (void)cancellable;
     ns_net_multi_start();
     if (!g_multi) return curl_easy_perform(easy);
 
@@ -5411,7 +5410,7 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
 
     gint64 fetch_start_us = g_get_monotonic_time();
     double fetch_start_real_ms = (double)g_get_real_time() / 1000.0;
-    CURLcode rc = ns_net_multi_perform(curl, cancellable);
+    CURLcode rc = ns_net_multi_perform(curl);
 
     if ((rc == CURLE_PEER_FAILED_VERIFICATION ||
          rc == CURLE_SSL_CACERT_BADFILE) &&
@@ -5431,7 +5430,7 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
             if (g_share) curl_easy_setopt(curl, CURLOPT_SHARE, g_share);
-            rc = ns_net_multi_perform(curl, cancellable);
+            rc = ns_net_multi_perform(curl);
             if (rc == CURLE_OK)
                 resp->tls_warning = warn;
             else

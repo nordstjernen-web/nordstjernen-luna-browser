@@ -847,8 +847,7 @@
             ndFireEvent(self, 'updateend');
         });
     };
-    SourceBuffer.prototype.appendBufferAsync = function (data) {
-        var self = this;
+    function ndSourceBufferUpdate(self, run) {
         return new Promise(function (resolve, reject) {
             function done() {
                 self.removeEventListener('updateend', done);
@@ -862,8 +861,12 @@
             }
             self.addEventListener('updateend', done);
             self.addEventListener('error', fail);
-            try { self.appendBuffer(data); } catch (e) { fail(e); }
+            try { run(); } catch (e) { fail(e); }
         });
+    }
+    SourceBuffer.prototype.appendBufferAsync = function (data) {
+        var self = this;
+        return ndSourceBufferUpdate(self, function () { self.appendBuffer(data); });
     };
     SourceBuffer.prototype.remove = function (start, end) {
         if (this._removed || !this._mediaSource ||
@@ -909,21 +912,7 @@
     };
     SourceBuffer.prototype.removeAsync = function (start, end) {
         var self = this;
-        return new Promise(function (resolve, reject) {
-            function done() {
-                self.removeEventListener('updateend', done);
-                self.removeEventListener('error', fail);
-                resolve();
-            }
-            function fail(ev) {
-                self.removeEventListener('updateend', done);
-                self.removeEventListener('error', fail);
-                reject(ev);
-            }
-            self.addEventListener('updateend', done);
-            self.addEventListener('error', fail);
-            try { self.remove(start, end); } catch (e) { fail(e); }
-        });
+        return ndSourceBufferUpdate(self, function () { self.remove(start, end); });
     };
     SourceBuffer.prototype.abort = function () {
         if (!this._mediaSource ||

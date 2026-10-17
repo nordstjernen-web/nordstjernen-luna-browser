@@ -984,7 +984,6 @@ typedef struct ns_css_rule {
     ns_css_container_query *container_query;
     GPtrArray  *scopes;
     int         source_order;
-    guint       pe_mask;
 } ns_css_rule;
 
 typedef struct ns_css_import {

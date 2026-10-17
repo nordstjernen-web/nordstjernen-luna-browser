@@ -3211,7 +3211,7 @@ paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
     if (b->attrs) {
         double opt_minx = 1e9, opt_maxx = -1e9, opt_miny = 1e9, opt_maxy = -1e9;
         int opt_count = 0, opt_nsel = 0;
-        struct { double x0, y0, x1, y1; } opt_sel[64];
+        struct { double y0, y1; } opt_sel[64];
         for (guint i = 0; i < b->attrs->len; i++) {
             const ns_inline_attr *r = &g_array_index(b->attrs, ns_inline_attr, i);
             if (r->kind != NS_INLINE_INPUT_FIELD &&
@@ -3233,8 +3233,8 @@ paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
                 if (ry1 > opt_maxy) opt_maxy = ry1;
                 opt_count++;
                 if (ns_option_is_selected(r->dom) && opt_nsel < 64) {
-                    opt_sel[opt_nsel].x0 = rx0; opt_sel[opt_nsel].y0 = ry0;
-                    opt_sel[opt_nsel].x1 = rx1; opt_sel[opt_nsel].y1 = ry1;
+                    opt_sel[opt_nsel].y0 = ry0;
+                    opt_sel[opt_nsel].y1 = ry1;
                     opt_nsel++;
                 }
                 continue;
@@ -3607,9 +3607,8 @@ paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
 }
 
 static NsPangoLayout *
-ns_paint_build_inline_layout(cairo_t *cr, const ns_box *b)
+ns_paint_build_inline_layout(const ns_box *b)
 {
-    (void)cr;
     if (!b || !b->text) return NULL;
     const ns_style *s = inherited_style(b);
 
@@ -3731,14 +3730,8 @@ ns_paint_inline_xy_to_byte(const ns_box *b, double rel_x, double rel_y,
 {
     if (!b || !b->text || !*b->text) return FALSE;
 
-    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_A8, 1, 1);
-    cairo_t *cr = cairo_create(surf);
-    NsPangoLayout *layout = ns_paint_build_inline_layout(cr, b);
-    if (!layout) {
-        cairo_destroy(cr);
-        cairo_surface_destroy(surf);
-        return FALSE;
-    }
+    NsPangoLayout *layout = ns_paint_build_inline_layout(b);
+    if (!layout) return FALSE;
 
     int index = 0, trailing = 0;
     double y_offset = ns_paint_inline_y_offset_for_layout(b, layout);
@@ -3756,8 +3749,6 @@ ns_paint_inline_xy_to_byte(const ns_box *b, double rel_x, double rel_y,
     }
 
     g_object_unref(layout);
-    cairo_destroy(cr);
-    cairo_surface_destroy(surf);
     return TRUE;
 }
 
@@ -3769,14 +3760,8 @@ ns_paint_inline_word_range(const ns_box *b, gsize byte,
     gsize tlen = strlen(b->text);
     if (byte > tlen) byte = tlen;
 
-    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_A8, 1, 1);
-    cairo_t *cr = cairo_create(surf);
-    NsPangoLayout *layout = ns_paint_build_inline_layout(cr, b);
-    if (!layout) {
-        cairo_destroy(cr);
-        cairo_surface_destroy(surf);
-        return FALSE;
-    }
+    NsPangoLayout *layout = ns_paint_build_inline_layout(b);
+    if (!layout) return FALSE;
 
     int n_attrs = 0;
     const NsPangoLogAttr *attrs =
@@ -3799,8 +3784,6 @@ ns_paint_inline_word_range(const ns_box *b, gsize byte,
     }
 
     g_object_unref(layout);
-    cairo_destroy(cr);
-    cairo_surface_destroy(surf);
     return ok;
 }
 
@@ -3814,14 +3797,8 @@ ns_paint_inline_range_extents(const ns_box *b, gsize start, gsize len,
     if (start >= text_len) return FALSE;
     if (start + len > text_len) len = text_len - start;
 
-    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_A8, 1, 1);
-    cairo_t *cr = cairo_create(surf);
-    NsPangoLayout *layout = ns_paint_build_inline_layout(cr, b);
-    if (!layout) {
-        cairo_destroy(cr);
-        cairo_surface_destroy(surf);
-        return FALSE;
-    }
+    NsPangoLayout *layout = ns_paint_build_inline_layout(b);
+    if (!layout) return FALSE;
     double y_offset = ns_paint_inline_y_offset_for_layout(b, layout);
     double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     gboolean any = FALSE;
@@ -3858,8 +3835,6 @@ ns_paint_inline_range_extents(const ns_box *b, gsize start, gsize len,
     } while (ns_pango_layout_iter_next_line(it));
     ns_pango_layout_iter_free(it);
     g_object_unref(layout);
-    cairo_destroy(cr);
-    cairo_surface_destroy(surf);
     if (!any) return FALSE;
     if (out_x) *out_x = x0;
     if (out_y) *out_y = y0 + y_offset;
@@ -4149,9 +4124,9 @@ parse_filter_drop_shadows(const char *filter, rgba current_color,
 }
 
 static cairo_surface_t *
-drop_shadow_surface(cairo_surface_t *src, int iw, int ih, int cw, int ch,
-                    double ox, double oy, double sx, double sy,
-                    image_drop_shadow shadow, int *pad_out)
+drop_shadow_surface(cairo_surface_t *src, int cw, int ch, double ox, double oy,
+                    double sx, double sy, image_drop_shadow shadow,
+                    int *pad_out)
 {
     if (cw <= 0 || ch <= 0 || sx <= 0 || sy <= 0) return NULL;
     if (cw > 4096) cw = 4096;
@@ -4198,15 +4173,13 @@ drop_shadow_surface(cairo_surface_t *src, int iw, int ih, int cw, int ch,
         box_blur_argb(data, stride, sw, sh, radius);
     cairo_surface_mark_dirty(shadow_surf);
     if (pad_out) *pad_out = pad;
-    (void)iw;
-    (void)ih;
     return shadow_surf;
 }
 
 static void
 paint_texture_drop_shadows(cairo_t *cr, cairo_surface_t *surf, const ns_box *b,
-                           int iw, int ih, double sx, double sy,
-                           double ox, double oy, const char *filter_kw)
+                           double sx, double sy, double ox, double oy,
+                           const char *filter_kw)
 {
     const ns_style *st = b ? b->style : NULL;
     rgba current = rgba_of(st ? st->values[NS_CSS_COLOR] : NULL, 0, 0, 0, 1);
@@ -4219,8 +4192,7 @@ paint_texture_drop_shadows(cairo_t *cr, cairo_surface_t *surf, const ns_box *b,
     for (int i = 0; i < n; i++) {
         int pad = 0;
         cairo_surface_t *shadow =
-            drop_shadow_surface(surf, iw, ih, cw, ch, ox, oy, sx, sy,
-                                shadows[i], &pad);
+            drop_shadow_surface(surf, cw, ch, ox, oy, sx, sy, shadows[i], &pad);
         if (!shadow) continue;
         cairo_save(cr);
         cairo_set_source_surface(cr, shadow,
@@ -4617,7 +4589,7 @@ paint_texture(cairo_t *cr, const ns_box *b, ns_texture *tex)
     object_fit_scale(b, iw, ih, &sx, &sy, &ox, &oy);
     double cx = b->x + b->margin.left + b->border.left + b->padding.left;
     double cy = b->y + b->margin.top  + b->border.top  + b->padding.top;
-    paint_texture_drop_shadows(cr, surf, b, iw, ih, sx, sy, ox, oy, filter_kw);
+    paint_texture_drop_shadows(cr, surf, b, sx, sy, ox, oy, filter_kw);
     apply_box_content_clip(cr, b);
     cairo_rectangle(cr, cx, cy, cw, ch);
     cairo_clip(cr);
