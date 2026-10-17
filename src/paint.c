@@ -463,29 +463,6 @@ style_side_visible(const ns_style *s, ns_css_prop wp, ns_css_prop sp)
 }
 
 static gboolean
-style_has_inline_box_paint(const ns_style *s)
-{
-    if (!s) return FALSE;
-    const ns_css_value *bg = s->values[NS_CSS_BACKGROUND_COLOR];
-    if (bg && bg->kind == NS_CSS_V_COLOR && bg->u.color.a > 0)
-        return TRUE;
-    if (s->values[NS_CSS_BOX_SHADOW] &&
-        s->values[NS_CSS_BOX_SHADOW]->kind == NS_CSS_V_SHADOW &&
-        s->values[NS_CSS_BOX_SHADOW]->u.shadow.n > 0)
-        return TRUE;
-    if (s->values[NS_CSS_BACKGROUND_IMAGE] &&
-        (s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_URL ||
-         s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_GRADIENT))
-        return TRUE;
-    if (style_side_visible(s, NS_CSS_BORDER_TOP_WIDTH, NS_CSS_BORDER_TOP_STYLE) ||
-        style_side_visible(s, NS_CSS_BORDER_RIGHT_WIDTH, NS_CSS_BORDER_RIGHT_STYLE) ||
-        style_side_visible(s, NS_CSS_BORDER_BOTTOM_WIDTH, NS_CSS_BORDER_BOTTOM_STYLE) ||
-        style_side_visible(s, NS_CSS_BORDER_LEFT_WIDTH, NS_CSS_BORDER_LEFT_STYLE))
-        return TRUE;
-    return FALSE;
-}
-
-static gboolean
 style_uniform_solid_border(const ns_style *s, double *out_w, rgba *out_color)
 {
     if (!s) return FALSE;
@@ -867,7 +844,7 @@ paint_inline_css_chrome(cairo_t *cr, const ns_inline_attr *r, double x, double y
                         double w, double h)
 {
     const ns_style *s = r ? r->style : NULL;
-    if (!style_has_inline_box_paint(s) || w <= 0 || h <= 0) return;
+    if (!ns_style_has_box_paint(s) || w <= 0 || h <= 0) return;
     corner_radii radii = style_border_radii(s, w, h);
     cairo_save(cr);
     paint_inline_box_shadow(cr, s, x, y, w, h, radii);
@@ -2775,12 +2752,11 @@ ns_paint_drop_box_cache(ns_box *box)
 }
 
 static NsPangoLayout *
-paint_inline_make_layout(const ns_box *b, const ns_style *s,
-                         const char *highlight)
+paint_inline_layout_new(const ns_box *b, const ns_style *s,
+                        NsPangoAttrList **attrs_out)
 {
     NsPangoLayout *layout = paint_create_layout();
     ns_paint_apply_inline_font(layout, s);
-
     if (ns_style_is_nowrap(s) &&
         !keyword_is(s ? s->values[NS_CSS_TEXT_OVERFLOW] : NULL, "ellipsis"))
         ns_pango_layout_set_width(layout, -1);
@@ -2809,6 +2785,56 @@ paint_inline_make_layout(const ns_box *b, const ns_style *s,
     ns_paint_apply_i18n(layout, attrs, b);
     ns_paint_apply_font_features(attrs, s, 0, G_MAXUINT);
     ns_inline_apply_atomic_shapes(attrs, b);
+    *attrs_out = attrs;
+    return layout;
+}
+
+NsPangoAttribute *
+ns_paint_inline_font_attr(const ns_inline_attr *r)
+{
+    switch (r->kind) {
+    case NS_INLINE_BOLD:
+        return ns_pango_attr_weight_new(NS_PANGO_WEIGHT_BOLD);
+    case NS_INLINE_FONT_WEIGHT:
+        return ns_pango_attr_weight_new(ns_paint_pango_weight(r->font_weight));
+    case NS_INLINE_FONT_STRETCH:
+        return ns_pango_attr_stretch_new(ns_paint_pango_stretch(r->font_stretch));
+    case NS_INLINE_FONT_FEATURES:
+        return ns_paint_font_features_attr_from_values(
+            r->font_kerning, r->font_ligatures, r->font_features);
+    case NS_INLINE_FONT_VARIATIONS:
+        return ns_paint_font_variations_attr_from_values(r->font_variations);
+    case NS_INLINE_ITALIC:
+        return ns_pango_attr_style_new(NS_PANGO_STYLE_ITALIC);
+    case NS_INLINE_MONOSPACE:
+        return ns_pango_attr_family_new("monospace");
+    case NS_INLINE_FONT_SIZE:
+        return ns_pango_attr_size_new_absolute(
+            ns_paint_pango_font_size(r->font_size_px));
+    case NS_INLINE_FONT_FAMILY: {
+        if (!r->family) return NULL;
+        char *family = ns_css_font_family_for_pango(r->family);
+        NsPangoAttribute *a = ns_pango_attr_family_new(family);
+        g_free(family);
+        return a;
+    }
+    case NS_INLINE_RISE:
+        return ns_pango_attr_rise_new((int)(r->rise_px * NS_PANGO_SCALE));
+    case NS_INLINE_UPRIGHT:
+        return ns_pango_attr_style_new(NS_PANGO_STYLE_NORMAL);
+    case NS_INLINE_SMALL_CAPS:
+        return ns_pango_attr_variant_new(NS_PANGO_VARIANT_SMALL_CAPS);
+    default:
+        return NULL;
+    }
+}
+
+static NsPangoLayout *
+paint_inline_make_layout(const ns_box *b, const ns_style *s,
+                         const char *highlight)
+{
+    NsPangoAttrList *attrs;
+    NsPangoLayout *layout = paint_inline_layout_new(b, s, &attrs);
     double ls_px = 0, ws_px = 0;
     if (s && s->values[NS_CSS_LETTER_SPACING] &&
         s->values[NS_CSS_LETTER_SPACING]->kind == NS_CSS_V_LENGTH &&
@@ -2835,26 +2861,8 @@ paint_inline_make_layout(const ns_box *b, const ns_style *s,
     if (b->attrs) {
         for (gint ii = (gint)b->attrs->len - 1; ii >= 0; ii--) {
             const ns_inline_attr *r = &g_array_index(b->attrs, ns_inline_attr, (guint)ii);
-            NsPangoAttribute *a = NULL;
+            NsPangoAttribute *a = ns_paint_inline_font_attr(r);
             switch (r->kind) {
-            case NS_INLINE_BOLD:
-                a = ns_pango_attr_weight_new(NS_PANGO_WEIGHT_BOLD); break;
-            case NS_INLINE_FONT_WEIGHT:
-                a = ns_pango_attr_weight_new(
-                    ns_paint_pango_weight(r->font_weight)); break;
-            case NS_INLINE_FONT_STRETCH:
-                a = ns_pango_attr_stretch_new(
-                    ns_paint_pango_stretch(r->font_stretch)); break;
-            case NS_INLINE_FONT_FEATURES:
-                a = ns_paint_font_features_attr_from_values(
-                    r->font_kerning, r->font_ligatures, r->font_features); break;
-            case NS_INLINE_FONT_VARIATIONS:
-                a = ns_paint_font_variations_attr_from_values(
-                    r->font_variations); break;
-            case NS_INLINE_ITALIC:
-                a = ns_pango_attr_style_new(NS_PANGO_STYLE_ITALIC); break;
-            case NS_INLINE_MONOSPACE:
-                a = ns_pango_attr_family_new("monospace"); break;
             case NS_INLINE_UNDERLINE: {
                 if (underline_dash_style(r, s))
                     break;
@@ -2931,10 +2939,6 @@ paint_inline_make_layout(const ns_box *b, const ns_style *s,
             case NS_INLINE_PROGRESS:
             case NS_INLINE_METER:
                 break;
-            case NS_INLINE_FONT_SIZE:
-                a = ns_pango_attr_size_new_absolute(
-                    ns_paint_pango_font_size(r->font_size_px));
-                break;
             case NS_INLINE_COLOR:
                 a = ns_pango_attr_foreground_new(
                     (guint16)(r->r * 0x101),
@@ -2957,22 +2961,6 @@ paint_inline_make_layout(const ns_box *b, const ns_style *s,
                             r->a ? (guint16)(r->a * 0x101) : 1),
                         r->start, r->len);
                 break;
-            case NS_INLINE_FONT_FAMILY:
-                if (r->family) {
-                    char *ns_pango_family = ns_css_font_family_for_pango(r->family);
-                    a = ns_pango_attr_family_new(ns_pango_family);
-                    g_free(ns_pango_family);
-                }
-                break;
-            case NS_INLINE_RISE:
-                a = ns_pango_attr_rise_new((int)(r->rise_px * NS_PANGO_SCALE));
-                break;
-            case NS_INLINE_UPRIGHT:
-                a = ns_pango_attr_style_new(NS_PANGO_STYLE_NORMAL);
-                break;
-            case NS_INLINE_SMALL_CAPS:
-                a = ns_pango_attr_variant_new(NS_PANGO_VARIANT_SMALL_CAPS);
-                break;
             case NS_INLINE_SELECTION:
                 attr_insert_range(attrs,
                     ns_pango_attr_background_new(0xb400, 0xd500, 0xfe00),
@@ -2981,9 +2969,7 @@ paint_inline_make_layout(const ns_box *b, const ns_style *s,
                     ns_pango_attr_foreground_new(0x0000, 0x0000, 0x0000),
                     r->start, r->len);
                 break;
-            case NS_INLINE_CARET:
-            case NS_INLINE_ELEMENT:
-            case NS_INLINE_SPELLCHECK:
+            default:
                 break;
             }
             attr_insert_range(attrs, a, r->start, r->len);
@@ -3308,7 +3294,7 @@ paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
                 if (p->dom) { field_box = p; break; }
             gboolean block_chrome = field_box &&
                                     field_box->dom == r->dom &&
-                                    style_has_inline_box_paint(r->style);
+                                    ns_style_has_box_paint(r->style);
             gboolean draw_native_chrome = r->native_chrome && !block_chrome;
             if (r->kind == NS_INLINE_BUTTON && r->dom &&
                 ns_element_get_attr(r->dom, "class") &&
@@ -3604,77 +3590,12 @@ ns_paint_build_inline_layout(const ns_box *b)
 {
     if (!b || !b->text) return NULL;
     const ns_style *s = inherited_style(b);
-
-    NsPangoLayout *layout = paint_create_layout();
-    ns_paint_apply_inline_font(layout, s);
-    if (ns_style_is_nowrap(s) &&
-        !keyword_is(s ? s->values[NS_CSS_TEXT_OVERFLOW] : NULL, "ellipsis"))
-        ns_pango_layout_set_width(layout, -1);
-    else
-        ns_pango_layout_set_width(layout, (int)(b->content_width * NS_PANGO_SCALE));
-    ns_pango_layout_set_wrap(layout, ns_paint_wrap_mode_for(s));
-    if (!(b->inline_atomics && b->inline_atomics->len > 0))
-        ns_paint_apply_css_line_spacing(layout, s);
-    {
-        double ti = ns_text_indent_px(s, b->content_width);
-        if (ti > 0) ns_pango_layout_set_indent(layout, (int)(ti * NS_PANGO_SCALE));
-    }
-    if (keyword_is(s ? s->values[NS_CSS_TEXT_OVERFLOW] : NULL, "ellipsis"))
-        ns_pango_layout_set_ellipsize(layout, NS_PANGO_ELLIPSIZE_END);
-    {
-        const ns_css_value *lc = s ? s->values[NS_CSS_LINE_CLAMP] : NULL;
-        if (lc && lc->kind == NS_CSS_V_LENGTH && lc->u.length.v >= 1) {
-            ns_pango_layout_set_height(layout, -(int)lc->u.length.v);
-            ns_pango_layout_set_ellipsize(layout, NS_PANGO_ELLIPSIZE_END);
-        }
-    }
-    ns_pango_layout_set_text(layout, b->text, -1);
-
-    NsPangoAttrList *attrs = ns_pango_attr_list_new();
-    ns_paint_apply_i18n(layout, attrs, b);
-    ns_paint_apply_font_features(attrs, s, 0, G_MAXUINT);
-    ns_inline_apply_atomic_shapes(attrs, b);
+    NsPangoAttrList *attrs;
+    NsPangoLayout *layout = paint_inline_layout_new(b, s, &attrs);
     if (b->attrs) {
         for (gint ii = (gint)b->attrs->len - 1; ii >= 0; ii--) {
             const ns_inline_attr *r = &g_array_index(b->attrs, ns_inline_attr, (guint)ii);
-            NsPangoAttribute *a = NULL;
-            switch (r->kind) {
-            case NS_INLINE_BOLD:      a = ns_pango_attr_weight_new(NS_PANGO_WEIGHT_BOLD); break;
-            case NS_INLINE_FONT_WEIGHT:
-                a = ns_pango_attr_weight_new(
-                    ns_paint_pango_weight(r->font_weight)); break;
-            case NS_INLINE_FONT_STRETCH:
-                a = ns_pango_attr_stretch_new(
-                    ns_paint_pango_stretch(r->font_stretch)); break;
-            case NS_INLINE_FONT_FEATURES:
-                a = ns_paint_font_features_attr_from_values(
-                    r->font_kerning, r->font_ligatures, r->font_features); break;
-            case NS_INLINE_FONT_VARIATIONS:
-                a = ns_paint_font_variations_attr_from_values(
-                    r->font_variations); break;
-            case NS_INLINE_ITALIC:    a = ns_pango_attr_style_new(NS_PANGO_STYLE_ITALIC); break;
-            case NS_INLINE_MONOSPACE: a = ns_pango_attr_family_new("monospace"); break;
-            case NS_INLINE_FONT_SIZE:
-                a = ns_pango_attr_size_new_absolute(
-                    ns_paint_pango_font_size(r->font_size_px));
-                break;
-            case NS_INLINE_FONT_FAMILY:
-                if (r->family) {
-                    char *ns_pango_family = ns_css_font_family_for_pango(r->family);
-                    a = ns_pango_attr_family_new(ns_pango_family);
-                    g_free(ns_pango_family);
-                }
-                break;
-            case NS_INLINE_RISE:
-                a = ns_pango_attr_rise_new((int)(r->rise_px * NS_PANGO_SCALE));
-                break;
-            case NS_INLINE_UPRIGHT:
-                a = ns_pango_attr_style_new(NS_PANGO_STYLE_NORMAL); break;
-            case NS_INLINE_SMALL_CAPS:
-                a = ns_pango_attr_variant_new(NS_PANGO_VARIANT_SMALL_CAPS); break;
-            default: break;
-            }
-            attr_insert_range(attrs, a, r->start, r->len);
+            attr_insert_range(attrs, ns_paint_inline_font_attr(r), r->start, r->len);
         }
     }
     ns_inline_layout_set_attrs(layout, attrs, b);

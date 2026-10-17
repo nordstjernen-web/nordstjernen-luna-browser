@@ -66,6 +66,7 @@ NsPangoAttribute *ns_paint_font_features_attr_from_values(int kerning,
                                                         const char *ligatures,
                                                         const char *settings);
 NsPangoAttribute *ns_paint_font_variations_attr_from_values(const char *settings);
+NsPangoAttribute *ns_paint_inline_font_attr(const ns_inline_attr *r);
 
 NsPangoWrapMode ns_paint_wrap_mode_for(const ns_style *style);
 
