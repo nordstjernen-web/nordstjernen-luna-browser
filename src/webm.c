@@ -26,8 +26,6 @@ enum {
     WEBM_ID_CODEC_ID = 0x86,
     WEBM_ID_CODEC_PRIVATE = 0x63A2,
     WEBM_ID_DEFAULT_DURATION = 0x23E383,
-    WEBM_ID_CODEC_DELAY = 0x56AA,
-    WEBM_ID_SEEK_PRE_ROLL = 0x56BB,
     WEBM_ID_VIDEO = 0xE0,
     WEBM_ID_PIXEL_WIDTH = 0xB0,
     WEBM_ID_PIXEL_HEIGHT = 0xBA,
@@ -110,8 +108,6 @@ typedef struct {
 typedef struct {
     ns_mp4_track public;
     guint64      default_duration_ns;
-    guint64      codec_delay_ns;
-    guint64      seek_preroll_ns;
     gboolean     is_opus;
     gint64       last_frame_duration;
     gboolean     has_held_block;
@@ -846,12 +842,6 @@ parse_track_entry(ns_webm_demuxer *d, const child_element *entry,
         case WEBM_ID_DEFAULT_DURATION:
             ok = read_unsigned(&child, &track->default_duration_ns);
             break;
-        case WEBM_ID_CODEC_DELAY:
-            ok = read_unsigned(&child, &track->codec_delay_ns);
-            break;
-        case WEBM_ID_SEEK_PRE_ROLL:
-            ok = read_unsigned(&child, &track->seek_preroll_ns);
-            break;
         case WEBM_ID_VIDEO:
             ok = parse_track_video(track, &child);
             break;
@@ -1220,12 +1210,6 @@ ns_webm_demuxer_has_init(const ns_webm_demuxer *d)
     return d && d->has_init;
 }
 
-gboolean
-ns_webm_demuxer_has_error(const ns_webm_demuxer *d)
-{
-    return !d || d->error;
-}
-
 guint
 ns_webm_demuxer_n_tracks(const ns_webm_demuxer *d)
 {
@@ -1238,14 +1222,6 @@ ns_webm_demuxer_track(const ns_webm_demuxer *d, guint index)
     if (!d || !d->has_init || index >= d->tracks->len) return NULL;
     webm_track *track = g_ptr_array_index(d->tracks, index);
     return &track->public;
-}
-
-const ns_mp4_track *
-ns_webm_demuxer_track_by_id(const ns_webm_demuxer *d, guint32 id)
-{
-    if (!d || !d->has_init) return NULL;
-    webm_track *track = find_track(d->tracks, id);
-    return track ? &track->public : NULL;
 }
 
 gboolean
@@ -1272,26 +1248,6 @@ ns_webm_demuxer_reset_parser(ns_webm_demuxer *d)
     if (!d) return;
     if (!d->error) resolve_all_held_blocks(d);
     clear_parser_state(d);
-}
-
-gint64
-ns_webm_demuxer_track_codec_delay_ns(const ns_webm_demuxer *d,
-                                     guint32 track_id)
-{
-    if (!d) return 0;
-    webm_track *track = find_track(d->tracks, track_id);
-    if (!track) return 0;
-    return (gint64)MIN(track->codec_delay_ns, (guint64)G_MAXINT64);
-}
-
-gint64
-ns_webm_demuxer_track_seek_preroll_ns(const ns_webm_demuxer *d,
-                                      guint32 track_id)
-{
-    if (!d) return 0;
-    webm_track *track = find_track(d->tracks, track_id);
-    if (!track) return 0;
-    return (gint64)MIN(track->seek_preroll_ns, (guint64)G_MAXINT64);
 }
 
 double

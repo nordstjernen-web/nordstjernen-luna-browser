@@ -58,7 +58,6 @@ typedef struct {
     float   volume;
     int     reached_end;
     long    reload_size;
-    Uint32  reload_ticks;
     int     streaming;
     int     stream_ended;
     double  stream_base;
@@ -93,7 +92,6 @@ typedef enum {
     NS_AUDIO_OP_VOLUME,
     NS_AUDIO_OP_LOOP,
     NS_AUDIO_OP_CLOSE,
-    NS_AUDIO_OP_RESET,
     NS_AUDIO_OP_DESTROY,
     NS_AUDIO_OP_QUIT,
 } ns_audio_op;
@@ -828,7 +826,6 @@ player_load_bytes(NsAudioContext *context, ns_audio_player *p,
         return;
     }
     p->reload_size = (long)size;
-    p->reload_ticks = SDL_GetTicks();
     emit("meta %s %.3f", token, (double)p->frames / NS_AUDIO_DEVICE_RATE);
 }
 
@@ -879,7 +876,6 @@ cmd_reload_bytes(NsAudioContext *context, const char *token, GBytes *bytes,
         audio_unlock();
         return;
     }
-    Uint32 now = SDL_GetTicks();
     if ((gsize)p->reload_size == size) return;
 
     ns_audio_player fresh;
@@ -900,7 +896,6 @@ cmd_reload_bytes(NsAudioContext *context, const char *token, GBytes *bytes,
         p->clock_offset_valid = 0;
     }
     p->reload_size = (long)size;
-    p->reload_ticks = now;
     audio_unlock();
     free(old_pcm);
     emit("meta %s %.3f", token,
@@ -1073,9 +1068,7 @@ audio_worker(gpointer data)
             command_free(command);
             break;
         }
-        if (command->op == NS_AUDIO_OP_RESET) {
-            release_context_players(command->context);
-        } else if (command->op == NS_AUDIO_OP_DESTROY) {
+        if (command->op == NS_AUDIO_OP_DESTROY) {
             release_context_players(command->context);
             context_free(command->context);
         } else if (!g_atomic_int_get(&g_shutting_down) &&
@@ -1401,16 +1394,6 @@ ns_audio_context_stream_end(NsAudioContext *context, const char *token,
     ns_audio_player *p = player_find(context, token);
     if (p && p->streaming) p->stream_ended = ended ? 1 : 0;
     audio_unlock();
-}
-
-void
-ns_audio_context_reset(NsAudioContext *context)
-{
-    if (!context || g_atomic_int_get(&context->destroyed)) return;
-    g_atomic_int_inc(&context->generation);
-    context_cancel_fetches(context);
-    if (g_worker)
-        push_command(NS_AUDIO_OP_RESET, context, NULL, NULL, NULL, 0.0);
 }
 
 void

@@ -1,4 +1,4 @@
-/* Northstar — webcam capture (V4L2) and per-site camera permission.
+/* Northstar — webcam enumeration (V4L2) and per-site camera permission.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -8,25 +8,12 @@
 
 #include <glib.h>
 
-#include "texture.h"
-
 G_BEGIN_DECLS
-
-typedef struct ns_camera ns_camera;
 
 typedef struct ns_camera_info {
     char *device;
     char *label;
 } ns_camera_info;
-
-ns_camera  *ns_camera_open(const char *device);
-ns_texture *ns_camera_next_frame(ns_camera *cam);
-
-ns_camera  *ns_camera_acquire(void);
-void        ns_camera_release(void);
-ns_camera  *ns_camera_active(void);
-const char *ns_camera_device(const ns_camera *cam);
-void        ns_camera_close(ns_camera *cam);
 
 GPtrArray  *ns_camera_enumerate(void);
 void        ns_camera_info_free(ns_camera_info *info);
