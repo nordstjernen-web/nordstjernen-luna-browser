@@ -4,6 +4,33 @@ Significant changes in each release:
 
 1.0.15:
 =======
+* Security: the kernel now refuses executable memory wherever page content
+  runs. Northstar has no JIT, yet its seccomp filter let any thread map
+  memory executable, so a memory-safety bug in the engine, the media
+  demuxers or the decoders could make a buffer executable and run it. The
+  engine thread installs a second filter on itself, inherited by the
+  threads it starts, that refuses an anonymous executable `mmap` and any
+  `mprotect`/`pkey_mprotect` adding `PROT_EXEC`; headless and tooling
+  runs install it for the whole process, as headless Windows runs already
+  refuse dynamic code. The GUI's main thread keeps executable memory for
+  GPU drivers that compile shaders (Mesa's llvmpipe). The main filter now
+  allows `seccomp(SECCOMP_SET_MODE_FILTER)` so a thread can add its own.
+* `document.cookie` follows the cookie store. It was a copy taken when
+  the page loaded and replaced only when script wrote it, so a cookie set
+  or deleted by a `fetch()` or XHR response never appeared, which broke
+  sites that copy a CSRF token from a cookie into a request header. The
+  store now counts its writes, and a read takes the cookies again when
+  the count has changed. Same fix as Nordstjernen's and Southstar's.
+* Security: a local HTML file can no longer read other local files
+  through a frame or a canvas. `ns_js_urls_same_origin` compared non-HTTP
+  URLs by scheme alone, so it called any two `file:` URLs same-origin: a
+  page opened from the downloads folder could embed another program's
+  file under `~/.config` in an iframe and read its `contentDocument`, and
+  a local image from another folder drawn into a canvas did not taint it.
+  Every `file:` URL is now its own origin there too, as `fetch()` and
+  `XMLHttpRequest` already treated it. A local page still loads its own
+  scripts, style sheets and images. Nordstjernen and Southstar take the
+  same fix, where `fetch()` and XHR could read the files directly.
 * A source-wide sweep for unused, duplicated and bloated code removes
   about 2,250 lines from the engine without changing what pages see.
   - A link with section garbage collection found 24 functions nothing
