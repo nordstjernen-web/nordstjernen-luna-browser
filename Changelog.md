@@ -4,6 +4,12 @@ Significant changes in each release:
 
 1.0.15:
 =======
+* Security: the Landlock sandbox no longer opens the whole home directory
+  when `$XAUTHORITY` is `~/.Xauthority`, as LightDM sets it on X11
+  sessions (Linux Mint, Xubuntu). The sandbox granted read access to the
+  directory holding that file, which was then `$HOME`, so `~/.ssh`,
+  `~/.aws` and every other file there were readable from the browser
+  process. It now grants read access to the `$XAUTHORITY` file alone.
 * Security: the kernel now refuses executable memory wherever page content
   runs. Northstar has no JIT, yet its seccomp filter let any thread map
   memory executable, so a memory-safety bug in the engine, the media

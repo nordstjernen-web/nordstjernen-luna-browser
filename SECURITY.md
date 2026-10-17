@@ -139,8 +139,8 @@ unconfined.
     socket directories, the user's font and theme directories
     (`~/.fonts`, `~/.fontconfig`, `~/.icons`, `~/.themes`), the whole
     XDG config, data and cache directories (`~/.config`,
-    `~/.local/share`, `~/.cache`), the directory that holds
-    `$XAUTHORITY`, and the data directories found near the executable
+    `~/.local/share`, `~/.cache`), the `$XAUTHORITY` file itself, and
+    the data directories found near the executable
     (`../share/northstar`, or `data/` in a build tree — where the source
     tree itself, the nearest directory holding a `meson.build` up to
     three levels above the executable, is readable too). `/dev/shm` is
@@ -154,11 +154,10 @@ unconfined.
     directory of a `--dump=png:`, `pdf:` or `print:` run.
 
   The rest of `$HOME` — `~/.ssh`, `~/.aws`, `~/.netrc`, shell history —
-  is **not** reachable. Two things widen that: other applications' state
-  kept under `~/.config`, `~/.local/share` or `~/.cache` (other browsers'
-  profiles among it) is readable, and when `$XAUTHORITY` is
-  `~/.Xauthority` its directory is `$HOME` itself, which makes the whole
-  home directory readable. No writable directory is granted Landlock's
+  is **not** reachable, also when `$XAUTHORITY` is `~/.Xauthority`. One
+  thing widens that: other applications' state kept under `~/.config`,
+  `~/.local/share` or `~/.cache` (other browsers' profiles among it) is
+  readable. No writable directory is granted Landlock's
   execute right, and `execve` is not in the seccomp allow-list, so a
   dropped file cannot be run as a program. Symbolic-link creation
   (`LANDLOCK_ACCESS_FS_MAKE_SYM`) is handled by the ruleset and granted
