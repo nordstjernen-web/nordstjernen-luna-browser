@@ -390,6 +390,31 @@ ns_idb_open_from_args(JSContext *ctx, JSValueConst *argv, int n,
 }
 
 static JSValue
+ns_idb_exec_with_store(JSContext *ctx, ns_idb_db *h, const char *sql,
+                       const char *store)
+{
+    sqlite3_stmt *st = NULL;
+    gboolean ok = sqlite3_prepare_v2(h->db, sql, -1, &st, NULL) == SQLITE_OK;
+    if (ok) {
+        sqlite3_bind_text(st, 1, store, -1, SQLITE_TRANSIENT);
+        ok = sqlite3_step(st) == SQLITE_DONE;
+    }
+    if (st) sqlite3_finalize(st);
+    return ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
+}
+
+static JSValue
+ns_idb_info_named(JSContext *ctx, const char *name)
+{
+    ns_idb_db *h = ns_idb_open_db(ctx, name);
+    JSValue out = h ? ns_idb_info_for(ctx, h, name)
+                    : ns_idb_throw(ctx, "UnknownError",
+                                   "Could not open IndexedDB database");
+    JS_FreeCString(ctx, name);
+    return out;
+}
+
+static JSValue
 ns_idb_backend_open(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
 {
@@ -397,14 +422,7 @@ ns_idb_backend_open(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return ns_idb_throw(ctx, "TypeError", "Database name is required");
     const char *name = ns_idb_arg_string(ctx, argv[0]);
     if (!name) return JS_EXCEPTION;
-    ns_idb_db *h = ns_idb_open_db(ctx, name);
-    if (!h) {
-        JS_FreeCString(ctx, name);
-        return ns_idb_throw(ctx, "UnknownError", "Could not open IndexedDB database");
-    }
-    JSValue out = ns_idb_info_for(ctx, h, name);
-    JS_FreeCString(ctx, name);
-    return out;
+    return ns_idb_info_named(ctx, name);
 }
 
 static JSValue
@@ -472,15 +490,8 @@ ns_idb_backend_delete_store(JSContext *ctx, JSValueConst this_val,
     ns_idb_db *h = ns_idb_open_from_args(ctx, argv, 1, arg, &error);
     if (!h) return error;
     const char *store = arg[0];
-    sqlite3_stmt *st = NULL;
-    gboolean ok = sqlite3_prepare_v2(h->db, "DELETE FROM stores WHERE name=?",
-                                     -1, &st, NULL) == SQLITE_OK;
-    if (ok) {
-        sqlite3_bind_text(st, 1, store, -1, SQLITE_TRANSIENT);
-        ok = sqlite3_step(st) == SQLITE_DONE;
-    }
-    if (st) sqlite3_finalize(st);
-    JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
+    JSValue out = ns_idb_exec_with_store(ctx, h,
+        "DELETE FROM stores WHERE name=?", store);
     JS_FreeCString(ctx, store);
     return out;
 }
@@ -968,16 +979,8 @@ ns_idb_backend_clear(JSContext *ctx, JSValueConst this_val,
     ns_idb_db *h = ns_idb_open_from_args(ctx, argv, 1, arg, &error);
     if (!h) return error;
     const char *store = arg[0];
-    sqlite3_stmt *st = NULL;
-    gboolean ok = sqlite3_prepare_v2(h->db,
-        "DELETE FROM records WHERE store=?",
-        -1, &st, NULL) == SQLITE_OK;
-    if (ok) {
-        sqlite3_bind_text(st, 1, store, -1, SQLITE_TRANSIENT);
-        ok = sqlite3_step(st) == SQLITE_DONE;
-    }
-    if (st) sqlite3_finalize(st);
-    JSValue out = ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
+    JSValue out = ns_idb_exec_with_store(ctx, h,
+        "DELETE FROM records WHERE store=?", store);
     JS_FreeCString(ctx, store);
     return out;
 }
@@ -990,14 +993,7 @@ ns_idb_backend_info(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return JS_NULL;
     const char *name = JS_ToCString(ctx, argv[0]);
     if (!name) return JS_EXCEPTION;
-    ns_idb_db *h = ns_idb_open_db(ctx, name);
-    if (!h) {
-        JS_FreeCString(ctx, name);
-        return ns_idb_throw(ctx, "UnknownError", "Could not open IndexedDB database");
-    }
-    JSValue out = ns_idb_info_for(ctx, h, name);
-    JS_FreeCString(ctx, name);
-    return out;
+    return ns_idb_info_named(ctx, name);
 }
 
 static JSValue

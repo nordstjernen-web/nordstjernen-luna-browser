@@ -156,46 +156,6 @@ ns_css_set_frame_viewport_cb(void (*cb)(const ns_node *frame,
     g_frame_viewport_cb = cb;
 }
 
-static double
-viewport_resolve(double v, ns_css_unit unit)
-{
-    switch (unit) {
-    case NS_CSS_UNIT_VW:
-    case NS_CSS_UNIT_SVW:
-    case NS_CSS_UNIT_LVW:
-    case NS_CSS_UNIT_DVW:
-    case NS_CSS_UNIT_VI:
-    case NS_CSS_UNIT_SVI:
-    case NS_CSS_UNIT_LVI:
-    case NS_CSS_UNIT_DVI:
-        return v * g_viewport_w / 100.0;
-    case NS_CSS_UNIT_VH:
-    case NS_CSS_UNIT_SVH:
-    case NS_CSS_UNIT_LVH:
-    case NS_CSS_UNIT_DVH:
-    case NS_CSS_UNIT_VB:
-    case NS_CSS_UNIT_SVB:
-    case NS_CSS_UNIT_LVB:
-    case NS_CSS_UNIT_DVB:
-        return v * g_viewport_h / 100.0;
-    case NS_CSS_UNIT_VMIN:
-    case NS_CSS_UNIT_SVMIN:
-    case NS_CSS_UNIT_LVMIN:
-    case NS_CSS_UNIT_DVMIN: {
-        double m = g_viewport_w < g_viewport_h ? g_viewport_w : g_viewport_h;
-        return v * m / 100.0;
-    }
-    case NS_CSS_UNIT_VMAX:
-    case NS_CSS_UNIT_SVMAX:
-    case NS_CSS_UNIT_LVMAX:
-    case NS_CSS_UNIT_DVMAX: {
-        double m = g_viewport_w > g_viewport_h ? g_viewport_w : g_viewport_h;
-        return v * m / 100.0;
-    }
-    default: return 0;
-    }
-}
-
 static void
 viewport_unit_coeff(ns_css_unit unit, double v, double *vw, double *vh,
                     double *vmin, double *vmax)
@@ -244,6 +204,14 @@ viewport_coeff_px(double vw, double vh, double vmin, double vmax,
 {
     return (vw * width + vh * height + vmin * MIN(width, height) +
             vmax * MAX(width, height)) / 100.0;
+}
+
+static double
+viewport_resolve(double v, ns_css_unit unit)
+{
+    double vw = 0, vh = 0, vmin = 0, vmax = 0;
+    viewport_unit_coeff(unit, v, &vw, &vh, &vmin, &vmax);
+    return viewport_coeff_px(vw, vh, vmin, vmax, g_viewport_w, g_viewport_h);
 }
 
 static char *g_target_fragment = NULL;
