@@ -1592,18 +1592,15 @@ act_console(GSimpleAction *a, GVariant *p, gpointer ud)
         ns_proc_view_toggle_console(v);
 }
 
-static void
-act_bookmark_page(GSimpleAction *a, GVariant *p, gpointer ud)
+static gboolean
+toggle_bookmark_current(ProcWindow *pw)
 {
-    (void)a;
-    (void)p;
-    ProcWindow *pw = ud;
     NsProcView *v = current_view(pw);
     if (!v || !pw->bookmarks)
-        return;
+        return FALSE;
     const char *url = ns_proc_view_url(v);
     if (!url || !*url)
-        return;
+        return FALSE;
     if (ns_bookmarks_contains(pw->bookmarks, url)) {
         ns_bookmarks_remove(pw->bookmarks, url);
         pw_set_status(pw, ns_i18n("Bookmark removed"));
@@ -1612,6 +1609,15 @@ act_bookmark_page(GSimpleAction *a, GVariant *p, gpointer ud)
         pw_set_status(pw, ns_i18n("Bookmark added"));
     }
     update_bookmark_indicator(pw);
+    return TRUE;
+}
+
+static void
+act_bookmark_page(GSimpleAction *a, GVariant *p, gpointer ud)
+{
+    (void)a;
+    (void)p;
+    toggle_bookmark_current(ud);
 }
 
 static void
@@ -2223,21 +2229,8 @@ on_bookmark_remove(GtkButton *button, gpointer user_data)
 static void
 on_add_bookmark(GtkButton *button, gpointer user_data)
 {
-    ProcWindow *pw = user_data;
-    NsProcView *v = current_view(pw);
-    if (!v || !pw->bookmarks)
+    if (!toggle_bookmark_current(user_data))
         return;
-    const char *url = ns_proc_view_url(v);
-    if (!url || !*url)
-        return;
-    if (ns_bookmarks_contains(pw->bookmarks, url)) {
-        ns_bookmarks_remove(pw->bookmarks, url);
-        pw_set_status(pw, ns_i18n("Bookmark removed"));
-    } else {
-        ns_bookmarks_add(pw->bookmarks, url, ns_proc_view_title(v));
-        pw_set_status(pw, ns_i18n("Bookmark added"));
-    }
-    update_bookmark_indicator(pw);
     GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(button),
                                              GTK_TYPE_POPOVER);
     if (pop)
