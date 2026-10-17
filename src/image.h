@@ -94,9 +94,6 @@ ns_image       *ns_image_cache_insert_decoding(ns_image_cache    *cache,
                                                ns_image_decoding *decoding);
 void            ns_image_decoding_free(ns_image_decoding *decoding);
 
-ns_texture *ns_image_decode_bytes(const guchar *data, gsize len,
-                                  int *out_w, int *out_h);
-
 ns_texture *ns_image_decode_wuffs(const guchar *data, gsize len,
                                   int *out_w, int *out_h);
 
@@ -142,8 +139,6 @@ gboolean ns_image_cache_has_pending(const ns_image_cache *cache);
 
 void     ns_image_cache_begin_generation(ns_image_cache *cache);
 void     ns_image_cache_collect(ns_image_cache *cache);
-
-gboolean ns_image_should_retry(const ns_image *img, gint64 now_us);
 
 #ifdef NS_HAVE_AVIF
 ns_texture *ns_image_decode_avif(const guchar *data, gsize len,

@@ -212,7 +212,6 @@ void ns_inline_layout_set_attrs(struct _PangoLayout *layout,
                                 struct _PangoAttrList *list, const ns_box *box);
 double ns_text_indent_px(const ns_style *s, double basis);
 double ns_control_css_extra_w(const ns_node *dom, const ns_style *s);
-double ns_control_css_extra_h(const ns_node *dom, const ns_style *s);
 
 void ns_box_free(ns_box *box);
 
@@ -270,15 +269,11 @@ void ns_layout_collect_images(const ns_box *root, GPtrArray *out_boxes);
 void ns_layout_collect_videos(const ns_box *root, GPtrArray *out_boxes);
 
 const char *ns_box_hit_link(const ns_box *root, double x, double y);
-const ns_link_range *ns_box_hit_link_range(const ns_box *root, double x, double y);
 
 const ns_box *ns_box_hit_test(const ns_box *root, double x, double y);
 gboolean ns_box_clips_out_point(const ns_box *b, double x, double y);
 void ns_box_set_hit_viewport(double scroll_x, double scroll_y);
 gboolean ns_box_is_fixed(const ns_box *b);
-void ns_box_sticky_offset_in(const ns_box *b, double sp_x0, double sp_y0,
-                             double sp_x1, double sp_y1,
-                             double *out_dx, double *out_dy);
 void ns_box_sticky_offset(const ns_box *b, double vp_x0, double vp_y0,
                           double vp_x1, double vp_y1,
                           double *out_dx, double *out_dy);
@@ -298,10 +293,6 @@ gboolean ns_box_scroll_snap_viewport(ns_box *root, const ns_style *s,
                                      double *x, double *y);
 ns_box *ns_box_hit_scrollbar(ns_box *root, double x, double y,
                              double *lx, double *ly);
-
-const ns_node *ns_box_hit_form_dom(const ns_box *root, double x, double y);
-
-const ns_node *ns_box_hit_inline_dom(const ns_box *root, double x, double y);
 
 gboolean ns_box_inline_rect_for_dom(const ns_box *root, const ns_node *target,
                                     double *x, double *y,

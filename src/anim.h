@@ -17,7 +17,6 @@ void     ns_anim_observe_all(ns_anim *a, GHashTable *styles, gint64 now_us);
  * nodes is the same as at the last full observation. */
 void     ns_anim_observe_nodes(ns_anim *a, GHashTable *styles, GPtrArray *nodes,
                                gint64 now_us);
-void     ns_anim_apply(ns_anim *a, GHashTable *styles);
 gboolean ns_anim_tick(ns_anim *a, gint64 now_us);
 gboolean ns_anim_has_active(const ns_anim *a);
 gboolean ns_anim_needs_layout(const ns_anim *a);
@@ -85,7 +84,6 @@ gboolean ns_anim_script_start(ns_anim *a, const ns_node *node,
                               const char *const *stop_css, const double *stop_pct,
                               int n_stops, const ns_anim_script_timing *t,
                               int *out_prop, guint *out_generation);
-void     ns_anim_prune(ns_anim *a, GHashTable *live);
 void     ns_anim_rebase(ns_anim *a, gint64 base_us);
 G_END_DECLS
 #endif

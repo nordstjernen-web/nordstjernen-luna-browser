@@ -56,7 +56,6 @@ char *ns_browser_release_click(ns_browser *browser, int *out_changed);
 char *ns_browser_key_full(ns_browser *browser, int kind, const char *key,
                           const char *code, int keycode, int mods,
                           int *out_prevented);
-int ns_browser_focused_editable(ns_browser *browser);
 int ns_browser_hover(ns_browser *browser, int x, int y);
 int ns_browser_scroll_at(ns_browser *browser, int x, int y, int dx, int dy);
 int ns_browser_scrollbar_press(ns_browser *browser, int x, int y);
@@ -85,7 +84,6 @@ int   ns_browser_has_pending_clipboard(ns_browser *browser);
 char *ns_browser_take_pending_clipboard(ns_browser *browser);
 
 int ns_browser_tick(ns_browser *browser, int budget_ms);
-int ns_browser_animating(ns_browser *browser);
 int ns_browser_continuous(ns_browser *browser);
 int ns_browser_needs_frame(ns_browser *browser);
 gint64 ns_browser_next_wake_us(ns_browser *browser);

@@ -47,7 +47,7 @@ ns_fetch_policy_document_url(const ns_fetch_policy *policy)
     return policy ? policy->document_url : NULL;
 }
 
-const char *
+static const char *
 ns_fetch_destination_name(ns_fetch_destination dest)
 {
     switch (dest) {

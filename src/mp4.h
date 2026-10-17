@@ -57,8 +57,6 @@ guint64         ns_mp4_demuxer_index_extract(ns_mp4_demuxer *d,
                                              guint64 position,
                                              const guint8 *data, gsize len);
 
-double          ns_mp4_time_to_seconds(gint64 time, guint32 timescale);
-
 G_END_DECLS
 
 #endif

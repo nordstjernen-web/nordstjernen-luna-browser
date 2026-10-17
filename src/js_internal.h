@@ -35,17 +35,6 @@ typedef struct ns_canvas_state {
     gboolean origin_clean;
 } ns_canvas_state;
 
-typedef struct ns_path2d {
-    cairo_surface_t *rs;
-    cairo_t         *cr;
-} ns_path2d;
-
-typedef struct ns_image_bitmap {
-    cairo_surface_t *surf;
-    int w, h;
-    gboolean origin_clean;
-} ns_image_bitmap;
-
 typedef struct ns_perf_observer {
     JSValue   cb;
     JSValue   wrapper;
@@ -349,24 +338,6 @@ js_from_ctx(JSContext *ctx)
     return ctx ? (ns_js *)JS_GetContextOpaque(ctx) : NULL;
 }
 
-typedef void (*ns_ctx_drawfn)(cairo_t *cr, void *ud);
-
-typedef struct ns_draw_rect_ud {
-    double x, y, w, h, lw;
-    JSContext *ctx;
-    JSValueConst this_val;
-    ns_canvas_state *st;
-} ns_draw_rect_ud;
-
-typedef struct ns_draw_path_ud {
-    JSContext *ctx;
-    JSValueConst this_val;
-    ns_canvas_state *st;
-    double lw;
-    cairo_path_t *snapshot;
-    cairo_fill_rule_t fill_rule;
-} ns_draw_path_ud;
-
 double ns_arg_d(JSContext *ctx, JSValueConst v);
 void ns_bind_fn(JSContext *ctx, JSValueConst obj, const char *name, JSCFunction *fn, int argc);
 struct ns_mse_source;
@@ -394,7 +365,6 @@ JSValue ns_media_time_ranges_for(JSContext *ctx, double dur);
 JSValue ns_media_time_ranges_from(JSContext *ctx, const double *edges, guint n_ranges);
 
 gboolean ns_node_is_media_element(const ns_node *n);
-char    *ns_media_resolve_src(JSContext *ctx, ns_node *node);
 double   ns_media_position(JSContext *ctx, JSValueConst this_val);
 gboolean ns_media_frame_counts(JSContext *ctx, JSValueConst this_val,
                                guint *presented, guint *dropped);
@@ -434,75 +404,13 @@ JSValue ns_media_get_played_ranges(JSContext *ctx, JSValueConst this_val);
 JSValue ns_media_get_video_width(JSContext *ctx, JSValueConst this_val);
 JSValue ns_media_get_video_height(JSContext *ctx, JSValueConst this_val);
 
-void
-ns_path2d_finalizer(JSRuntime *rt, JSValue val);
-void
-ns_image_bitmap_finalizer(JSRuntime *rt, JSValue val);
-void
-ns_canvas_state_free(gpointer data);
-JSValue
-ns_image_bitmap_close(JSContext *ctx, JSValueConst this_val,
-                      int argc, JSValueConst *argv);
-JSValue
-ns_image_bitmap_make(JSContext *ctx, cairo_surface_t *surf, int w, int h,
-                     gboolean origin_clean);
 JSValue
 ns_throw_security_error(JSContext *ctx, const char *message);
-cairo_surface_t *
-ns_image_bitmap_from_imagedata(JSContext *ctx, JSValueConst src,
-                               int *out_w, int *out_h);
-cairo_surface_t *
-ns_image_bitmap_crop(cairo_surface_t *src, int sw, int sh,
-                     int sx, int sy, int rw, int rh);
 gboolean
 ns_image_bitmap_is(JSValueConst v);
 JSValue
 ns_window_create_image_bitmap(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv);
-JSValue
-ns_offscreen_transferToImageBitmap(JSContext *ctx, JSValueConst this_val,
-                                   int argc, JSValueConst *argv);
-void
-ns_dommatrix_read(JSContext *ctx, JSValueConst v, double *a, double *b,
-                  double *c, double *d, double *e, double *f);
-void
-ns_dommatrix_write(JSContext *ctx, JSValueConst obj, double a, double b,
-                   double c, double d, double e, double f);
-JSValue
-ns_dommatrix_multiply(JSContext *ctx, JSValueConst this_val,
-                      int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_multiplySelf(JSContext *ctx, JSValueConst this_val,
-                          int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_translate(JSContext *ctx, JSValueConst this_val,
-                       int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_scale(JSContext *ctx, JSValueConst this_val,
-                   int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_rotate(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_inverse(JSContext *ctx, JSValueConst this_val,
-                     int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_invertSelf(JSContext *ctx, JSValueConst this_val,
-                        int argc, JSValueConst *argv);
-void
-ns_obj_double(JSContext *ctx, JSValueConst obj, const char *key, double *out);
-JSValue
-ns_dommatrix_transformPoint(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_toString(JSContext *ctx, JSValueConst this_val,
-                      int argc, JSValueConst *argv);
-JSValue
-ns_dommatrix_make(JSContext *ctx, double a, double b, double c, double d,
-                  double e, double f, gboolean readonly);
-JSValue
-ns_dommatrix_ctor_impl(JSContext *ctx, int argc, JSValueConst *argv,
-                       gboolean readonly);
 JSValue
 ns_window_dommatrix_ctor(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv);
@@ -512,264 +420,21 @@ ns_window_dommatrix_readonly_ctor(JSContext *ctx, JSValueConst this_val,
 JSValue
 ns_window_offscreen_canvas_ctor(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv);
-int
-ns_canvas_dim_from_attr(const ns_node *el, const char *name, int defv);
-gboolean
-ns_canvas_parse_color(const char *s, double *r, double *g, double *b, double *a);
 ns_canvas_state *
 ns_canvas_state_for(ns_js *js, const ns_node *el);
-ns_canvas_state *
-ns_ctx_state(JSContext *ctx, JSValueConst this_val);
-cairo_pattern_t *
-ns_ctx_build_pattern(JSContext *ctx, JSValueConst obj, gboolean *origin_clean);
-gboolean
-ns_js_urls_same_origin(const char *a, const char *b);
 gboolean
 ns_js_image_origin_clean(ns_js *js, const ns_node *el, const ns_image *im,
                          gboolean cors_requested);
-double
-ns_ctx_global_alpha(JSContext *ctx, JSValueConst this_val);
-cairo_operator_t
-ns_ctx_parse_composite(const char *s);
-void
-ns_ctx_apply_composite(JSContext *ctx, JSValueConst this_val, cairo_t *cr);
-gboolean
-ns_ctx_image_smoothing(JSContext *ctx, JSValueConst this_val);
-void
-ns_ctx_sync_styles(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st);
-gboolean
-ns_ctx_has_shadow(const ns_canvas_state *st);
-void
-ns_box_blur_argb(uint8_t *data, int w, int h, int stride, int radius);
-void
-ns_ctx_with_shadow(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st,
-                   ns_ctx_drawfn draw, void *ud);
-void
-ns_ctx_set_fill_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st);
-void
-ns_ctx_set_stroke_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st);
-void
-ns_draw_fillrect(cairo_t *cr, void *vud);
-void
-ns_draw_strokerect(cairo_t *cr, void *vud);
-JSValue
-ns_ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_clearRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_beginPath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_closePath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_moveTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_lineTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_arc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-gboolean
-ns_value_is_path2d(JSValueConst v);
-void
-ns_replay_path2d(cairo_t *target, JSValueConst path_v);
-cairo_fill_rule_t
-ns_parse_fill_rule(const char *s);
-cairo_path_t *
-ns_ctx_prepare_path_and_rule(JSContext *ctx, cairo_t *cr,
-                             int argc, JSValueConst *argv);
-void
-ns_ctx_restore_path(cairo_t *cr, cairo_path_t *saved);
-void
-ns_draw_fillpath(cairo_t *cr, void *vud);
-void
-ns_draw_strokepath(cairo_t *cr, void *vud);
-JSValue
-ns_ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_restore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_translate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_scale(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_rotate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-NsPangoFontDescription *
-ns_canvas_font_desc(const char *css_font);
-gboolean
-ns_ctx_direction_is_rtl(JSContext *ctx, JSValueConst this_val);
-void
-ns_ctx_paint_text(JSContext *ctx, JSValueConst this_val,
-                  ns_canvas_state *st, const char *text,
-                  double x, double y, double max_width,
-                  gboolean stroke);
-JSValue
-ns_ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue
-ns_ctx_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
-                        int argc, JSValueConst *argv);
-JSValue
-ns_ctx_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
-                     int argc, JSValueConst *argv);
-JSValue
-ns_ctx_arcTo(JSContext *ctx, JSValueConst this_val,
-             int argc, JSValueConst *argv);
-JSValue
-ns_ctx_ellipse(JSContext *ctx, JSValueConst this_val,
-               int argc, JSValueConst *argv);
-JSValue
-ns_ctx_clip(JSContext *ctx, JSValueConst this_val,
-            int argc, JSValueConst *argv);
-gboolean
-ns_matrix_from_obj(JSContext *ctx, JSValueConst v, cairo_matrix_t *m);
-JSValue
-ns_ctx_setTransform(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_ctx_transform(JSContext *ctx, JSValueConst this_val,
-                 int argc, JSValueConst *argv);
-JSValue
-ns_ctx_resetTransform(JSContext *ctx, JSValueConst this_val,
-                      int argc, JSValueConst *argv);
-JSValue
-ns_ctx_setLineDash(JSContext *ctx, JSValueConst this_val,
-                   int argc, JSValueConst *argv);
-JSValue
-ns_ctx_getLineDash(JSContext *ctx, JSValueConst this_val,
-                   int argc, JSValueConst *argv);
-JSValue
-ns_ctx_gradient_addColorStop(JSContext *ctx, JSValueConst this_val,
-                             int argc, JSValueConst *argv);
-cairo_surface_t *
-ns_ctx_drawimage_source(JSContext *ctx, JSValueConst src, int *out_w, int *out_h,
-                        gboolean *origin_clean);
-JSValue
-ns_ctx_drawImage(JSContext *ctx, JSValueConst this_val,
-                 int argc, JSValueConst *argv);
-JSValue
-ns_ctx_createPattern(JSContext *ctx, JSValueConst this_val,
-                     int argc, JSValueConst *argv);
-JSValue
-ns_ctx_createLinearGradient(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv);
-JSValue
-ns_ctx_createRadialGradient(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv);
-JSValue
-ns_ctx_createConicGradient(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv);
-JSValue
-ns_image_data_make(JSContext *ctx, int w, int h, const uint8_t *rgba);
 void ns_image_data_install(JSContext *ctx, JSValueConst global);
-JSValue
-ns_ctx_createImageData(JSContext *ctx, JSValueConst this_val,
-                       int argc, JSValueConst *argv);
-JSValue
-ns_ctx_getImageData(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_ctx_putImageData(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_ctx_strokeText(JSContext *ctx, JSValueConst this_val,
-                  int argc, JSValueConst *argv);
-void
-ns_round_rect_subpath(cairo_t *cr, double x, double y, double w, double h,
-                      double rtl, double rtr, double rbr, double rbl);
-gboolean
-ns_extract_radii(JSContext *ctx, JSValueConst v,
-                 double *rtl, double *rtr, double *rbr, double *rbl);
-JSValue
-ns_ctx_roundRect(JSContext *ctx, JSValueConst this_val,
-                 int argc, JSValueConst *argv);
-JSValue
-ns_ctx_reset(JSContext *ctx, JSValueConst this_val,
-             int argc, JSValueConst *argv);
-JSValue
-ns_ctx_getTransform(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_ctx_isPointInPath(JSContext *ctx, JSValueConst this_val,
-                     int argc, JSValueConst *argv);
-JSValue
-ns_ctx_isPointInStroke(JSContext *ctx, JSValueConst this_val,
-                       int argc, JSValueConst *argv);
-JSValue
-ns_path2d_get_cr(JSContext *ctx, JSValueConst this_val, cairo_t **out);
-JSValue
-ns_path2d_moveTo(JSContext *ctx, JSValueConst this_val,
-                 int argc, JSValueConst *argv);
-JSValue
-ns_path2d_lineTo(JSContext *ctx, JSValueConst this_val,
-                 int argc, JSValueConst *argv);
-JSValue
-ns_path2d_closePath(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_path2d_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
-                        int argc, JSValueConst *argv);
-JSValue
-ns_path2d_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv);
-JSValue
-ns_path2d_arc(JSContext *ctx, JSValueConst this_val,
-              int argc, JSValueConst *argv);
-JSValue
-ns_path2d_arcTo(JSContext *ctx, JSValueConst this_val,
-                int argc, JSValueConst *argv);
-JSValue
-ns_path2d_ellipse(JSContext *ctx, JSValueConst this_val,
-                  int argc, JSValueConst *argv);
-JSValue
-ns_path2d_rect(JSContext *ctx, JSValueConst this_val,
-               int argc, JSValueConst *argv);
-JSValue
-ns_path2d_roundRect(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv);
-JSValue
-ns_path2d_addPath(JSContext *ctx, JSValueConst this_val,
-                  int argc, JSValueConst *argv);
-void
-ns_path2d_attach_methods(JSContext *ctx, JSValueConst obj);
-const char *
-ns_svg_skip_ws(const char *p);
-gboolean
-ns_svg_read_number(const char **pp, double *out);
-void
-ns_path2d_arc_svg(cairo_t *cr, double x1, double y1,
-                  double rx, double ry, double phi_deg,
-                  gboolean large_arc, gboolean sweep,
-                  double x2, double y2);
-void
-ns_path2d_parse_svg(cairo_t *cr, const char *d);
 JSValue
 ns_path2d_ctor(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv);
-JSValue
-ns_ctx_get_attrs(JSContext *ctx, JSValueConst this_val,
-                 int argc, JSValueConst *argv);
-JSValue
-ns_ctx_is_context_lost(JSContext *ctx, JSValueConst this_val,
-                       int argc, JSValueConst *argv);
-JSValue
-ns_ctx_draw_focus_if_needed(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv);
 JSValue
 ns_element_getContext(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv);
 cairo_status_t
 ns_canvas_png_write(void *closure, const unsigned char *data, unsigned int length);
 JSValue ns_canvas_blob_from_surface(JSContext *ctx, cairo_surface_t *surface);
-JSValue
-ns_offscreen_convertToBlob(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv);
 
 void ns_canvas_register_image_bitmap_class(JSRuntime *rt);
 void ns_canvas_register_path2d_class(JSRuntime *rt);
