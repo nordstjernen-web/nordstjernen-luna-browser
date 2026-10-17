@@ -22168,6 +22168,21 @@ ns_sw_fire_lifecycle(ns_js *js)
 static JSValue ns_illegal_constructor(JSContext *ctx, JSValueConst this_val,
                                       int argc, JSValueConst *argv);
 
+static void
+ns_js_free_unstarted(ns_js *js)
+{
+    if (js->perf_entries) g_ptr_array_free(js->perf_entries, TRUE);
+    if (js->timers) g_hash_table_destroy(js->timers);
+    if (js->pending_fetches) g_ptr_array_free(js->pending_fetches, TRUE);
+    if (js->fetch_states_by_id) g_hash_table_destroy(js->fetch_states_by_id);
+    if (js->pending_xhrs) g_ptr_array_free(js->pending_xhrs, TRUE);
+    if (js->pending_ws) g_ptr_array_free(js->pending_ws, TRUE);
+    if (js->pending_aborts) g_ptr_array_free(js->pending_aborts, TRUE);
+    if (js->listeners) g_ptr_array_free(js->listeners, TRUE);
+    if (js->pinned_wrappers_set) g_hash_table_destroy(js->pinned_wrappers_set);
+    g_free(js);
+}
+
 static ns_js *
 ns_worker_js_new(ns_worker_host *host)
 {
@@ -22196,16 +22211,7 @@ ns_worker_js_new(ns_worker_host *host)
 
     js->rt = JS_NewRuntime();
     if (!js->rt) {
-        if (js->perf_entries) g_ptr_array_free(js->perf_entries, TRUE);
-        if (js->timers) g_hash_table_destroy(js->timers);
-        if (js->pending_fetches) g_ptr_array_free(js->pending_fetches, TRUE);
-        if (js->fetch_states_by_id) g_hash_table_destroy(js->fetch_states_by_id);
-        if (js->pending_xhrs) g_ptr_array_free(js->pending_xhrs, TRUE);
-        if (js->pending_ws) g_ptr_array_free(js->pending_ws, TRUE);
-        if (js->pending_aborts) g_ptr_array_free(js->pending_aborts, TRUE);
-        if (js->listeners) g_ptr_array_free(js->listeners, TRUE);
-        if (js->pinned_wrappers_set) g_hash_table_destroy(js->pinned_wrappers_set);
-        g_free(js);
+        ns_js_free_unstarted(js);
         return NULL;
     }
     const ns_config *c = ns_config_get();
@@ -22221,16 +22227,7 @@ ns_worker_js_new(ns_worker_host *host)
     js->ctx = JS_NewContext(js->rt);
     if (!js->ctx) {
         JS_FreeRuntime(js->rt);
-        if (js->perf_entries) g_ptr_array_free(js->perf_entries, TRUE);
-        if (js->timers) g_hash_table_destroy(js->timers);
-        if (js->pending_fetches) g_ptr_array_free(js->pending_fetches, TRUE);
-        if (js->fetch_states_by_id) g_hash_table_destroy(js->fetch_states_by_id);
-        if (js->pending_xhrs) g_ptr_array_free(js->pending_xhrs, TRUE);
-        if (js->pending_ws) g_ptr_array_free(js->pending_ws, TRUE);
-        if (js->pending_aborts) g_ptr_array_free(js->pending_aborts, TRUE);
-        if (js->listeners) g_ptr_array_free(js->listeners, TRUE);
-        if (js->pinned_wrappers_set) g_hash_table_destroy(js->pinned_wrappers_set);
-        g_free(js);
+        ns_js_free_unstarted(js);
         return NULL;
     }
     js->main_realm_ctx = js->ctx;
@@ -25303,10 +25300,9 @@ ns_raf_schedule_tick(ns_js *js)
 }
 
 static JSValue
-ns_window_requestAnimationFrame(JSContext *ctx, JSValueConst this_val,
-                                int argc, JSValueConst *argv)
+ns_raf_request(JSContext *ctx, int argc, JSValueConst *argv,
+               gboolean video_frame)
 {
-    (void)this_val;
     if (!js_from_ctx(ctx) || argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_NewInt32(ctx, 0);
     ns_js *js = js_from_ctx(ctx);
@@ -25316,12 +25312,20 @@ ns_window_requestAnimationFrame(JSContext *ctx, JSValueConst this_val,
         .id = 0x40000000 + (++js->next_raf_id),
         .ctx = ctx,
         .cb = JS_DupValue(ctx, argv[0]),
-        .video_frame = FALSE,
+        .video_frame = video_frame,
         .frame = js->raf_frame_ctx
     };
     g_array_append_val(js->raf_pending, e);
     ns_raf_schedule_tick(js);
     return JS_NewInt32(ctx, e.id);
+}
+
+static JSValue
+ns_window_requestAnimationFrame(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    return ns_raf_request(ctx, argc, argv, FALSE);
 }
 
 static JSValue
@@ -29417,19 +29421,17 @@ ns_convert_arg_node(ns_js *js, ns_node *node, GPtrArray *seq)
     }
 }
 
-static JSValue
-ns_element_before(JSContext *ctx, JSValueConst this_val,
-                  int argc, JSValueConst *argv)
+static GPtrArray *
+ns_args_to_node_sequence(JSContext *ctx, ns_js *js, int argc,
+                         JSValueConst *argv, const ns_node *parent,
+                         const ns_node *skip)
 {
-    ns_node *self = ns_unwrap_element_mut(this_val);
-    if (!self || !self->parent) return JS_UNDEFINED;
-    ns_js *_j = js_from_ctx(ctx);
     GPtrArray *seq = g_ptr_array_new();
     for (int i = 0; i < argc; i++) {
-        ns_node *child = ns_unwrap_element_mut(argv[i]);
-        if (child) {
-            if (child == self || ns_node_ancestor_or_self(self->parent, child)) continue;
-            ns_convert_arg_node(_j, child, seq);
+        ns_node *node = ns_unwrap_element_mut(argv[i]);
+        if (node) {
+            if (node == skip || ns_node_ancestor_or_self(parent, node)) continue;
+            ns_convert_arg_node(js, node, seq);
         } else {
             const char *txt = JS_ToCString(ctx, argv[i]);
             if (txt) {
@@ -29438,6 +29440,18 @@ ns_element_before(JSContext *ctx, JSValueConst this_val,
             }
         }
     }
+    return seq;
+}
+
+static JSValue
+ns_element_before(JSContext *ctx, JSValueConst this_val,
+                  int argc, JSValueConst *argv)
+{
+    ns_node *self = ns_unwrap_element_mut(this_val);
+    if (!self || !self->parent) return JS_UNDEFINED;
+    ns_js *_j = js_from_ctx(ctx);
+    GPtrArray *seq = ns_args_to_node_sequence(ctx, _j, argc, argv,
+                                              self->parent, self);
     for (guint k = 0; k < seq->len; k++) {
         ns_node *to_insert = g_ptr_array_index(seq, k);
         ns_insert_sibling_before(self, to_insert);
@@ -29468,20 +29482,8 @@ ns_element_after(JSContext *ctx, JSValueConst this_val,
     while (viable_next && ns_args_contain_node(argv, argc, viable_next))
         viable_next = viable_next->next_sibling;
 
-    GPtrArray *seq = g_ptr_array_new();
-    for (int i = 0; i < argc; i++) {
-        ns_node *node = ns_unwrap_element_mut(argv[i]);
-        if (node) {
-            if (ns_node_ancestor_or_self(parent, node) && node != self) continue;
-            ns_convert_arg_node(_j, node, seq);
-        } else {
-            const char *txt = JS_ToCString(ctx, argv[i]);
-            if (txt) {
-                g_ptr_array_add(seq, ns_node_new_text(g_strdup(txt)));
-                JS_FreeCString(ctx, txt);
-            }
-        }
-    }
+    GPtrArray *seq = ns_args_to_node_sequence(ctx, _j, argc, argv, parent,
+                                              NULL);
 
     for (guint k = 0; k < seq->len; k++) {
         ns_node *node = g_ptr_array_index(seq, k);
@@ -29521,20 +29523,8 @@ ns_element_replaceWith(JSContext *ctx, JSValueConst this_val,
     while (viable_prev && ns_args_contain_node(argv, argc, viable_prev))
         viable_prev = viable_prev->prev_sibling;
 
-    GPtrArray *seq = g_ptr_array_new();
-    for (int i = 0; i < argc; i++) {
-        ns_node *node = ns_unwrap_element_mut(argv[i]);
-        if (node) {
-            if (ns_node_ancestor_or_self(parent, node) && node != self) continue;
-            ns_convert_arg_node(_j, node, seq);
-        } else {
-            const char *txt = JS_ToCString(ctx, argv[i]);
-            if (txt) {
-                g_ptr_array_add(seq, ns_node_new_text(g_strdup(txt)));
-                JS_FreeCString(ctx, txt);
-            }
-        }
-    }
+    GPtrArray *seq = ns_args_to_node_sequence(ctx, _j, argc, argv, parent,
+                                              NULL);
 
     ns_node *anchor = self_in_args
         ? (viable_prev ? viable_prev->next_sibling : parent->first_child)
@@ -29769,20 +29759,8 @@ ns_element_append(JSContext *ctx, JSValueConst this_val,
             if (JS_IsException(verr)) return verr;
         }
     }
-    GPtrArray *seq = g_ptr_array_new();
-    for (int i = 0; i < argc; i++) {
-        ns_node *child = ns_unwrap_element_mut(argv[i]);
-        if (child) {
-            if (ns_node_ancestor_or_self(parent, child)) continue;
-            ns_convert_arg_node(_j, child, seq);
-        } else {
-            const char *txt = JS_ToCString(ctx, argv[i]);
-            if (txt) {
-                g_ptr_array_add(seq, ns_node_new_text(g_strdup(txt)));
-                JS_FreeCString(ctx, txt);
-            }
-        }
-    }
+    GPtrArray *seq = ns_args_to_node_sequence(ctx, _j, argc, argv, parent,
+                                              NULL);
     for (guint k = 0; k < seq->len; k++) {
         ns_node *added = g_ptr_array_index(seq, k);
         ns_node_append_child(parent, added);
@@ -29814,20 +29792,8 @@ ns_element_prepend(JSContext *ctx, JSValueConst this_val,
             if (JS_IsException(verr)) return verr;
         }
     }
-    GPtrArray *seq = g_ptr_array_new();
-    for (int i = 0; i < argc; i++) {
-        ns_node *child = ns_unwrap_element_mut(argv[i]);
-        if (child) {
-            if (ns_node_ancestor_or_self(parent, child)) continue;
-            ns_convert_arg_node(_j, child, seq);
-        } else {
-            const char *txt = JS_ToCString(ctx, argv[i]);
-            if (txt) {
-                g_ptr_array_add(seq, ns_node_new_text(g_strdup(txt)));
-                JS_FreeCString(ctx, txt);
-            }
-        }
-    }
+    GPtrArray *seq = ns_args_to_node_sequence(ctx, _j, argc, argv, parent,
+                                              NULL);
     ns_node *ref = parent->first_child;
     for (guint k = 0; k < seq->len; k++) {
         ns_node *to_insert = g_ptr_array_index(seq, k);
@@ -35449,23 +35415,30 @@ ns_element_get_scrollWidth(JSContext *ctx, JSValueConst this_val)
 }
 
 static JSValue
-ns_element_set_scrollTop(JSContext *ctx, JSValueConst this_val, JSValueConst val)
+ns_element_set_scroll_offset(JSContext *ctx, JSValueConst this_val,
+                             JSValueConst val, gboolean vertical)
 {
     double v;
     if (JS_ToFloat64(ctx, &v, val) != 0) return JS_UNDEFINED;
     if (ns_element_is_scrolling_root(this_val)) {
-        ns_js_scroll_viewport(js_from_ctx(ctx),
-                              ns_window_scroll_prop(ctx, "scrollX"), v);
+        if (vertical)
+            ns_js_scroll_viewport(js_from_ctx(ctx),
+                                  ns_window_scroll_prop(ctx, "scrollX"), v);
+        else
+            ns_js_scroll_viewport(js_from_ctx(ctx), v,
+                                  ns_window_scroll_prop(ctx, "scrollY"));
         return JS_UNDEFINED;
     }
     const ns_box *cb = ns_box_for_this(ctx, this_val);
     if (!cb) return JS_UNDEFINED;
     ns_box *b = (ns_box *)cb;
-    double max = b->scroll_max_y > 0 ? b->scroll_max_y : 0;
+    double *offset = vertical ? &b->scroll_y : &b->scroll_x;
+    double limit = vertical ? b->scroll_max_y : b->scroll_max_x;
+    double max = limit > 0 ? limit : 0;
     if (v < 0) v = 0;
     if (v > max) v = max;
-    if (v == b->scroll_y) return JS_UNDEFINED;
-    b->scroll_y = v;
+    if (v == *offset) return JS_UNDEFINED;
+    *offset = v;
     ns_box_scroll_snap(b);
     ns_js *js = js_from_ctx(ctx);
     if (js) {
@@ -35481,35 +35454,15 @@ ns_element_set_scrollTop(JSContext *ctx, JSValueConst this_val, JSValueConst val
 }
 
 static JSValue
+ns_element_set_scrollTop(JSContext *ctx, JSValueConst this_val, JSValueConst val)
+{
+    return ns_element_set_scroll_offset(ctx, this_val, val, TRUE);
+}
+
+static JSValue
 ns_element_set_scrollLeft(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
-    double v;
-    if (JS_ToFloat64(ctx, &v, val) != 0) return JS_UNDEFINED;
-    if (ns_element_is_scrolling_root(this_val)) {
-        ns_js_scroll_viewport(js_from_ctx(ctx), v,
-                              ns_window_scroll_prop(ctx, "scrollY"));
-        return JS_UNDEFINED;
-    }
-    const ns_box *cb = ns_box_for_this(ctx, this_val);
-    if (!cb) return JS_UNDEFINED;
-    ns_box *b = (ns_box *)cb;
-    double max = b->scroll_max_x > 0 ? b->scroll_max_x : 0;
-    if (v < 0) v = 0;
-    if (v > max) v = max;
-    if (v == b->scroll_x) return JS_UNDEFINED;
-    b->scroll_x = v;
-    ns_box_scroll_snap(b);
-    ns_js *js = js_from_ctx(ctx);
-    if (js) {
-        const ns_node *el = ns_unwrap_element(this_val);
-        ns_js_request_repaint_node(js, el);
-        if (el) {
-            ns_js_dispatch_event(js, el, "scroll", NULL);
-            ns_js_queue_scrollend(js, el);
-        }
-        ns_observer_schedule_tick(js);
-    }
-    return JS_UNDEFINED;
+    return ns_element_set_scroll_offset(ctx, this_val, val, FALSE);
 }
 
 static JSValue
@@ -42454,21 +42407,7 @@ ns_media_request_video_frame_callback(JSContext *ctx, JSValueConst this_val,
                                       int argc, JSValueConst *argv)
 {
     (void)this_val;
-    if (!js_from_ctx(ctx) || argc < 1 || !JS_IsFunction(ctx, argv[0]))
-        return JS_NewInt32(ctx, 0);
-    ns_js *js = js_from_ctx(ctx);
-    if (!js->raf_pending)
-        js->raf_pending = g_array_new(FALSE, FALSE, sizeof(ns_raf_entry));
-    ns_raf_entry e = {
-        .id = 0x40000000 + (++js->next_raf_id),
-        .ctx = ctx,
-        .cb = JS_DupValue(ctx, argv[0]),
-        .video_frame = TRUE,
-        .frame = js->raf_frame_ctx
-    };
-    g_array_append_val(js->raf_pending, e);
-    ns_raf_schedule_tick(js);
-    return JS_NewInt32(ctx, e.id);
+    return ns_raf_request(ctx, argc, argv, TRUE);
 }
 
 static JSValue
