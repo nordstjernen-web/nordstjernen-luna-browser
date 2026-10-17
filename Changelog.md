@@ -4,6 +4,17 @@ Significant changes in each release:
 
 1.0.15:
 =======
+* Security: the kernel now refuses executable memory wherever page content
+  runs. Northstar has no JIT, yet its seccomp filter let any thread map
+  memory executable, so a memory-safety bug in the engine, the media
+  demuxers or the decoders could make a buffer executable and run it. The
+  engine thread installs a second filter on itself, inherited by the
+  threads it starts, that refuses an anonymous executable `mmap` and any
+  `mprotect`/`pkey_mprotect` adding `PROT_EXEC`; headless and tooling
+  runs install it for the whole process, as headless Windows runs already
+  refuse dynamic code. The GUI's main thread keeps executable memory for
+  GPU drivers that compile shaders (Mesa's llvmpipe). The main filter now
+  allows `seccomp(SECCOMP_SET_MODE_FILTER)` so a thread can add its own.
 * `document.cookie` follows the cookie store. It was a copy taken when
   the page loaded and replaced only when script wrote it, so a cookie set
   or deleted by a `fetch()` or XHR response never appeared, which broke

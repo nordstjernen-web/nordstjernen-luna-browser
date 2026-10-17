@@ -17,6 +17,7 @@ void ns_security_sandbox_init(const char *self_exe);
 void ns_security_add_writable_dir(const char *dir);
 
 void ns_security_seccomp_init(void);
+void ns_security_deny_exec_memory(gboolean whole_process);
 
 void ns_security_win32_mitigations_init(gboolean interactive);
 

@@ -77,11 +77,19 @@ PIE, full RELRO, non-executable stack, separate-code segments,
 `-fcf-protection=full` (Intel CET / AMD IBT), `_FORTIFY_SOURCE=3`
 (`=2` fallback), `-Wformat=2 -Wformat-security`. No JIT is used or
 linked — JavaScript runs on the QuickJS interpreter and WebAssembly on
-WAMR's fast interpreter — so the browser never needs
-writable-and-executable memory. Only headless runs on Windows have the
-kernel enforce that (see *Windows process mitigations*); elsewhere it is
-a property of the code, and neither the Linux seccomp filter nor the
-Windows GUI's mitigations refuse an executable mapping.
+WAMR's fast interpreter — so the engine never needs executable memory it
+creates itself. On Linux the kernel enforces that wherever page content
+is parsed and run: the engine thread installs a second seccomp filter on
+itself, inherited by every thread it starts (media decoding, audio,
+workers), that refuses an anonymous executable `mmap` and any
+`mprotect`/`pkey_mprotect` adding `PROT_EXEC` with `EACCES`, and headless
+and tooling runs install it for the whole process. The GUI's main thread
+is left out because GPU drivers such as Mesa's llvmpipe compile shaders
+to machine code there. Headless runs on Windows refuse dynamic code too
+(see *Windows process mitigations*); the Windows and macOS GUIs do not.
+A file-backed executable mapping is still allowed, since shared
+libraries are loaded that way, so code written to a `memfd` can still be
+mapped executable.
 
 On glibc, `mallopt(M_PERTURB)` fills freed and freshly allocated heap
 memory with a pattern (`src/security.c`), so a use-after-free or an
@@ -169,7 +177,11 @@ unconfined.
   and the module syscalls are likewise absent. The filter matches syscall
   numbers only, not their arguments: `clone`/`clone3`, `ioctl`, `prctl`,
   `socket`, `mmap` and `mprotect` are allowed with any flags. TSYNC
-  propagates the filter to every thread.
+  propagates the filter to every thread. The one argument rule allows
+  `seccomp` only with `SECCOMP_SET_MODE_FILTER`, so a thread can add a
+  filter of its own (the engine thread's executable-memory filter);
+  stacked filters can only refuse more, never allow what this one
+  refuses.
 - **Media / audio.** Northstar decodes audio **in-tree** in the browser
   process (`src/audio/audio.c`), not via an external player. The media
   controller (`src/js_media.c`) sends each `<audio>` element's commands
