@@ -1508,23 +1508,6 @@ headless_run_actions(headless_flush_ctx *fc, headless_nav_capture *nav,
     g_strfreev(acts);
 }
 
-static const char *
-inspect_unit_name(ns_css_unit u)
-{
-    switch (u) {
-    case NS_CSS_UNIT_PX:      return "px";
-    case NS_CSS_UNIT_EM:      return "em";
-    case NS_CSS_UNIT_REM:     return "rem";
-    case NS_CSS_UNIT_PERCENT: return "%";
-    case NS_CSS_UNIT_NUMBER:  return "";
-    case NS_CSS_UNIT_VW:      return "vw";
-    case NS_CSS_UNIT_VH:      return "vh";
-    case NS_CSS_UNIT_VMIN:    return "vmin";
-    case NS_CSS_UNIT_VMAX:    return "vmax";
-    default:                  return "";
-    }
-}
-
 static void
 inspect_value_str(const ns_css_value *v, char *buf, size_t cap)
 {
@@ -1535,7 +1518,7 @@ inspect_value_str(const ns_css_value *v, char *buf, size_t cap)
         break;
     case NS_CSS_V_LENGTH:
         g_snprintf(buf, cap, "%g%s", v->u.length.v,
-                   inspect_unit_name(v->u.length.unit));
+                   ns_css_unit_suffix(v->u.length.unit));
         break;
     case NS_CSS_V_CALC:
         g_snprintf(buf, cap, "calc(%g%% + %gpx)", v->u.calc.pct, v->u.calc.px);

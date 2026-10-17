@@ -650,6 +650,8 @@ typedef enum ns_css_color_space {
     NS_CSS_COLOR_HWB,
 } ns_css_color_space;
 
+const char *ns_css_unit_suffix(int unit);
+
 void     ns_css_set_viewport(double vw_px, double vh_px);
 void     ns_css_set_frame_viewport_cb(
              void (*cb)(const ns_node *frame, double *w, double *h));

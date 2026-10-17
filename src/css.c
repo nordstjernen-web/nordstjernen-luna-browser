@@ -5690,7 +5690,7 @@ parse_calc(const char *text)
     return v;
 }
 
-static const char *
+const char *
 ns_css_unit_suffix(int unit)
 {
     switch (unit) {
