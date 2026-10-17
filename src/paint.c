@@ -4934,7 +4934,7 @@ ns_paint_list_ordinals_end(void)
 }
 
 static int
-list_item_number_children(const ns_node *parent)
+list_item_number_children(const ns_node *parent, const ns_node *target)
 {
     const char *start_attr = ns_element_get_attr(parent, "start");
     int start = start_attr
@@ -4947,8 +4947,10 @@ list_item_number_children(const ns_node *parent)
         const char *val = ns_element_get_attr(p, "value");
         int ordinal = val ? ns_parse_int(val, current, -1000000, 1000000)
                           : current;
-        g_hash_table_insert(g_list_ordinals, (gpointer)p,
-                            GINT_TO_POINTER(ordinal));
+        if (p == target) return ordinal;
+        if (!target)
+            g_hash_table_insert(g_list_ordinals, (gpointer)p,
+                                GINT_TO_POINTER(ordinal));
         current = ordinal + (reversed ? -1 : 1);
     }
     return current;
@@ -4960,7 +4962,7 @@ list_item_ordinal_cached(const ns_node *li, const ns_node *parent)
     gpointer next;
     if (!g_hash_table_lookup_extended(g_list_next_ordinal, parent, NULL,
                                       &next)) {
-        next = GINT_TO_POINTER(list_item_number_children(parent));
+        next = GINT_TO_POINTER(list_item_number_children(parent, NULL));
         g_hash_table_insert(g_list_next_ordinal, (gpointer)parent, next);
     }
     gpointer ordinal;
@@ -4975,21 +4977,7 @@ list_item_ordinal(const ns_node *li)
     const ns_node *parent = li ? li->parent : NULL;
     if (!parent || !parent->name) return 1;
     if (g_list_ordinals) return list_item_ordinal_cached(li, parent);
-    const char *start_attr = ns_element_get_attr(parent, "start");
-    int start = start_attr
-        ? ns_parse_int(start_attr, 1, -1000000, 1000000)
-        : 1;
-    gboolean reversed = ns_element_get_attr(parent, "reversed") != NULL;
-    int current = reversed && !start_attr ? list_item_count(parent) : start;
-    for (const ns_node *p = parent->first_child; p; p = p->next_sibling) {
-        if (!ns_node_is_element_named(p, "li")) continue;
-        const char *val = ns_element_get_attr(p, "value");
-        int ordinal = val ? ns_parse_int(val, current, -1000000, 1000000)
-                          : current;
-        if (p == li) return ordinal;
-        current = ordinal + (reversed ? -1 : 1);
-    }
-    return current;
+    return list_item_number_children(parent, li);
 }
 
 static const char *
