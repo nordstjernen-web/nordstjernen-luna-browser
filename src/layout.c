@@ -6643,6 +6643,7 @@ box_hit_uses_border_bounds(const ns_box *box)
 static gboolean
 box_hit_self_contains(const ns_box *root, double x, double y)
 {
+    if (!root) return FALSE;
     gboolean block_edges = box_hit_uses_border_bounds(root);
     double x0 = root->x + (block_edges ? root->margin.left : 0);
     double y0 = root->y + (block_edges ? root->margin.top : 0);
