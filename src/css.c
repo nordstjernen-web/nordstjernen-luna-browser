@@ -27006,11 +27006,6 @@ style_color_visible(const ns_css_value *v)
     return v && v->kind == NS_CSS_V_COLOR && v->u.color.a > 0;
 }
 
-/* Whether two computed styles of an element's box differ only in values
- * that paint and hit testing read from the box's style at use time, so
- * layout made with one holds for the other. Only whether a transform,
- * shadow or background is there at all feeds layout (containing blocks,
- * control chrome); pseudo-elements must match exactly. */
 static gboolean
 style_is_absolute(const ns_style *s)
 {
@@ -27091,7 +27086,6 @@ style_layout_equal_(const ns_style *a, const ns_style *b, gboolean exact,
         if (!style_layout_equal_(pa[i], pb[i], TRUE, NULL)) return FALSE;
     return TRUE;
 }
-
 
 int
 ns_css_style_layout_change(const ns_style *a, const ns_style *b)
@@ -27623,8 +27617,6 @@ selector_cache_hash(gconstpointer data)
     h ^= (guintptr)key->selector * 0x9e3779b1u;
     h ^= (guintptr)key->element * 0x85ebca6bu;
     h ^= (guintptr)key->pseudo * 0xc2b2ae35u;
-    /* guintptr is 32 bits on i386, where h >> 32 is undefined and folds
-     * every key into the same bucket. */
     return (guint)((guint64)h ^ ((guint64)h >> 32));
 }
 
@@ -30778,8 +30770,6 @@ cascade_sheet_in_host_scope(const ns_css_stylesheet *sheet)
 static GHashTable    *g_incr_prev_styles;
 static GHashTable    *g_incr_prev_host_sheets;
 static GHashTable    *g_incr_before_styles;
-/* After a pass that reported only what changed: the styles those elements
- * had before it; every other element kept the style it has now. */
 static GHashTable    *g_incr_before_delta;
 static guint          g_incr_serial;
 static guint64        g_incr_struct_hash;
@@ -30821,8 +30811,6 @@ ns_css_compute_want_delta(GPtrArray *changes)
     g_delta_request = changes;
 }
 
-/* The shape of the element tree the cascade walks: which element is whose
- * child, across nested documents. */
 static guint64
 incr_struct_hash(const ns_node *root)
 {
@@ -30924,24 +30912,16 @@ ns_css_forget_node(const ns_node *node)
         g_incr_prev_active = NULL;
         g_incr_prev_doc = NULL;
     }
-    /* The next incremental cascade walks up ->parent from every node marked
-     * dirty or excluded since the last one, and asks whether a node was
-     * walked or is on a dirty path by its address: a node freed in between
-     * must not be walked from, nor stand in for a new node at its address. */
     if (g_incr_dirty) g_hash_table_remove(g_incr_dirty, node);
     if (g_incr_self_dirty) g_hash_table_remove(g_incr_self_dirty, node);
     if (g_incr_exclude) g_hash_table_remove(g_incr_exclude, node);
     if (g_incr_desc_inv) g_hash_table_remove(g_incr_desc_inv, node);
     if (g_incr_has_walked) g_hash_table_remove(g_incr_has_walked, node);
     if (g_incr_path) g_hash_table_remove(g_incr_path, node);
-    /* Styles remembered for the node: what it had before the last pass,
-     * and the cascade input that gave its style. */
     if (g_incr_before_delta) g_hash_table_remove(g_incr_before_delta, node);
     style_memo_forget(node);
 }
 
-/* Whether the last cascade went on from the one before it: same document,
- * style sheets, container sizes and viewport. */
 gboolean
 ns_css_last_cascade_continued(void)
 {
@@ -32500,9 +32480,6 @@ ns_css_attr_may_affect_style(const ns_node *target, const char *name)
     return affects;
 }
 
-/* An attribute whose change reaches rendering only through the cascade,
- * so a restyle can stand in for a relayout when the computed styles come
- * out equal for layout. Layout and form controls read the rest directly. */
 gboolean
 ns_css_attr_only_restyles(const ns_node *target, const char *name)
 {
@@ -33527,13 +33504,6 @@ incr_bulk_reuse(ns_node *root, const ns_css_stylesheet *ua,
     }
 }
 
-/* What an element's style was computed from, kept with the style when the
- * cascade recomputes an element it computed before: the same matched
- * declarations under the same parent (and layout parent and root line
- * height) give the same style, so the next recompute can keep the style
- * without cascading it again. Valid while the incremental passes run over
- * the same sheets; the style is held so it cannot be replaced by another at
- * its address. */
 typedef struct {
     guint8   *data;
     guint32   len;
@@ -33568,8 +33538,6 @@ style_memo_forget(const ns_node *node)
     if (g_style_memo) g_hash_table_remove(g_style_memo, node);
 }
 
-/* The root line height an element's style was computed with: the root
- * element's own computation sets it. */
 static double
 style_memo_root_line(const ns_style *parent_style)
 {
@@ -33583,8 +33551,6 @@ style_memo_hit(const ns_node *node, const ns_style *prev,
 {
     style_memo_entry *e = g_style_memo ? g_hash_table_lookup(g_style_memo, node)
                                      : NULL;
-    /* A style an animation wrote into since is no longer what the
-     * declarations give. */
     return e && e->style == prev && e->mutation_gen == prev->mutation_gen &&
            e->hash == key->hash &&
            e->len == key->len &&
@@ -33675,7 +33641,6 @@ cascade_walk(ns_node *node,
             nd_self_prev = nd_prev;
             nd_prev = NULL;
         }
-        /* The style this element had, when it is computed again. */
         ns_style *nd_old = nd_self_prev;
         if (!nd_old && !nd_prev && g_incr_pass_active && g_incr_prev_styles)
             nd_old = g_hash_table_lookup(g_incr_prev_styles, node);
@@ -33995,9 +33960,6 @@ cascade_walk(ns_node *node,
             }
             share_put = have_key && !nd_self_prev;
         }
-        /* A recomputed style equal to the one the element had keeps that
-         * one, so its children see the same parent and nothing downstream
-         * counts it as changed. */
         if (nd_old && s != nd_old && incr_style_same(s, nd_old) &&
             incr_pseudo_styles_same(s, nd_old)) {
             ns_style_free(s);
@@ -34080,7 +34042,6 @@ cascade_walk(ns_node *node,
     }
     if (filter_element) css_ancestor_filter_update(node, 1);
     if (nd_bulk && g_delta_out) {
-        /* Nothing below changed and the tree has the shape it had. */
     } else if (nd_bulk)
         incr_bulk_reuse(node, ua, author, n_author, child_layout_parent,
                         root_px, layer_ranks, out);

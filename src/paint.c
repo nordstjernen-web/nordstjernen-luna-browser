@@ -1474,9 +1474,6 @@ paint_block(cairo_t *cr, const ns_box *b)
               border_x + b->border.left / 2.0, border_y + border_h },
         };
         if (!drew_uniform && !corner_radii_zero(radii)) {
-            /* Rounded corners with per-side colors: fill the ring between
-             * the outer and inner rounded rects, each side clipped to its
-             * wedge along the corner diagonals. */
             double bw[4] = { b->border.top, b->border.right,
                              b->border.bottom, b->border.left };
             corner_radii inner = radii;
@@ -1489,7 +1486,6 @@ paint_block(cairo_t *cr, const ns_box *b)
             double x0 = border_x, y0 = border_y;
             double x1 = border_x + border_w, y1 = border_y + border_h;
             double depth = MIN(border_w, border_h) / 2.0;
-            /* Points on each corner's outer-to-inner diagonal, at `depth`. */
             double dx[4], dy[4];
             const double cxs[4] = { x0, x1, x1, x0 }, cys[4] = { y0, y0, y1, y1 };
             const double sx[4] = { 1, -1, -1, 1 }, sy[4] = { 1, 1, -1, -1 };
@@ -1511,7 +1507,7 @@ paint_block(cairo_t *cr, const ns_box *b)
                                               : s->values[NS_CSS_COLOR],
                                  0, 0, 0, 1);
                 if (c.a <= 0) continue;
-                int a = i, z = (i + 1) % 4;   /* side i runs corner a -> z */
+                int a = i, z = (i + 1) % 4;
                 cairo_save(cr);
                 cairo_move_to(cr, cxs[a], cys[a]);
                 cairo_line_to(cr, cxs[z], cys[z]);
@@ -2382,15 +2378,12 @@ ns_paint_inline_strut_line(const ns_box *b, const ns_style *s,
     ns_pango_font_metrics_unref(fm);
     double lh = ns_paint_css_line_height_px(s);
     double half_leading = lh > 0 ? (lh - asc - desc) / 2.0 : 0;
-    /* The strut: the root inline box's font metrics plus half-leading. */
     double strut_asc = asc + half_leading;
     double strut_desc = desc + half_leading;
     int ph;
     ns_pango_layout_get_pixel_size(layout, NULL, &ph);
     double pango_asc = ns_pango_layout_get_baseline(layout) / (double)NS_PANGO_SCALE;
     double pango_desc = ph - pango_asc;
-    /* Pango's line extents exceed the font's only where an atomic inline
-     * reaches further; those atomics extend the line box past the strut. */
     double line_asc = pango_asc > asc + 0.5 ? MAX(strut_asc, pango_asc) : strut_asc;
     double line_desc = pango_desc > desc + 0.5 ? MAX(strut_desc, pango_desc)
                                                : strut_desc;
@@ -4485,8 +4478,6 @@ object_position_offset(const ns_style *st, ns_css_prop prop,
     return delta * 0.5;
 }
 
-/* The object-fit scale and object-position offset of an iw x ih picture
- * in b's content box. */
 static void
 object_fit_scale(const ns_box *b, int iw, int ih, double *out_sx,
                  double *out_sy, double *out_ox, double *out_oy)
@@ -4519,10 +4510,6 @@ object_fit_scale(const ns_box *b, int iw, int ih, double *out_sx,
     *out_oy = oy;
 }
 
-/* Leaves a hole for a playing MSE video's picture, which the view draws
- * under the page on its own frame clock. Only where the picture lands on
- * the target unchanged: an axis-aligned scale and offset, no group
- * (opacity, blending) and no filter in between. */
 static gboolean
 paint_video_layer(cairo_t *cr, const ns_box *b, const ns_image *img)
 {
@@ -5629,8 +5616,6 @@ box_contains_fixed(const ns_box *b)
                  s->values[NS_CSS_ROTATE] || s->values[NS_CSS_SCALE]);
 }
 
-/* Whether the overflow clip of `clip` applies to the deferred positioned
- * descendant `d`: it does unless d's containing block lies outside clip. */
 static gboolean
 overflow_clip_contains(const ns_box *clip, const ns_box *d)
 {
@@ -5843,7 +5828,6 @@ mask_gradient_pattern(const ns_css_gradient *gr,
     if (gr->repeating) cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
     return pat;
 }
-
 
 static void
 paint_cache_clip(cairo_t *cr)
@@ -6981,8 +6965,6 @@ paint_walk(cairo_t *cr, const ns_box *b, const char *highlight)
         if (!explicit_w && b->kind == NS_BOX_BLOCK && b->parent &&
             b->parent->style && (!bs || !bs->values[NS_CSS_WIDTH] ||
                                  bs->values[NS_CSS_WIDTH]->kind == NS_CSS_V_KEYWORD)) {
-            /* An auto-width block fills its parent, so a zero width
-             * inherited from an explicitly sized parent is real. */
             const ns_css_value *pwv = b->parent->style->values[NS_CSS_WIDTH];
             explicit_w = pwv && (pwv->kind == NS_CSS_V_LENGTH ||
                                  pwv->kind == NS_CSS_V_CALC);

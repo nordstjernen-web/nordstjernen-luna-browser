@@ -158,8 +158,6 @@ typedef struct ns_mut_observer {
     GPtrArray *records;
 } ns_mut_observer;
 
-
-
 struct ns_js_drag_session {
     ns_js  *js;
     JSValue data_transfer;
@@ -269,8 +267,6 @@ static void ns_js_note_layout_target_from(ns_js *js, const ns_node *target,
 static void ns_js_note_layout_unscoped(ns_js *js, const char *why);
 static void layout_targets_ensure(void);
 static void ns_js_flush_layout_from(ns_js *js, const char *api);
-/* A layout flush, traced as a forced reflow under the name of the binding
- * that asked for it. */
 #define ns_js_flush_layout(js) ns_js_flush_layout_from((js), G_STRFUNC)
 static void ns_js_flush_style(ns_js *js);
 static void ns_js_drain_deferred_scripts(ns_js *js);
@@ -516,7 +512,6 @@ ns_mql_addListener(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
-
 static JSValue
 ns_mql_removeListener(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -717,17 +712,6 @@ ns_js_context_frame(ns_js *js, JSContext *ctx)
     }
     return js->raf_frame_ctx;
 }
-
-
-
-
-
-
-
-
-
-
-
 
 uint32_t
 ns_js_array_length(JSContext *ctx, JSValueConst arr)
@@ -1453,7 +1437,6 @@ ns_idle_deadline_time_remaining(JSContext *ctx, JSValueConst this_val,
 
 static gboolean ns_timer_fire_impl(gpointer data);
 
-/* A timer's callback, traced with its kind, id and function name. */
 static gboolean
 ns_timer_fire(gpointer data)
 {
@@ -2099,7 +2082,6 @@ class_attr_contains(const char *cls, const char *token, gsize tlen,
     }
     return FALSE;
 }
-
 
 static int
 ns_tlist_validate(JSContext *ctx, const char *token)
@@ -3953,8 +3935,6 @@ ns_window_named_fill(JSPropertyDescriptor *desc, JSValue value, int flags)
     desc->setter = JS_UNDEFINED;
 }
 
-/* Each window's named-properties object resolves against that window's own
- * document: an iframe realm's object carries its iframe as opaque. */
 static const ns_node *
 ns_window_named_document(ns_js *js, JSValueConst obj)
 {
@@ -7691,7 +7671,6 @@ ns_element_get_outerHTML(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
-
 static JSValue
 ns_xml_serializeToString(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -10128,7 +10107,6 @@ ns_geolocation_watch_position(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, 1);
 }
 
-
 static JSValue
 ns_window_queue_microtask(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -10405,10 +10383,6 @@ ns_media_config_supported(JSContext *ctx, JSValueConst config)
     return supported;
 }
 
-/* Whether a supported video configuration plays without dropping frames:
- * its pixels a second within what the software decoders have sustained
- * (with a margin), or within 1080p at 30 frames a second before they have
- * decoded anything. */
 static gboolean
 ns_media_config_smooth(JSContext *ctx, JSValueConst config)
 {
@@ -11543,7 +11517,6 @@ ns_window_url_of(JSContext *ctx, JSValueConst win)
     JS_FreeValue(ctx, loc);
     return out;
 }
-
 
 static JSValue ns_sc_run(JSContext *ctx, JSValueConst value,
                          GPtrArray *transfer_ports, gboolean ports_by_identity);
@@ -13858,7 +13831,6 @@ ns_make_navigation(JSContext *ctx, ns_js *js)
     return nav;
 }
 
-
 static gboolean
 ns_computed_prop_defaults_to_color(const char *name)
 {
@@ -15932,7 +15904,6 @@ ns_window_prompt(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, "");
 }
 
-
 static JSValue ns_event_prevent_default(JSContext *ctx, JSValueConst this_val,
                                         int argc, JSValueConst *argv);
 static JSValue ns_event_get_modifier_state(JSContext *ctx, JSValueConst this_val,
@@ -15943,7 +15914,6 @@ static JSValue ns_event_initEvent(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv);
 static void ns_event_link_proto(JSContext *ctx, JSValueConst global,
                                 const char *child, const char *parent);
-
 
 static JSValue
 ns_window_btoa(JSContext *ctx, JSValueConst this_val,
@@ -16519,33 +16489,6 @@ ns_window_comment_ctor(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, global);
     return wrapper;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 static JSValue
 ns_window_image_ctor(JSContext *ctx, JSValueConst this_val,
@@ -18337,7 +18280,6 @@ ns_form_data_append_select(JSContext *ctx, JSValueConst fd,
     }
     g_ptr_array_free(opts, TRUE);
 }
-
 
 static void
 ns_form_data_populate_from_form(JSContext *ctx, JSValueConst fd,
@@ -22181,7 +22123,6 @@ ns_sw_install_scope(JSContext *ctx, JSValueConst global, ns_worker_host *host)
     ns_bind_fn(ctx, clients, "openWindow", ns_returns_resolved_undefined, 1);
     JS_SetPropertyStr(ctx, global, "clients", clients);
 
-
     ns_bind_ctor(ctx, global, "ExtendableEvent",        ns_window_event_ctor, 2);
     ns_bind_ctor(ctx, global, "FetchEvent",             ns_window_event_ctor, 2);
     ns_bind_ctor(ctx, global, "ExtendableMessageEvent", ns_window_event_ctor, 2);
@@ -23798,7 +23739,6 @@ ns_js_record_character_data(ns_js *js, ns_node *target, const char *old_value)
                        NULL, NULL, NULL, NULL, old_value);
 }
 
-/* SVG elements that other SVG content may paint by reference. */
 static gboolean
 svg_is_resource(const ns_node *n)
 {
@@ -23812,10 +23752,6 @@ svg_is_resource(const ns_node *n)
     return FALSE;
 }
 
-/* The <svg> element that paints n, when n is SVG content below it (not
- * inside a foreignObject): the SVG painter reads its attributes as it
- * paints, so layout never sees them. *shared is set when content of other
- * <svg> elements may paint it by reference. */
 static const ns_node *
 attr_svg_painter(const ns_node *n, gboolean *shared)
 {
@@ -23829,10 +23765,6 @@ attr_svg_painter(const ns_node *n, gboolean *shared)
     return NULL;
 }
 
-/* Layout and paint read the dir attribute directly: text inputs align by
- * the nearest ltr or rtl, bidi isolation by the element's own value, and
- * text shaping by the nearest non-empty value, with ltr and rtl setting the
- * base direction and anything else leaving it to the text. */
 typedef enum { DIR_NEUTRAL, DIR_LTR, DIR_RTL } dir_base;
 
 static dir_base
@@ -23864,8 +23796,6 @@ dir_char_is_rtl(gunichar ch)
            ch == 0x202E || ch == 0x2067;
 }
 
-/* Whether some text that takes its base direction from n could shape
- * right to left on its own; budget bounds the walk. */
 static gboolean
 dir_text_may_be_rtl(const ns_node *n, int *budget)
 {
@@ -23896,16 +23826,12 @@ dir_change_reaches_layout(ns_js *js, const ns_node *n, const char *old_value)
     dir_base is = dir_shaping_base(n, now);
     if (was == is) return FALSE;
     if (was == DIR_RTL || is == DIR_RTL) return TRUE;
-    /* ltr against a base left to the text: the same unless the text or the
-     * direction property can make it right to left. */
     const char *d = ns_style_keyword(s, NS_CSS_DIRECTION);
     if (d && strcmp(d, "rtl") == 0) return TRUE;
     int budget = 4096;
     return dir_text_may_be_rtl(n, &budget);
 }
 
-/* Whether layout can see the change of name on n from old_value to its
- * current value. */
 static gboolean
 attr_change_reaches_layout(ns_js *js, const ns_node *n, const char *name,
                            const char *old_value)
@@ -23913,7 +23839,6 @@ attr_change_reaches_layout(ns_js *js, const ns_node *n, const char *name,
     if (n->name && g_ascii_strcasecmp(n->name, "template") == 0)
         return FALSE;
     if (n->name && g_ascii_strcasecmp(n->name, "script") == 0) {
-        /* Unrendered unless a style sheet displays it. */
         const ns_style *s = js->style_table
                           ? g_hash_table_lookup(js->style_table, n) : NULL;
         if (s && ns_display_is_none(ns_css_display_of(s))) return FALSE;
@@ -23922,8 +23847,6 @@ attr_change_reaches_layout(ns_js *js, const ns_node *n, const char *name,
         return dir_change_reaches_layout(js, n, old_value);
     if (g_ascii_strcasecmp(name, "href") == 0 && n->name &&
         g_ascii_strcasecmp(n->name, "a") == 0) {
-        /* Hit testing reads the link's current href; only whether there
-         * is one decides that a link is laid out. */
         const char *now = ns_element_get_attr(n, "href");
         return !(old_value && *old_value && now && *now);
     }
@@ -23932,7 +23855,6 @@ attr_change_reaches_layout(ns_js *js, const ns_node *n, const char *name,
          g_ascii_strcasecmp(n->name, "button") == 0 ||
          g_ascii_strcasecmp(n->name, "select") == 0 ||
          g_ascii_strcasecmp(n->name, "textarea") == 0))
-        /* Form control chrome looks only at whether a class is set. */
         return (old_value != NULL) != (ns_element_get_attr(n, "class") != NULL);
     return !ns_css_attr_only_restyles(n, name) ||
            ns_layout_reads_label_attr(n, name);
@@ -23942,14 +23864,10 @@ static void
 ns_js_note_attr_style_change(ns_js *js, const ns_node *n, const char *name,
                              const char *old_value)
 {
-    /* Not rendered: inserting it later lays it out with what it has then. */
     if (!ns_js_node_in_page(js, n)) return;
     gboolean shared = FALSE;
     const ns_node *svg = attr_svg_painter(n, &shared);
     if (svg) {
-        /* Repainted where its <svg> is, or everywhere when other <svg>
-         * elements may reference it; the cascade still sees it for
-         * selectors that match it. */
         if (shared || g_ascii_strcasecmp(name, "id") == 0)
             ns_js_request_repaint(js);
         else
@@ -24248,7 +24166,6 @@ ns_window_observer_ctor(JSContext *ctx, JSValueConst this_val,
     }
     return obj;
 }
-
 
 static JSValue
 ns_resize_observer_build_entry(JSContext *ctx, JSValueConst target,
@@ -27169,7 +27086,6 @@ ns_invoke_listeners_at_full(ns_js *js, const ns_node *cur,
     return stopped;
 }
 
-
 static const ns_node *
 ns_event_document_for_target(ns_js *js, const ns_node *target)
 {
@@ -27688,7 +27604,6 @@ ns_wpt_touch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     JS_FreeCString(ctx, type);
     return JS_UNDEFINED;
 }
-
 
 static JSValue
 ns_wpt_pointer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -32496,7 +32411,6 @@ ns_box_visual_padding_box(const ns_box *box,
     ns_box_apply_visual_transform(box, x, y, w, h);
 }
 
-
 static JSValue
 ns_element_getBoundingClientRect(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -34008,7 +33922,6 @@ ns_floordiv(long a, long b)
     return q;
 }
 
-
 static gboolean
 ns_input_value_to_ms(ns_input_kind kind, const char *v, gboolean as_date, double *out)
 {
@@ -35261,7 +35174,6 @@ ns_element_getRootNode(JSContext *ctx, JSValueConst this_val,
     const ns_node *root = ns_node_root(n);
     return ns_make_element(ctx, (ns_node *)root);
 }
-
 
 static const char *
 ns_node_element_namespace(const ns_node *n)
@@ -37808,8 +37720,6 @@ ns_element_define_own_property(JSContext *ctx, JSValueConst this_obj, JSAtom pro
                              flags | JS_PROP_NO_EXOTIC);
 }
 
-
-
 static JSValue
 ns_options_get_selectedIndex(JSContext *ctx, JSValueConst this_val)
 {
@@ -40141,7 +40051,6 @@ ns_js_dialog_close(ns_js *js, ns_node *dialog, const char *return_value)
     ns_dialog_close(js, dialog, return_value, NULL);
 }
 
-
 typedef enum {
     NS_COMMAND_UNKNOWN,
     NS_COMMAND_CUSTOM,
@@ -41133,10 +41042,6 @@ ns_element_form_reset(JSContext *ctx, JSValueConst this_val,
     return ns_js_reset_form(ctx, el);
 }
 
-
-
-
-
 void
 ns_js_request_repaint(ns_js *js)
 {
@@ -41474,110 +41379,11 @@ ns_js_image_origin_clean(ns_js *js, const ns_node *el, const ns_image *im,
            cors_allows(doc_url, url, im->cors_allow_origin);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 double
 ns_arg_d(JSContext *ctx, JSValueConst v)
 {
     double d = 0; JS_ToFloat64(ctx, &d, v); return d;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 static JSValue
 ns_element_toDataURL(JSContext *ctx, JSValueConst this_val,
@@ -41629,7 +41435,6 @@ ns_element_toBlob(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, cb);
     return JS_UNDEFINED;
 }
-
 
 static void
 ns_mouse_event_retarget_offsets(JSContext *ctx, JSValueConst event,
@@ -42555,7 +42360,6 @@ ns_media_canPlayType(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, ns_media_answer_string(answer));
 }
 
-
 static JSValue
 ns_time_ranges_edge(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv, int magic,
@@ -42719,9 +42523,6 @@ ns_media_get_video_playback_quality(JSContext *ctx, JSValueConst this_val,
     JSValue q = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, q, "creationTime",
                       JS_NewFloat64(ctx, ns_perf_now_ms(js_from_ctx(ctx))));
-    /* Media Source video counts what the decoder delivered: a frame
-     * decoded after its time was dropped. Pages lower the quality they
-     * stream when many are. */
     JS_SetPropertyStr(ctx, q, "totalVideoFrames",
                       JS_NewInt32(ctx, counted ? (int)(presented + dropped)
                                                : (int)(pos * 30.0)));
@@ -43392,8 +43193,6 @@ ns_iframe_make_realm_context(ns_js *js, ns_node *iframe,
         return NULL;
     }
     if (iframe) {
-        /* Give the frame its own named-properties object (bound to its own
-         * document) instead of inheriting the parent window's. */
         static const char rebase_src[] =
             "(function(G, named){"
             "  var wp = Object.getPrototypeOf(G);"
@@ -50023,7 +49822,6 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     JS_NewClass(js->rt, ns_es_class_id, &ns_es_class);
     ns_bind_ctor(ctx, global, "EventSource",    ns_window_eventsource_ctor,  2);
 
-
     JSValue css_obj = JS_NewObject(ctx);
     ns_bind_fn(ctx, css_obj, "supports", ns_css_supports, 2);
     ns_bind_fn(ctx, css_obj, "escape",   ns_css_escape,   1);
@@ -51029,7 +50827,6 @@ ns_document_createDocumentFragment(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_synthdoc_get_doctype(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv);
 
-
 static JSValue
 ns_impl_create_html_document(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -51615,7 +51412,6 @@ ns_document_querySelectorAll(JSContext *ctx, JSValueConst this_val,
                                   TRUE, TRUE);
 }
 
-
 static JSValue
 ns_document_addEventListener(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -51631,7 +51427,6 @@ ns_window_addEventListener(JSContext *ctx, JSValueConst this_val,
     return ns_add_listener_impl(ctx,
         ns_window_document_for(ctx, this_val), argc, argv, TRUE);
 }
-
 
 static JSValue
 ns_document_removeEventListener(JSContext *ctx, JSValueConst this_val,
@@ -57637,7 +57432,6 @@ ns_js_flush_layout_from(ns_js *js, const char *api)
     js->in_layout_flush = TRUE;
     js->layout_flush_cb(js->layout_flush_user_data);
     js->in_layout_flush = FALSE;
-    /* Flushes with nothing to do are left out. */
     if (start && g_get_monotonic_time() - start >= 50)
         ns_trace_complete("layout", "forced reflow", start, api);
 }
@@ -57663,7 +57457,6 @@ ns_js_flush_style(ns_js *js)
     js->style_flush_cb(js->style_flush_user_data);
     js->in_layout_flush = FALSE;
 }
-
 
 const char *
 ns_js_current_url(const ns_js *js)
@@ -57709,12 +57502,6 @@ ns_js_dispatch_hashchange(ns_js *js, const char *old_url, const char *new_url)
     js->in_hashchange = FALSE;
 }
 
-/* Whether a change since the last call needs the box tree rebuilt, not
- * only a restyle: everything that sets mutated except attributes that
- * reach rendering through the cascade alone. */
-/* Nodes whose content changed in a way layout must see, each with the
- * context that changed it, until the browser takes them. A target freed
- * meanwhile drops out: its removal noted its parent too. */
 static GHashTable *g_layout_targets;
 
 static void
@@ -57723,9 +57510,6 @@ layout_target_node_freed(ns_node *node)
     if (g_layout_targets) g_hash_table_remove(g_layout_targets, node);
 }
 
-/* A node left parent, wherever script moved it to: parent's content
- * changed for layout too. Which script context saw it is told apart by
- * document when the targets are taken. */
 static void
 layout_target_node_detached(ns_node *parent)
 {
@@ -57743,7 +57527,6 @@ layout_targets_ensure(void)
     ns_node_detach_hook = layout_target_node_detached;
 }
 
-/* A change that needs the whole page laid out again, named for traces. */
 static void
 ns_js_note_layout_unscoped(ns_js *js, const char *why)
 {
