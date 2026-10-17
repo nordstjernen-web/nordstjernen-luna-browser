@@ -15825,6 +15825,15 @@ ns_css_background_position_join(const char *xs, const char *ys)
 }
 
 static char *
+inline_mark_important(char *value, gboolean important)
+{
+    if (!value || !important) return value;
+    char *with = g_strconcat(value, " !important", NULL);
+    g_free(value);
+    return with;
+}
+
+static char *
 bg_position_zip(const char *xs, const char *ys)
 {
     char *x = g_strdup(xs), *y = g_strdup(ys);
@@ -15836,12 +15845,7 @@ bg_position_zip(const char *xs, const char *ys)
     if (xi == yi && xl->len == 1 && yl->len == 1 &&
         inline_css_wide_value(g_ptr_array_index(xl, 0)) &&
         strcmp(g_ptr_array_index(xl, 0), g_ptr_array_index(yl, 0)) == 0) {
-        r = g_strdup(g_ptr_array_index(xl, 0));
-        if (xi) {
-            char *with = g_strconcat(r, " !important", NULL);
-            g_free(r);
-            r = with;
-        }
+        r = inline_mark_important(g_strdup(g_ptr_array_index(xl, 0)), xi);
     } else if (xi == yi && xl->len == yl->len) {
         GString *out = g_string_new(NULL);
         for (guint i = 0; i < xl->len; i++) {
@@ -20995,6 +20999,29 @@ page_apply_margin(ns_css_page_rule *pr, const char *text)
     for (int i = 0; i < 4; i++) pr->has_margin[i] = TRUE;
 }
 
+static char *
+css_next_descriptor(const char **cursor, const char *end, char **name,
+                    char **value)
+{
+    while (*cursor && *cursor < end) {
+        const char *start = *cursor;
+        char term = 0;
+        const char *decl_end = css_scan_declaration_value(start, end, &term);
+        *cursor = term ? decl_end + 1 : NULL;
+        char *decl = g_strstrip(g_strndup(start, (gsize)(decl_end - start)));
+        char *colon = (char *)css_find_top_level_char(decl,
+                                                      decl + strlen(decl), ':');
+        if (colon) {
+            *colon = '\0';
+            *name = g_strstrip(decl);
+            *value = g_strstrip(colon + 1);
+            return decl;
+        }
+        g_free(decl);
+    }
+    return NULL;
+}
+
 static void
 css_parse_page_block(ns_css_stylesheet *sh, const char *body_start,
                      const char *body_end)
@@ -21006,17 +21033,9 @@ css_parse_page_block(ns_css_stylesheet *sh, const char *body_start,
         "margin-top", "margin-right", "margin-bottom", "margin-left"
     };
     const char *p = body_start;
-    while (p < body_end) {
-        char term = 0;
-        const char *decl_end = css_scan_declaration_value(p, body_end, &term);
-        char *decl = g_strndup(p, (gsize)(decl_end - p));
-        char *line = g_strstrip(decl);
-        char *colon = (char *)css_find_top_level_char(line,
-                                                      line + strlen(line), ':');
-        if (colon && line[0] != '@') {
-            *colon = '\0';
-            char *name = g_strstrip(line);
-            char *value = g_strstrip(colon + 1);
+    char *decl, *name, *value;
+    while ((decl = css_next_descriptor(&p, body_end, &name, &value))) {
+        if (name[0] != '@') {
             if (g_ascii_strcasecmp(name, "size") == 0)
                 page_apply_size(pr, value);
             else if (g_ascii_strcasecmp(name, "margin") == 0)
@@ -21029,8 +21048,6 @@ css_parse_page_block(ns_css_stylesheet *sh, const char *body_start,
                 }
         }
         g_free(decl);
-        if (!term) break;
-        p = decl_end + 1;
     }
 }
 
@@ -21166,24 +21183,9 @@ parse_rules_until(const char **pp, const char *end,
                     char *family = NULL;
                     char *src_url = NULL;
                     const char *decl_p = body_start;
-                    while (decl_p < body_end) {
-                        char dterm = 0;
-                        const char *decl_end =
-                            css_scan_declaration_value(decl_p, body_end, &dterm);
-                        char *decl = g_strndup(decl_p,
-                                               (gsize)(decl_end - decl_p));
-                        char *line = g_strstrip(decl);
-                        char *colon = (char *)css_find_top_level_char(
-                            line, line + strlen(line), ':');
-                        if (!colon) {
-                            g_free(decl);
-                            if (!dterm) break;
-                            decl_p = decl_end + 1;
-                            continue;
-                        }
-                        *colon = '\0';
-                        char *prop = g_strstrip(line);
-                        char *val  = g_strstrip(colon + 1);
+                    char *decl, *prop, *val;
+                    while ((decl = css_next_descriptor(&decl_p, body_end,
+                                                       &prop, &val))) {
                         if (g_ascii_strcasecmp(prop, "font-family") == 0 && !family) {
                             char *v = val;
                             while (*v == ' ' || *v == '\'' || *v == '"') v++;
@@ -21196,8 +21198,6 @@ parse_rules_until(const char **pp, const char *end,
                             font_src_consider_urls(&src_url, val);
                         }
                         g_free(decl);
-                        if (!dterm) break;
-                        decl_p = decl_end + 1;
                     }
                     if (!sh->font_faces) {
                         sh->font_faces = g_array_new(FALSE, FALSE,
@@ -21259,30 +21259,13 @@ parse_rules_until(const char **pp, const char *end,
                         g_strstrip(sel);
                         GString *raw = NULL;
                         const char *decl_p = body_start;
-                        while (decl_p < body_end) {
-                            char dterm = 0;
-                            const char *decl_end =
-                                css_scan_declaration_value(decl_p, body_end, &dterm);
-                            char *decl = g_strndup(decl_p,
-                                                   (gsize)(decl_end - decl_p));
-                            char *line = g_strstrip(decl);
-                            char *colon = (char *)css_find_top_level_char(
-                                line, line + strlen(line), ':');
-                            if (!colon) {
-                                g_free(decl);
-                                if (!dterm) break;
-                                decl_p = decl_end + 1;
-                                continue;
-                            }
-                            *colon = '\0';
-                            char *prop = g_strstrip(line);
-                            char *val  = g_strstrip(colon + 1);
+                        char *decl, *prop, *val;
+                        while ((decl = css_next_descriptor(&decl_p, body_end,
+                                                           &prop, &val))) {
                             if (!raw) raw = g_string_new(NULL);
                             if (raw->len) g_string_append_c(raw, ';');
                             g_string_append_printf(raw, "%s:%s", prop, val);
                             g_free(decl);
-                            if (!dterm) break;
-                            decl_p = decl_end + 1;
                         }
                         const char *sel_p = sel;
                         const char *sel_all_end = sel + strlen(sel);
@@ -21449,40 +21432,27 @@ parse_rules_until(const char **pp, const char *end,
                     gboolean has_inherits = FALSE;
                     gboolean has_initial = FALSE;
                     const char *decl_p = body_start;
-                    while (decl_p < body_end) {
-                        char dterm = 0;
-                        const char *decl_end =
-                            css_scan_declaration_value(decl_p, body_end, &dterm);
-                        char *decl = g_strndup(decl_p,
-                                               (gsize)(decl_end - decl_p));
-                        char *line = g_strstrip(decl);
-                        char *colon = (char *)css_find_top_level_char(
-                            line, line + strlen(line), ':');
-                        if (colon) {
-                            *colon = '\0';
-                            char *dprop = g_strstrip(line);
-                            char *dval = g_strstrip(colon + 1);
-                            if (g_ascii_strcasecmp(dprop, "inherits") == 0) {
-                                if (g_ascii_strcasecmp(dval, "true") == 0 ||
-                                    g_ascii_strcasecmp(dval, "false") == 0) {
-                                    inherits =
-                                        g_ascii_strcasecmp(dval, "false") != 0;
-                                    has_inherits = TRUE;
-                                }
-                            } else if (g_ascii_strcasecmp(dprop,
-                                                          "initial-value") == 0) {
-                                g_free(initial_value);
-                                initial_value = g_strdup(dval);
-                                has_initial = TRUE;
-                            } else if (g_ascii_strcasecmp(dprop,
-                                                          "syntax") == 0) {
-                                g_free(syntax_text);
-                                syntax_text = css_string_descriptor_dup(dval);
+                    char *decl, *dprop, *dval;
+                    while ((decl = css_next_descriptor(&decl_p, body_end,
+                                                       &dprop, &dval))) {
+                        if (g_ascii_strcasecmp(dprop, "inherits") == 0) {
+                            if (g_ascii_strcasecmp(dval, "true") == 0 ||
+                                g_ascii_strcasecmp(dval, "false") == 0) {
+                                inherits =
+                                    g_ascii_strcasecmp(dval, "false") != 0;
+                                has_inherits = TRUE;
                             }
+                        } else if (g_ascii_strcasecmp(dprop,
+                                                      "initial-value") == 0) {
+                            g_free(initial_value);
+                            initial_value = g_strdup(dval);
+                            has_initial = TRUE;
+                        } else if (g_ascii_strcasecmp(dprop,
+                                                      "syntax") == 0) {
+                            g_free(syntax_text);
+                            syntax_text = css_string_descriptor_dup(dval);
                         }
                         g_free(decl);
-                        if (!dterm) break;
-                        decl_p = decl_end + 1;
                     }
                     ns_css_syntax_def *syntax =
                         syntax_text ? ns_css_syntax_def_parse(syntax_text) : NULL;
@@ -24593,6 +24563,28 @@ inline_anim_shorthand_value(const char *style, gboolean is_animation)
     return r;
 }
 
+static gboolean
+inline_longhands_get(const char *style, const char *const *names, gsize n,
+                     char **values, gboolean *important)
+{
+    for (gsize i = 0; i < n; i++) {
+        values[i] = ns_inline_style_get(style, names[i]);
+        if (!values[i] || !*values[i]) return FALSE;
+        gboolean value_important = ns_inline_value_strip_important(values[i]);
+        if (i == 0) *important = value_important;
+        else if (value_important != *important) return FALSE;
+    }
+    return TRUE;
+}
+
+static gboolean
+inline_values_same(char *const *values, gsize n)
+{
+    for (gsize i = 1; i < n; i++)
+        if (strcmp(values[i], values[0]) != 0) return FALSE;
+    return TRUE;
+}
+
 static char *
 inline_background_value(const char *style, gboolean *important_out)
 {
@@ -24602,31 +24594,20 @@ inline_background_value(const char *style, gboolean *important_out)
         "background-clip", "background-color",
     };
     char *values[G_N_ELEMENTS(names)] = { NULL };
-    gboolean important[G_N_ELEMENTS(names)] = { FALSE };
-    gboolean ok = TRUE;
-    for (gsize i = 0; i < G_N_ELEMENTS(names) && ok; i++) {
-        values[i] = ns_inline_style_get(style, names[i]);
-        if (!values[i] || !*values[i]) ok = FALSE;
-        else important[i] = ns_inline_value_strip_important(values[i]);
-        if (ok && i > 0 && important[i] != important[0]) ok = FALSE;
-    }
+    gboolean important = FALSE;
+    gboolean ok = inline_longhands_get(style, names, G_N_ELEMENTS(names),
+                                       values, &important);
     char *r = NULL;
-    gboolean all_wide = ok && inline_css_wide_value(values[0]);
-    for (gsize i = 1; all_wide && i < G_N_ELEMENTS(names); i++)
-        if (strcmp(values[i], values[0]) != 0) all_wide = FALSE;
-    if (all_wide) {
+    if (ok && inline_css_wide_value(values[0]) &&
+        inline_values_same(values, G_N_ELEMENTS(names))) {
         r = g_strdup(values[0]);
     } else if (ok) {
         r = ns_css_background_shorthand_serialize(values[0], values[1],
                 values[2], values[3], values[4], values[5], values[6],
                 values[7]);
     }
-    if (r && important[0]) {
-        char *with = g_strconcat(r, " !important", NULL);
-        g_free(r);
-        r = with;
-    }
-    if (r && important_out) *important_out = important[0];
+    r = inline_mark_important(r, important);
+    if (r && important_out) *important_out = important;
     for (gsize i = 0; i < G_N_ELEMENTS(names); i++) g_free(values[i]);
     return r;
 }
@@ -24639,29 +24620,18 @@ inline_border_image_value(const char *style)
         "border-image-outset", "border-image-repeat",
     };
     char *values[G_N_ELEMENTS(names)] = { NULL };
-    gboolean important[G_N_ELEMENTS(names)] = { FALSE };
-    gboolean ok = TRUE;
-    for (gsize i = 0; i < G_N_ELEMENTS(names) && ok; i++) {
-        values[i] = ns_inline_style_get(style, names[i]);
-        if (!values[i] || !*values[i]) ok = FALSE;
-        else important[i] = ns_inline_value_strip_important(values[i]);
-        if (ok && i > 0 && important[i] != important[0]) ok = FALSE;
-    }
+    gboolean important = FALSE;
+    gboolean ok = inline_longhands_get(style, names, G_N_ELEMENTS(names),
+                                       values, &important);
     char *r = NULL;
-    gboolean all_wide = ok && inline_css_wide_value(values[0]);
-    for (gsize i = 1; all_wide && i < G_N_ELEMENTS(names); i++)
-        if (strcmp(values[i], values[0]) != 0) all_wide = FALSE;
-    if (all_wide)
+    if (ok && inline_css_wide_value(values[0]) &&
+        inline_values_same(values, G_N_ELEMENTS(names)))
         r = g_strdup(values[0]);
     else if (ok)
         r = ns_css_border_image_shorthand_serialize(values[0], values[1],
                                                     values[2], values[3],
                                                     values[4]);
-    if (r && important[0]) {
-        char *with = g_strconcat(r, " !important", NULL);
-        g_free(r);
-        r = with;
-    }
+    r = inline_mark_important(r, important);
     for (gsize i = 0; i < G_N_ELEMENTS(names); i++) g_free(values[i]);
     return r;
 }
@@ -24709,27 +24679,17 @@ inline_border_side_value(const char *style, int side)
     names[1] = g_strdup_printf("border-%s-style", border_side_names[side]);
     names[2] = g_strdup_printf("border-%s-color", border_side_names[side]);
     char *values[3] = { NULL };
-    gboolean important[3] = { FALSE };
-    gboolean ok = TRUE;
-    for (int i = 0; i < 3 && ok; i++) {
-        values[i] = ns_inline_style_get(style, names[i]);
-        if (!values[i] || !*values[i]) ok = FALSE;
-        else important[i] = ns_inline_value_strip_important(values[i]);
-        if (ok && i > 0 && important[i] != important[0]) ok = FALSE;
-    }
+    gboolean important = FALSE;
+    gboolean ok = inline_longhands_get(style, (const char *const *)names, 3,
+                                       values, &important);
     char *r = NULL;
-    if (ok && inline_css_wide_value(values[0]) &&
-        strcmp(values[0], values[1]) == 0 && strcmp(values[1], values[2]) == 0)
+    if (ok && inline_css_wide_value(values[0]) && inline_values_same(values, 3))
         r = g_strdup(values[0]);
     else if (ok && !inline_css_wide_value(values[0]) &&
              !inline_css_wide_value(values[1]) &&
              !inline_css_wide_value(values[2]))
         r = border_side_serialize(values[0], values[1], values[2]);
-    if (r && important[0]) {
-        char *with = g_strconcat(r, " !important", NULL);
-        g_free(r);
-        r = with;
-    }
+    r = inline_mark_important(r, important);
     for (int i = 0; i < 3; i++) {
         g_free(names[i]);
         g_free(values[i]);
@@ -24770,20 +24730,11 @@ inline_border_radius_value(const char *style)
         "border-bottom-right-radius", "border-bottom-left-radius",
     };
     char *values[4] = { NULL };
-    gboolean important[4] = { FALSE };
-    gboolean ok = TRUE;
-    for (int i = 0; i < 4 && ok; i++) {
-        values[i] = ns_inline_style_get(style, names[i]);
-        if (!values[i] || !*values[i]) ok = FALSE;
-        else important[i] = ns_inline_value_strip_important(values[i]);
-        if (ok && i > 0 && important[i] != important[0]) ok = FALSE;
-    }
+    gboolean important = FALSE;
+    gboolean ok = inline_longhands_get(style, names, 4, values, &important);
     char *r = NULL;
     if (ok && inline_css_wide_value(values[0])) {
-        gboolean same = TRUE;
-        for (int i = 1; i < 4; i++)
-            if (strcmp(values[i], values[0]) != 0) same = FALSE;
-        if (same) r = g_strdup(values[0]);
+        if (inline_values_same(values, 4)) r = g_strdup(values[0]);
     } else if (ok) {
         char *h[4] = { NULL }, *v[4] = { NULL };
         for (int i = 0; i < 4; i++) {
@@ -24807,11 +24758,7 @@ inline_border_radius_value(const char *style)
             g_free(v[i]);
         }
     }
-    if (r && important[0]) {
-        char *with = g_strconcat(r, " !important", NULL);
-        g_free(r);
-        r = with;
-    }
+    r = inline_mark_important(r, important);
     for (int i = 0; i < 4; i++) g_free(values[i]);
     return r;
 }
@@ -24965,11 +24912,7 @@ inline_grid_value(const char *style, gboolean full)
         } else {
             r = g_strdup("");
         }
-        if (important && *r) {
-            char *with = g_strconcat(r, " !important", NULL);
-            g_free(r);
-            r = with;
-        }
+        if (*r) r = inline_mark_important(r, important != 0);
     } else if (present > 0) {
         r = g_strdup("");
     }
@@ -26811,25 +26754,27 @@ ns_css_declarations_free(GArray *decls)
 
 static GHashTable *g_incr_exclude;
 
+static const ns_css_prop css_currentcolor_props[] = {
+    NS_CSS_BACKGROUND_COLOR,
+    NS_CSS_BORDER_TOP_COLOR, NS_CSS_BORDER_RIGHT_COLOR,
+    NS_CSS_BORDER_BOTTOM_COLOR, NS_CSS_BORDER_LEFT_COLOR,
+    NS_CSS_OUTLINE_COLOR,
+    NS_CSS_TEXT_DECORATION_COLOR,
+    NS_CSS_COLUMN_RULE_COLOR,
+    NS_CSS_ACCENT_COLOR,
+    NS_CSS_CARET_COLOR,
+    NS_CSS_FILL,
+    NS_CSS_STROKE,
+    NS_CSS_STOP_COLOR,
+};
+
 gboolean
 ns_style_prop_from_currentcolor(const ns_style *s, int prop)
 {
-    static const int color_props[] = {
-        NS_CSS_BACKGROUND_COLOR,
-        NS_CSS_BORDER_TOP_COLOR, NS_CSS_BORDER_RIGHT_COLOR,
-        NS_CSS_BORDER_BOTTOM_COLOR, NS_CSS_BORDER_LEFT_COLOR,
-        NS_CSS_OUTLINE_COLOR,
-        NS_CSS_TEXT_DECORATION_COLOR,
-        NS_CSS_COLUMN_RULE_COLOR,
-        NS_CSS_ACCENT_COLOR,
-        NS_CSS_CARET_COLOR,
-        NS_CSS_FILL,
-        NS_CSS_STROKE,
-        NS_CSS_STOP_COLOR,
-    };
     if (!s) return FALSE;
-    for (gsize i = 0; i < G_N_ELEMENTS(color_props); i++)
-        if (color_props[i] == prop) return (s->currentcolor_bits >> i) & 1u;
+    for (gsize i = 0; i < G_N_ELEMENTS(css_currentcolor_props); i++)
+        if ((int)css_currentcolor_props[i] == prop)
+            return (s->currentcolor_bits >> i) & 1u;
     return FALSE;
 }
 
@@ -29807,40 +29752,28 @@ cascade_for(GArray *matches, ns_style *out, const ns_style *parent_style,
         }
     }
     {
-        const ns_css_prop color_props[] = {
-            NS_CSS_BACKGROUND_COLOR,
-            NS_CSS_BORDER_TOP_COLOR, NS_CSS_BORDER_RIGHT_COLOR,
-            NS_CSS_BORDER_BOTTOM_COLOR, NS_CSS_BORDER_LEFT_COLOR,
-            NS_CSS_OUTLINE_COLOR,
-            NS_CSS_TEXT_DECORATION_COLOR,
-            NS_CSS_COLUMN_RULE_COLOR,
-            NS_CSS_ACCENT_COLOR,
-            NS_CSS_CARET_COLOR,
-            NS_CSS_FILL,
-            NS_CSS_STROKE,
-            NS_CSS_STOP_COLOR,
-        };
-        for (gsize i = 0; i < G_N_ELEMENTS(color_props); i++) {
-            ns_css_value *v = out->values[color_props[i]];
+        for (gsize i = 0; i < G_N_ELEMENTS(css_currentcolor_props); i++) {
+            ns_css_prop prop = css_currentcolor_props[i];
+            ns_css_value *v = out->values[prop];
             if (v && v->kind == NS_CSS_V_COLOR && v->u.color.current) {
-                v = ns_css_value_cow(out, color_props[i]);
+                v = ns_css_value_cow(out, prop);
                 color_value_resolve_current(v, out->values[NS_CSS_COLOR]);
                 continue;
             }
             if (!v || v->kind != NS_CSS_V_KEYWORD || !v->u.keyword) continue;
             if (strcmp(v->u.keyword, "currentcolor") == 0) {
-                ns_css_value_free(out->values[color_props[i]]);
-                out->values[color_props[i]] = out->values[NS_CSS_COLOR]
+                ns_css_value_free(out->values[prop]);
+                out->values[prop] = out->values[NS_CSS_COLOR]
                     ? ns_css_value_dup(out->values[NS_CSS_COLOR])
                     : NULL;
                 out->currentcolor_bits |= 1u << i;
             } else if (strcmp(v->u.keyword, "transparent") == 0) {
-                ns_css_value_free(out->values[color_props[i]]);
+                ns_css_value_free(out->values[prop]);
                 ns_css_value *t = g_new0(ns_css_value, 1);
                 t->kind = NS_CSS_V_COLOR;
                 t->u.color.r = t->u.color.g = t->u.color.b = 0;
                 t->u.color.a = 0;
-                out->values[color_props[i]] = t;
+                out->values[prop] = t;
             }
         }
         const ns_css_prop shadow_props[] = { NS_CSS_BOX_SHADOW, NS_CSS_TEXT_SHADOW };
