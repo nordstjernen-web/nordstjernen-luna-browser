@@ -5006,35 +5006,6 @@ ns_element_int_attr_setter(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static const char *const g_bool_attrs[] = {
-    "allowfullscreen", "declare", "muted", "default", "nohref",
-    "noshade", "compact", "nowrap", "truespeed", "noresize",
-};
-
-static JSValue
-ns_element_bool_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    const ns_node *n = ns_unwrap_element(this_val);
-    if (!n || magic < 0 || magic >= (int)G_N_ELEMENTS(g_bool_attrs))
-        return JS_FALSE;
-    return JS_NewBool(ctx, ns_element_get_attr(n, g_bool_attrs[magic]) != NULL);
-}
-
-static JSValue
-ns_element_bool_attr_setter(JSContext *ctx, JSValueConst this_val,
-                            JSValueConst val, int magic)
-{
-    ns_node *n = ns_unwrap_element_mut(this_val);
-    if (!n || magic < 0 || magic >= (int)G_N_ELEMENTS(g_bool_attrs))
-        return JS_UNDEFINED;
-    ns_js *_j = js_from_ctx(ctx);
-    if (JS_ToBool(ctx, val))
-        ns_js_set_attr_recorded(_j, n, g_bool_attrs[magic], "");
-    else
-        ns_js_remove_attr_recorded(_j, n, g_bool_attrs[magic]);
-    return JS_UNDEFINED;
-}
-
 static JSValue
 ns_make_svg_length(JSContext *ctx, const char *str)
 {
@@ -5542,7 +5513,8 @@ static const char *kBoolAttrs[] = {
     "novalidate",
     "ismap", "draggable", "reversed", "playsinline",
     "default", "inert", "nomodule", "formnovalidate",
-    "required",
+    "required", "allowfullscreen", "declare", "nohref", "noshade",
+    "compact", "nowrap", "truespeed", "noresize", "checked",
 };
 
 static JSValue
@@ -21621,21 +21593,23 @@ ns_worker_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
     ns_worker_console_emit(ctx, "[unhandled rejection]", 1, &reason);
 }
 
+static const ns_fn_def ns_console_log_methods[] = {
+    { "log", 0 }, { "info", 0 }, { "debug", 0 }, { "trace", 0 },
+    { "table", 0 }, { "group", 0 }, { "groupCollapsed", 0 },
+    { "dir", 0 }, { "dirxml", 0 },
+};
+
+static const ns_fn_def ns_console_noop_methods[] = {
+    { "groupEnd", 0 }, { "profile", 0 }, { "profileEnd", 0 },
+    { "timeStamp", 0 }, { "context", 0 }, { "clear", 0 },
+};
+
 static void
 ns_worker_install_console(JSContext *ctx, JSValueConst global)
 {
     JSValue console = JS_NewObject(ctx);
-    static const ns_fn_def console_log_methods[] = {
-        { "log", 0 }, { "info", 0 }, { "debug", 0 }, { "trace", 0 },
-        { "table", 0 }, { "group", 0 }, { "groupCollapsed", 0 },
-        { "dir", 0 }, { "dirxml", 0 },
-    };
-    static const ns_fn_def console_noop_methods[] = {
-        { "groupEnd", 0 }, { "profile", 0 }, { "profileEnd", 0 },
-        { "timeStamp", 0 }, { "context", 0 }, { "clear", 0 },
-    };
     ns_bind_fns(ctx, console, ns_worker_console_log,
-                console_log_methods, G_N_ELEMENTS(console_log_methods));
+                ns_console_log_methods, G_N_ELEMENTS(ns_console_log_methods));
     ns_bind_fn(ctx, console, "warn",       ns_worker_console_warn,    0);
     ns_bind_fn(ctx, console, "error",      ns_worker_console_error,   0);
     ns_bind_fn(ctx, console, "assert",     ns_worker_console_assert,  0);
@@ -21645,7 +21619,7 @@ ns_worker_install_console(JSContext *ctx, JSValueConst global)
     ns_bind_fn(ctx, console, "timeEnd",    ns_returns_undefined,             0);
     ns_bind_fn(ctx, console, "timeLog",    ns_returns_undefined,             0);
     ns_bind_fns(ctx, console, ns_returns_undefined,
-                console_noop_methods, G_N_ELEMENTS(console_noop_methods));
+                ns_console_noop_methods, G_N_ELEMENTS(ns_console_noop_methods));
     JS_SetPropertyStr(ctx, console, "memory", JS_NewObject(ctx));
     ns_install_namespace_object(ctx, global, "console", console, "console");
 }
@@ -33829,46 +33803,6 @@ ns_element_set_default_value(JSContext *ctx, JSValueConst this_val, JSValueConst
 }
 
 static JSValue
-ns_element_get_default_checked(JSContext *ctx, JSValueConst this_val)
-{
-    (void)ctx;
-    const ns_node *n = ns_unwrap_element(this_val);
-    if (!n) return JS_FALSE;
-    return ns_element_get_attr(n, "checked") ? JS_TRUE : JS_FALSE;
-}
-
-static JSValue
-ns_element_set_default_checked(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    ns_node *el = ns_unwrap_element_mut(this_val);
-    if (!el) return JS_UNDEFINED;
-    ns_js *_j = js_from_ctx(ctx);
-    if (JS_ToBool(ctx, val)) ns_js_set_attr_recorded(_j, el, "checked", "");
-    else                     ns_js_remove_attr_recorded(_j, el, "checked");
-    return JS_UNDEFINED;
-}
-
-static JSValue
-ns_element_get_default_selected(JSContext *ctx, JSValueConst this_val)
-{
-    (void)ctx;
-    const ns_node *n = ns_unwrap_element(this_val);
-    if (!n) return JS_FALSE;
-    return ns_element_get_attr(n, "selected") ? JS_TRUE : JS_FALSE;
-}
-
-static JSValue
-ns_element_set_default_selected(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    ns_node *el = ns_unwrap_element_mut(this_val);
-    if (!el) return JS_UNDEFINED;
-    ns_js *_j = js_from_ctx(ctx);
-    if (JS_ToBool(ctx, val)) ns_js_set_attr_recorded(_j, el, "selected", "");
-    else                     ns_js_remove_attr_recorded(_j, el, "selected");
-    return JS_UNDEFINED;
-}
-
-static JSValue
 ns_element_get_selected(JSContext *ctx, JSValueConst this_val)
 {
     (void)ctx;
@@ -36949,18 +36883,41 @@ ns_element_get_select_length(JSContext *ctx, JSValueConst this_val)
 }
 
 enum {
-    NS_ANCHOR_HREF = 0,
-    NS_ANCHOR_PROTOCOL,
-    NS_ANCHOR_HOST,
-    NS_ANCHOR_HOSTNAME,
-    NS_ANCHOR_PORT,
-    NS_ANCHOR_PATHNAME,
-    NS_ANCHOR_SEARCH,
-    NS_ANCHOR_HASH,
-    NS_ANCHOR_ORIGIN,
-    NS_ANCHOR_USERNAME,
-    NS_ANCHOR_PASSWORD,
+    NS_URL_PART_HREF = 0,
+    NS_URL_PART_PROTOCOL,
+    NS_URL_PART_HOST,
+    NS_URL_PART_HOSTNAME,
+    NS_URL_PART_PORT,
+    NS_URL_PART_PATHNAME,
+    NS_URL_PART_SEARCH,
+    NS_URL_PART_HASH,
+    NS_URL_PART_ORIGIN,
+    NS_URL_PART_USERNAME,
+    NS_URL_PART_PASSWORD,
 };
+
+static const struct {
+    const char *name;
+    gsize       offset;
+} ns_url_part_fields[] = {
+    [NS_URL_PART_PROTOCOL] = { "protocol", G_STRUCT_OFFSET(ns_url_parts, protocol) },
+    [NS_URL_PART_HOST]     = { "host",     G_STRUCT_OFFSET(ns_url_parts, host) },
+    [NS_URL_PART_HOSTNAME] = { "hostname", G_STRUCT_OFFSET(ns_url_parts, hostname) },
+    [NS_URL_PART_PORT]     = { "port",     G_STRUCT_OFFSET(ns_url_parts, port) },
+    [NS_URL_PART_PATHNAME] = { "pathname", G_STRUCT_OFFSET(ns_url_parts, pathname) },
+    [NS_URL_PART_SEARCH]   = { "search",   G_STRUCT_OFFSET(ns_url_parts, search) },
+    [NS_URL_PART_HASH]     = { "hash",     G_STRUCT_OFFSET(ns_url_parts, hash) },
+    [NS_URL_PART_ORIGIN]   = { "origin",   G_STRUCT_OFFSET(ns_url_parts, origin) },
+    [NS_URL_PART_USERNAME] = { "username", G_STRUCT_OFFSET(ns_url_parts, username) },
+    [NS_URL_PART_PASSWORD] = { "password", G_STRUCT_OFFSET(ns_url_parts, password) },
+};
+
+static const char *
+ns_url_part_of(const ns_url_parts *p, int part)
+{
+    return *(char *const *)(const void *)((const char *)p +
+                                          ns_url_part_fields[part].offset);
+}
 
 static gboolean
 ns_node_is_url_element(const ns_node *n)
@@ -37079,7 +37036,7 @@ ns_element_anchor_part_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const ns_node *n = ns_unwrap_element(this_val);
     if (!ns_node_is_url_element(n)) {
-        if (magic == NS_ANCHOR_HREF) {
+        if (magic == NS_URL_PART_HREF) {
             const char *v = n ? ns_element_get_attr(n, "href") : NULL;
             if (!v) return JS_NewString(ctx, "");
             if (ns_node_is_element_named(n, "base")) {
@@ -37097,25 +37054,13 @@ ns_element_anchor_part_get(JSContext *ctx, JSValueConst this_val, int magic)
     g_autofree char *href = ns_element_anchor_url(n, js_from_ctx(ctx));
     g_autoptr(ns_url_parts) p = href ? ns_url_parts_new(href) : NULL;
     if (!p) {
-        if (magic == NS_ANCHOR_HREF)
+        if (magic == NS_URL_PART_HREF)
             return ns_element_reflect_str_get(ctx, this_val, "href", FALSE);
-        if (magic == NS_ANCHOR_PROTOCOL) return JS_NewString(ctx, ":");
+        if (magic == NS_URL_PART_PROTOCOL) return JS_NewString(ctx, ":");
         return JS_NewString(ctx, "");
     }
-    if (magic == NS_ANCHOR_HREF) return JS_NewString(ctx, href);
-    const char *out = NULL;
-    switch (magic) {
-        case NS_ANCHOR_PROTOCOL: out = p->protocol; break;
-        case NS_ANCHOR_HOST:     out = p->host;     break;
-        case NS_ANCHOR_HOSTNAME: out = p->hostname; break;
-        case NS_ANCHOR_PORT:     out = p->port;     break;
-        case NS_ANCHOR_PATHNAME: out = p->pathname; break;
-        case NS_ANCHOR_SEARCH:   out = p->search;   break;
-        case NS_ANCHOR_HASH:     out = p->hash;     break;
-        case NS_ANCHOR_ORIGIN:   out = p->origin;   break;
-        case NS_ANCHOR_USERNAME: out = p->username; break;
-        case NS_ANCHOR_PASSWORD: out = p->password; break;
-    }
+    if (magic == NS_URL_PART_HREF) return JS_NewString(ctx, href);
+    const char *out = ns_url_part_of(p, magic);
     return JS_NewString(ctx, out ? out : "");
 }
 
@@ -37131,18 +37076,8 @@ static JSValue
 ns_element_url_part_set(JSContext *ctx, JSValueConst this_val,
                         JSValueConst val, int magic)
 {
-    const char *name = NULL;
-    switch (magic) {
-        case NS_ANCHOR_PROTOCOL: name = "protocol"; break;
-        case NS_ANCHOR_HOST:     name = "host";     break;
-        case NS_ANCHOR_HOSTNAME: name = "hostname"; break;
-        case NS_ANCHOR_PORT:     name = "port";     break;
-        case NS_ANCHOR_PATHNAME: name = "pathname"; break;
-        case NS_ANCHOR_SEARCH:   name = "search";   break;
-        case NS_ANCHOR_HASH:     name = "hash";     break;
-        case NS_ANCHOR_USERNAME: name = "username"; break;
-        case NS_ANCHOR_PASSWORD: name = "password"; break;
-    }
+    const char *name = magic == NS_URL_PART_ORIGIN ? NULL
+                       : ns_url_part_fields[magic].name;
     ns_node *n = ns_unwrap_element_mut(this_val);
     if (!name) return JS_UNDEFINED;
     gboolean hyperlink = n && n->kind == NS_NODE_ELEMENT && n->name &&
@@ -43871,9 +43806,9 @@ static const ns_interface_member ns_interface_members[] = {
     { "HTMLInputElement HTMLOutputElement HTMLTextAreaElement",
       JS_CGETSET_DEF("defaultValue", ns_element_get_default_value, ns_element_set_default_value) },
     { "HTMLInputElement",
-      JS_CGETSET_DEF("defaultChecked", ns_element_get_default_checked, ns_element_set_default_checked) },
+      JS_CGETSET_MAGIC_DEF("defaultChecked", ns_element_boolattr_getter, ns_element_boolattr_setter, 29) },
     { "HTMLOptionElement",
-      JS_CGETSET_DEF("defaultSelected", ns_element_get_default_selected, ns_element_set_default_selected) },
+      JS_CGETSET_MAGIC_DEF("defaultSelected", ns_element_boolattr_getter, ns_element_boolattr_setter, 1) },
     { NS_IFACES_MEDIA,
       JS_CGETSET_DEF("currentTime", ns_media_get_current_time, ns_media_set_current_time) },
     { NS_IFACES_MEDIA,
@@ -44055,27 +43990,27 @@ static const ns_interface_member ns_interface_members[] = {
       "HTMLSourceElement HTMLTrackElement",
       JS_CGETSET_MAGIC_DEF("src", ns_element_attr_getter, ns_element_attr_setter, 3) },
     { NS_IFACES_HYPERLINK " HTMLBaseElement HTMLLinkElement SVGElement",
-      JS_CGETSET_MAGIC_DEF("href", ns_element_anchor_part_get, ns_element_anchor_href_set, NS_ANCHOR_HREF) },
+      JS_CGETSET_MAGIC_DEF("href", ns_element_anchor_part_get, ns_element_anchor_href_set, NS_URL_PART_HREF) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("protocol", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_PROTOCOL) },
+      JS_CGETSET_MAGIC_DEF("protocol", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_PROTOCOL) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("host", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_HOST) },
+      JS_CGETSET_MAGIC_DEF("host", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_HOST) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("hostname", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_HOSTNAME) },
+      JS_CGETSET_MAGIC_DEF("hostname", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_HOSTNAME) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("port", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_PORT) },
+      JS_CGETSET_MAGIC_DEF("port", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_PORT) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("pathname", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_PATHNAME) },
+      JS_CGETSET_MAGIC_DEF("pathname", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_PATHNAME) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("search", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_SEARCH) },
+      JS_CGETSET_MAGIC_DEF("search", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_SEARCH) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("hash", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_HASH) },
+      JS_CGETSET_MAGIC_DEF("hash", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_HASH) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("origin", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_ORIGIN) },
+      JS_CGETSET_MAGIC_DEF("origin", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_ORIGIN) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("username", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_USERNAME) },
+      JS_CGETSET_MAGIC_DEF("username", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_USERNAME) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("password", ns_element_anchor_part_get, ns_element_url_part_set, NS_ANCHOR_PASSWORD) },
+      JS_CGETSET_MAGIC_DEF("password", ns_element_anchor_part_get, ns_element_url_part_set, NS_URL_PART_PASSWORD) },
     { "HTMLAnchorElement HTMLButtonElement HTMLEmbedElement "
       "HTMLFieldSetElement HTMLInputElement HTMLLIElement "
       "HTMLLinkElement HTMLOListElement HTMLObjectElement "
@@ -44141,26 +44076,26 @@ static const ns_interface_member ns_interface_members[] = {
     { "HTMLFrameSetElement HTMLTextAreaElement",
       JS_CGETSET_MAGIC_DEF("cols", ns_element_int_attr_getter, ns_element_int_attr_setter, 3) },
     { "HTMLIFrameElement",
-      JS_CGETSET_MAGIC_DEF("allowFullscreen", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 0) },
+      JS_CGETSET_MAGIC_DEF("allowFullscreen", ns_element_boolattr_getter, ns_element_boolattr_setter, 21) },
     { "HTMLObjectElement",
-      JS_CGETSET_MAGIC_DEF("declare", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 1) },
+      JS_CGETSET_MAGIC_DEF("declare", ns_element_boolattr_getter, ns_element_boolattr_setter, 22) },
     { NS_IFACES_MEDIA,
-      JS_CGETSET_MAGIC_DEF("defaultMuted", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 2) },
+      JS_CGETSET_MAGIC_DEF("defaultMuted", ns_element_boolattr_getter, ns_element_boolattr_setter, 7) },
     { "HTMLTrackElement",
-      JS_CGETSET_MAGIC_DEF("default", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 3) },
+      JS_CGETSET_MAGIC_DEF("default", ns_element_boolattr_getter, ns_element_boolattr_setter, 16) },
     { NS_IFACES_HYPERLINK,
-      JS_CGETSET_MAGIC_DEF("noHref", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 4) },
+      JS_CGETSET_MAGIC_DEF("noHref", ns_element_boolattr_getter, ns_element_boolattr_setter, 23) },
     { "HTMLHRElement",
-      JS_CGETSET_MAGIC_DEF("noShade", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 5) },
+      JS_CGETSET_MAGIC_DEF("noShade", ns_element_boolattr_getter, ns_element_boolattr_setter, 24) },
     { "HTMLDListElement HTMLDirectoryElement HTMLMenuElement "
       "HTMLOListElement HTMLUListElement",
-      JS_CGETSET_MAGIC_DEF("compact", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 6) },
+      JS_CGETSET_MAGIC_DEF("compact", ns_element_boolattr_getter, ns_element_boolattr_setter, 25) },
     { "HTMLTableCellElement",
-      JS_CGETSET_MAGIC_DEF("noWrap", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 7) },
+      JS_CGETSET_MAGIC_DEF("noWrap", ns_element_boolattr_getter, ns_element_boolattr_setter, 26) },
     { "HTMLMarqueeElement",
-      JS_CGETSET_MAGIC_DEF("trueSpeed", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 8) },
+      JS_CGETSET_MAGIC_DEF("trueSpeed", ns_element_boolattr_getter, ns_element_boolattr_setter, 27) },
     { "HTMLFrameElement",
-      JS_CGETSET_MAGIC_DEF("noResize", ns_element_bool_attr_getter, ns_element_bool_attr_setter, 9) },
+      JS_CGETSET_MAGIC_DEF("noResize", ns_element_boolattr_getter, ns_element_boolattr_setter, 28) },
     { "HTMLFontElement",
       JS_CGETSET_MAGIC_DEF("face", ns_element_attr_getter, ns_element_attr_setter, 130) },
     { "HTMLBodyElement",
@@ -48789,17 +48724,8 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     ns_new_class_id(&ns_window_named_class_id);
     JS_NewClass(js->rt, ns_window_named_class_id, &ns_window_named_class);
     JSValue console = JS_NewObject(ctx);
-    static const ns_fn_def console_log_methods[] = {
-        { "log", 0 }, { "info", 0 }, { "debug", 0 }, { "trace", 0 },
-        { "table", 0 }, { "group", 0 }, { "groupCollapsed", 0 },
-        { "dir", 0 }, { "dirxml", 0 },
-    };
-    static const ns_fn_def console_noop_methods[] = {
-        { "groupEnd", 0 }, { "profile", 0 }, { "profileEnd", 0 },
-        { "timeStamp", 0 }, { "context", 0 }, { "clear", 0 },
-    };
     ns_bind_fns(ctx, console, ns_js_console_log,
-                console_log_methods, G_N_ELEMENTS(console_log_methods));
+                ns_console_log_methods, G_N_ELEMENTS(ns_console_log_methods));
     ns_bind_fn(ctx,  console, "warn",  ns_js_console_warn,  0);
     ns_bind_fn(ctx,  console, "error", ns_js_console_error, 0);
     ns_bind_fn(ctx,  console, "assert",     ns_js_console_assert,      0);
@@ -48809,7 +48735,7 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     ns_bind_fn(ctx,  console, "timeEnd",    ns_js_console_time_end,    0);
     ns_bind_fn(ctx,  console, "timeLog",    ns_js_console_time_log,    0);
     ns_bind_fns(ctx, console, ns_returns_undefined,
-                console_noop_methods, G_N_ELEMENTS(console_noop_methods));
+                ns_console_noop_methods, G_N_ELEMENTS(ns_console_noop_methods));
     JS_SetPropertyStr(ctx, console, "memory", JS_NewObject(ctx));
     ns_install_namespace_object(ctx, global, "console", console, "console");
 
@@ -52460,77 +52386,6 @@ ns_loc_url(JSContext *ctx)
 }
 
 static JSValue
-ns_location_part(JSContext *ctx, gsize offset, const char *fallback)
-{
-    ns_url_parts *p = ns_url_parts_new(ns_loc_url(ctx));
-    if (!p) return JS_NewString(ctx, fallback);
-    const char *v = *(char *const *)(void *)((char *)p + offset);
-    JSValue out = JS_NewString(ctx, v ? v : fallback);
-    ns_url_parts_free(p);
-    return out;
-}
-
-static JSValue
-ns_location_get_protocol(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, protocol), "");
-}
-
-static JSValue
-ns_location_get_host(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, host), "");
-}
-
-static JSValue
-ns_location_get_hostname(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, hostname), "");
-}
-
-static JSValue
-ns_location_get_port(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, port), "");
-}
-
-static JSValue
-ns_location_get_pathname(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    ns_url_parts *p = ns_url_parts_new(ns_loc_url(ctx));
-    if (!p) return JS_NewString(ctx, "/");
-    JSValue v = JS_NewString(ctx, *p->pathname ? p->pathname : "/");
-    ns_url_parts_free(p);
-    return v;
-}
-
-static JSValue
-ns_location_get_search(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, search), "");
-}
-
-static JSValue
-ns_location_get_hash(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, hash), "");
-}
-
-static JSValue
-ns_location_get_origin(JSContext *ctx, JSValueConst this_val)
-{
-    (void)this_val;
-    return ns_location_part(ctx, G_STRUCT_OFFSET(ns_url_parts, origin), "");
-}
-
-static JSValue
 ns_location_toString(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
@@ -52686,57 +52541,37 @@ ns_location_set_component(JSContext *ctx, JSValueConst val, const char *comp)
 }
 
 static JSValue
-ns_location_set_protocol(JSContext *ctx, JSValueConst this_val, JSValueConst val)
+ns_location_get_field(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val;
-    return ns_location_set_component(ctx, val, "protocol");
+    const char *fallback = magic == NS_URL_PART_PATHNAME ? "/" : "";
+    ns_url_parts *p = ns_url_parts_new(ns_loc_url(ctx));
+    if (!p) return JS_NewString(ctx, fallback);
+    const char *v = ns_url_part_of(p, magic);
+    JSValue out = JS_NewString(ctx, v && *v ? v : fallback);
+    ns_url_parts_free(p);
+    return out;
 }
 
 static JSValue
-ns_location_set_host(JSContext *ctx, JSValueConst this_val, JSValueConst val)
+ns_location_set_field(JSContext *ctx, JSValueConst this_val, JSValueConst val,
+                      int magic)
 {
-    (void)this_val;
-    return ns_location_set_component(ctx, val, "host");
-}
-
-static JSValue
-ns_location_set_hostname(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    (void)this_val;
-    return ns_location_set_component(ctx, val, "hostname");
-}
-
-static JSValue
-ns_location_set_port(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    (void)this_val;
-    return ns_location_set_component(ctx, val, "port");
-}
-
-static JSValue
-ns_location_set_pathname(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    (void)this_val;
-    return ns_location_set_component(ctx, val, "pathname");
-}
-
-static JSValue
-ns_location_set_search(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    (void)this_val;
-    return ns_location_set_component(ctx, val, "search");
+    if (magic == NS_URL_PART_HASH)
+        return ns_location_set_hash(ctx, this_val, val);
+    return ns_location_set_component(ctx, val, ns_url_part_fields[magic].name);
 }
 
 static const JSCFunctionListEntry ns_location_funcs[] = {
-    JS_CGETSET_DEF("href",     ns_location_get_href, ns_location_set_href),
-    JS_CGETSET_DEF("protocol", ns_location_get_protocol, ns_location_set_protocol),
-    JS_CGETSET_DEF("host",     ns_location_get_host, ns_location_set_host),
-    JS_CGETSET_DEF("hostname", ns_location_get_hostname, ns_location_set_hostname),
-    JS_CGETSET_DEF("port",     ns_location_get_port, ns_location_set_port),
-    JS_CGETSET_DEF("pathname", ns_location_get_pathname, ns_location_set_pathname),
-    JS_CGETSET_DEF("search",   ns_location_get_search, ns_location_set_search),
-    JS_CGETSET_DEF("hash",     ns_location_get_hash, ns_location_set_hash),
-    JS_CGETSET_DEF("origin",   ns_location_get_origin, NULL),
+    JS_CGETSET_DEF("href", ns_location_get_href, ns_location_set_href),
+    JS_CGETSET_MAGIC_DEF("protocol", ns_location_get_field, ns_location_set_field, NS_URL_PART_PROTOCOL),
+    JS_CGETSET_MAGIC_DEF("host",     ns_location_get_field, ns_location_set_field, NS_URL_PART_HOST),
+    JS_CGETSET_MAGIC_DEF("hostname", ns_location_get_field, ns_location_set_field, NS_URL_PART_HOSTNAME),
+    JS_CGETSET_MAGIC_DEF("port",     ns_location_get_field, ns_location_set_field, NS_URL_PART_PORT),
+    JS_CGETSET_MAGIC_DEF("pathname", ns_location_get_field, ns_location_set_field, NS_URL_PART_PATHNAME),
+    JS_CGETSET_MAGIC_DEF("search",   ns_location_get_field, ns_location_set_field, NS_URL_PART_SEARCH),
+    JS_CGETSET_MAGIC_DEF("hash",     ns_location_get_field, ns_location_set_field, NS_URL_PART_HASH),
+    JS_CGETSET_MAGIC_DEF("origin",   ns_location_get_field, NULL, NS_URL_PART_ORIGIN),
     JS_CFUNC_DEF("assign",   1, ns_location_assign),
     JS_CFUNC_DEF("reload",   0, ns_location_reload),
     JS_CFUNC_DEF("replace",  1, ns_location_assign),
