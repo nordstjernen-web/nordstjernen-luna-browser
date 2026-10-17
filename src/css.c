@@ -4526,18 +4526,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                                 matches_any_group_free);
                         g_ptr_array_add(cmp->has_groups, group);
                         int ma = 0, mb = 0, mc = 0;
-                        for (guint gi = 0; gi < group->len; gi++) {
-                            const ns_css_selector *sub =
-                                g_ptr_array_index(group, gi);
-                            if (sub->spec_a > ma ||
-                                (sub->spec_a == ma && sub->spec_b > mb) ||
-                                (sub->spec_a == ma && sub->spec_b == mb &&
-                                 sub->spec_c > mc)) {
-                                ma = sub->spec_a;
-                                mb = sub->spec_b;
-                                mc = sub->spec_c;
-                            }
-                        }
+                        selector_group_max_specificity(group, &ma, &mb, &mc);
                         sel->spec_a += ma;
                         sel->spec_b += mb;
                         sel->spec_c += mc;
@@ -4561,18 +4550,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                         g_ptr_array_add(cmp->matches_any, group);
                         if (!is_where) {
                             int ma = 0, mb = 0, mc = 0;
-                            for (guint gi = 0; gi < group->len; gi++) {
-                                const ns_css_selector *sub =
-                                    g_ptr_array_index(group, gi);
-                                if (sub->spec_a > ma ||
-                                    (sub->spec_a == ma && sub->spec_b > mb) ||
-                                    (sub->spec_a == ma && sub->spec_b == mb &&
-                                     sub->spec_c > mc)) {
-                                    ma = sub->spec_a;
-                                    mb = sub->spec_b;
-                                    mc = sub->spec_c;
-                                }
-                            }
+                            selector_group_max_specificity(group, &ma, &mb, &mc);
                             sel->spec_a += ma;
                             sel->spec_b += mb;
                             sel->spec_c += mc;
@@ -4591,18 +4569,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
                                 matches_any_group_free);
                         g_ptr_array_add(cmp->matches_none, group);
                         int ma = 0, mb = 0, mc = 0;
-                        for (guint gi = 0; gi < group->len; gi++) {
-                            const ns_css_selector *sub =
-                                g_ptr_array_index(group, gi);
-                            if (sub->spec_a > ma ||
-                                (sub->spec_a == ma && sub->spec_b > mb) ||
-                                (sub->spec_a == ma && sub->spec_b == mb &&
-                                 sub->spec_c > mc)) {
-                                ma = sub->spec_a;
-                                mb = sub->spec_b;
-                                mc = sub->spec_c;
-                            }
-                        }
+                        selector_group_max_specificity(group, &ma, &mb, &mc);
                         sel->spec_a += ma;
                         sel->spec_b += mb;
                         sel->spec_c += mc;

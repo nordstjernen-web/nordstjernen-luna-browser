@@ -1101,24 +1101,8 @@ ns_layout_reads_label_attr(const ns_node *n, const char *name)
 }
 
 static gboolean
-style_has_atomic_inline_box(const ns_style *s)
+style_has_visible_border(const ns_style *s)
 {
-    if (!s) return FALSE;
-    const ns_css_value *w = s->values[NS_CSS_WIDTH];
-    const ns_css_value *h = s->values[NS_CSS_HEIGHT];
-    gboolean has_w = w && (w->kind == NS_CSS_V_LENGTH || w->kind == NS_CSS_V_CALC);
-    gboolean has_h = h && (h->kind == NS_CSS_V_LENGTH || h->kind == NS_CSS_V_CALC);
-    if (has_w || has_h) return TRUE;
-    if (s->values[NS_CSS_BACKGROUND_IMAGE] &&
-        (s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_URL ||
-         s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_GRADIENT))
-        return TRUE;
-    if (s->values[NS_CSS_BORDER_RADIUS] ||
-        s->values[NS_CSS_BORDER_TOP_LEFT_RADIUS] ||
-        s->values[NS_CSS_BORDER_TOP_RIGHT_RADIUS] ||
-        s->values[NS_CSS_BORDER_BOTTOM_RIGHT_RADIUS] ||
-        s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS])
-        return TRUE;
     const ns_css_prop widths[4] = {
         NS_CSS_BORDER_TOP_WIDTH,
         NS_CSS_BORDER_RIGHT_WIDTH,
@@ -1137,6 +1121,30 @@ style_has_atomic_inline_box(const ns_style *s)
         if (!keyword_is(st, "none") && !keyword_is(st, "hidden"))
             return TRUE;
     }
+    return FALSE;
+}
+
+static gboolean
+style_has_atomic_inline_box(const ns_style *s)
+{
+    if (!s) return FALSE;
+    const ns_css_value *w = s->values[NS_CSS_WIDTH];
+    const ns_css_value *h = s->values[NS_CSS_HEIGHT];
+    gboolean has_w = w && (w->kind == NS_CSS_V_LENGTH || w->kind == NS_CSS_V_CALC);
+    gboolean has_h = h && (h->kind == NS_CSS_V_LENGTH || h->kind == NS_CSS_V_CALC);
+    if (has_w || has_h) return TRUE;
+    if (s->values[NS_CSS_BACKGROUND_IMAGE] &&
+        (s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_URL ||
+         s->values[NS_CSS_BACKGROUND_IMAGE]->kind == NS_CSS_V_GRADIENT))
+        return TRUE;
+    if (s->values[NS_CSS_BORDER_RADIUS] ||
+        s->values[NS_CSS_BORDER_TOP_LEFT_RADIUS] ||
+        s->values[NS_CSS_BORDER_TOP_RIGHT_RADIUS] ||
+        s->values[NS_CSS_BORDER_BOTTOM_RIGHT_RADIUS] ||
+        s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS])
+        return TRUE;
+    if (style_has_visible_border(s))
+        return TRUE;
     const ns_css_value *bg = s->values[NS_CSS_BACKGROUND_COLOR];
     return bg && bg->kind == NS_CSS_V_COLOR && bg->u.color.a > 0;
 }
@@ -1908,25 +1916,7 @@ style_has_visible_control_box(const ns_style *s)
         length_or(s->values[NS_CSS_BORDER_BOTTOM_RIGHT_RADIUS], 0) > 0 ||
         length_or(s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS], 0) > 0)
         return TRUE;
-    const ns_css_prop widths[4] = {
-        NS_CSS_BORDER_TOP_WIDTH,
-        NS_CSS_BORDER_RIGHT_WIDTH,
-        NS_CSS_BORDER_BOTTOM_WIDTH,
-        NS_CSS_BORDER_LEFT_WIDTH,
-    };
-    const ns_css_prop styles_p[4] = {
-        NS_CSS_BORDER_TOP_STYLE,
-        NS_CSS_BORDER_RIGHT_STYLE,
-        NS_CSS_BORDER_BOTTOM_STYLE,
-        NS_CSS_BORDER_LEFT_STYLE,
-    };
-    for (int i = 0; i < 4; i++) {
-        if (length_or(s->values[widths[i]], 0) <= 0) continue;
-        const ns_css_value *st = s->values[styles_p[i]];
-        if (!keyword_is(st, "none") && !keyword_is(st, "hidden"))
-            return TRUE;
-    }
-    return FALSE;
+    return style_has_visible_border(s);
 }
 
 static gboolean
@@ -5665,7 +5655,7 @@ inline_textarea_total_height(const ns_box *box, const ns_style *parent_style)
 }
 
 static gboolean
-inline_attr_cacheable_kind(ns_inline_attr_kind k)
+inline_attr_is_text_only(ns_inline_attr_kind k)
 {
     switch (k) {
     case NS_INLINE_INPUT_FIELD:
@@ -5716,7 +5706,7 @@ inline_box_measure_cacheable(const ns_box *box)
     for (guint i = 0; i < box->attrs->len; i++) {
         const ns_inline_attr *a =
             &g_array_index(box->attrs, ns_inline_attr, i);
-        if (!inline_attr_cacheable_kind(a->kind)) return FALSE;
+        if (!inline_attr_is_text_only(a->kind)) return FALSE;
     }
     return TRUE;
 }
@@ -6481,27 +6471,6 @@ inline_box_form_hit(const ns_box *box, double local_x, double local_y,
 }
 
 static gboolean
-inline_attr_can_fragment(ns_inline_attr_kind k)
-{
-    switch (k) {
-    case NS_INLINE_INPUT_FIELD:
-    case NS_INLINE_INPUT_FIELD_FOCUSED:
-    case NS_INLINE_BUTTON:
-    case NS_INLINE_CHECKBOX:
-    case NS_INLINE_CHECKBOX_CHECKED:
-    case NS_INLINE_RADIO:
-    case NS_INLINE_RADIO_CHECKED:
-    case NS_INLINE_PROGRESS:
-    case NS_INLINE_METER:
-    case NS_INLINE_CARET:
-    case NS_INLINE_SELECTION:
-        return FALSE;
-    default:
-        return TRUE;
-    }
-}
-
-static gboolean
 inline_box_can_fragment(const ns_box *box, const ns_style *style,
                         double basis)
 {
@@ -6522,7 +6491,7 @@ inline_box_can_fragment(const ns_box *box, const ns_style *style,
         for (guint i = 0; i < box->attrs->len; i++) {
             const ns_inline_attr *a =
                 &g_array_index(box->attrs, ns_inline_attr, i);
-            if (!inline_attr_can_fragment(a->kind)) return FALSE;
+            if (!inline_attr_is_text_only(a->kind)) return FALSE;
         }
     }
     return TRUE;
@@ -6705,8 +6674,8 @@ overflow_axis_keyword(const ns_style *s, ns_css_prop axis)
     return v;
 }
 
-static gboolean
-overflow_kw_clips(const char *ov)
+gboolean
+ns_overflow_keyword_clips(const char *ov)
 {
     return ov && (g_ascii_strcasecmp(ov, "hidden") == 0 ||
                   g_ascii_strcasecmp(ov, "clip")   == 0 ||
@@ -6727,8 +6696,8 @@ box_clips_children(const ns_box *b)
     if (!b || !b->style) return FALSE;
     if (b->kind != NS_BOX_BLOCK && b->kind != NS_BOX_TABLE_CAPTION &&
         b->kind != NS_BOX_TABLE_CELL) return FALSE;
-    return overflow_kw_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_X)) ||
-           overflow_kw_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_Y));
+    return ns_overflow_keyword_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_X)) ||
+           ns_overflow_keyword_clips(overflow_axis_keyword(b->style, NS_CSS_OVERFLOW_Y));
 }
 
 static gboolean
