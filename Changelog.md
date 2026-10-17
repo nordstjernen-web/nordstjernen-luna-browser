@@ -4,6 +4,12 @@ Significant changes in each release:
 
 1.0.15:
 =======
+* `document.cookie` follows the cookie store. It was a copy taken when
+  the page loaded and replaced only when script wrote it, so a cookie set
+  or deleted by a `fetch()` or XHR response never appeared, which broke
+  sites that copy a CSRF token from a cookie into a request header. The
+  store now counts its writes, and a read takes the cookies again when
+  the count has changed. Same fix as Nordstjernen's and Southstar's.
 * Security: a local HTML file can no longer read other local files
   through a frame or a canvas. `ns_js_urls_same_origin` compared non-HTTP
   URLs by scheme alone, so it called any two `file:` URLs same-origin: a
