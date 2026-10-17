@@ -417,11 +417,8 @@ ns_security_sandbox_init(const char *self_exe)
         add_path_rw(rfd, fs_read | fs_write_file, "/dev/snd");
 
     const char *xauth = g_getenv("XAUTHORITY");
-    if (xauth && *xauth) {
-        char *xauth_dir = g_path_get_dirname(xauth);
-        add_path_rw(rfd, fs_read, xauth_dir);
-        g_free(xauth_dir);
-    }
+    if (xauth && *xauth)
+        add_path_rw(rfd, LANDLOCK_ACCESS_FS_READ_FILE, xauth);
 
     const char *home = g_get_home_dir();
 
