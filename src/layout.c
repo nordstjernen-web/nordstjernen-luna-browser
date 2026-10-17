@@ -2665,6 +2665,52 @@ datalist_option_value(const ns_node *option)
 }
 
 static void
+emit_caret(collector_ctx *ctx, gsize anchor_pos, gsize caret_pos)
+{
+    if (anchor_pos != caret_pos)
+        emit_attr(ctx->attrs, NS_INLINE_SELECTION, MIN(anchor_pos, caret_pos),
+                  MAX(anchor_pos, caret_pos));
+    emit_attr(ctx->attrs, NS_INLINE_CARET, caret_pos, caret_pos + 1);
+}
+
+static void
+emit_active_link(collector_ctx *ctx, gsize start)
+{
+    if (!ctx->active_href) return;
+    ns_link_range r = {
+        .start = start,
+        .len   = ctx->out->len - start,
+        .href  = g_strdup(ctx->active_href),
+        .target = ctx->active_target ? g_strdup(ctx->active_target) : NULL,
+        .dom   = ctx->active_link_node,
+    };
+    g_array_append_val(ctx->links, r);
+}
+
+static void
+emit_text_control(collector_ctx *ctx, const ns_node *n, const ns_style *s,
+                  gsize start, gsize val_start, gsize disp_end,
+                  gboolean is_placeholder, gboolean focused,
+                  gsize anchor_pos, gsize caret_pos)
+{
+    g_string_append(ctx->out, "\xc2\xa0");
+    emit_form_attr_sized(ctx->attrs, focused ? NS_INLINE_INPUT_FIELD_FOCUSED
+                                             : NS_INLINE_INPUT_FIELD,
+                         start, ctx->out->len, n, ctx->styles);
+    gboolean disabled = ns_element_get_attr(n, "disabled") != NULL;
+    emit_control_text_style(ctx->attrs, s, start, ctx->out->len, val_start,
+                            disp_end, is_placeholder, disabled);
+    if (!is_placeholder && disp_end > val_start && !disabled &&
+        ns_node_spellcheck_used(n)) {
+        ns_inline_attr sc = { .kind = NS_INLINE_SPELLCHECK,
+                              .start = val_start,
+                              .len = disp_end - val_start, .dom = n };
+        g_array_append_val(ctx->attrs, sc);
+    }
+    if (focused) emit_caret(ctx, anchor_pos, caret_pos);
+}
+
+static void
 emit_datalist_suggestions(collector_ctx *ctx, const ns_node *input)
 {
     const char *list_id = ns_element_get_attr(input, "list");
@@ -2728,23 +2774,10 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
                 if (ch == '\n') g_string_append(ctx->out, "\xe2\x80\xa8");
                 else if (ch != '\r') g_string_append_c(ctx->out, ch);
             }
-            if (ctx->active_href) {
-                ns_link_range r = {
-                    .start = start, .len = ctx->out->len - start,
-                    .href  = g_strdup(ctx->active_href),
-                    .target = ctx->active_target ? g_strdup(ctx->active_target) : NULL,
-                    .dom   = ctx->active_link_node,
-                };
-                g_array_append_val(ctx->links, r);
-            }
+            emit_active_link(ctx, start);
             if (focused) {
                 g_string_append(ctx->out, "\xc2\xa0");
-                if (anchor_pos != caret_pos) {
-                    gsize s0 = anchor_pos < caret_pos ? anchor_pos : caret_pos;
-                    gsize s1 = anchor_pos < caret_pos ? caret_pos : anchor_pos;
-                    emit_attr(ctx->attrs, NS_INLINE_SELECTION, s0, s1);
-                }
-                emit_attr(ctx->attrs, NS_INLINE_CARET, caret_pos, caret_pos + 1);
+                emit_caret(ctx, anchor_pos, caret_pos);
             }
             return;
         }
@@ -2753,16 +2786,7 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
                         : NULL;
         g_string_append(ctx->out, xformed ? xformed : n->text);
         g_free(xformed);
-        if (ctx->active_href) {
-            ns_link_range r = {
-                .start = start,
-                .len   = ctx->out->len - start,
-                .href  = g_strdup(ctx->active_href),
-                .target = ctx->active_target ? g_strdup(ctx->active_target) : NULL,
-                .dom   = ctx->active_link_node,
-            };
-            g_array_append_val(ctx->links, r);
-        }
+        emit_active_link(ctx, start);
         return;
     }
     if (n->kind != NS_NODE_ELEMENT) return;
@@ -2962,30 +2986,8 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
             }
             for (glong i = 0; i < right_pad; i++)
                 g_string_append(ctx->out, "\xc2\xa0");
-            g_string_append(ctx->out, "\xc2\xa0");
-            ns_inline_attr_kind kind = focused
-                                       ? NS_INLINE_INPUT_FIELD_FOCUSED
-                                       : NS_INLINE_INPUT_FIELD;
-            emit_form_attr_sized(ctx->attrs, kind, start, ctx->out->len, n, ctx->styles);
-            emit_control_text_style(ctx->attrs, s, start, ctx->out->len,
-                                    val_start, disp_end, is_placeholder,
-                                    ns_element_get_attr(n, "disabled") != NULL);
-            if (!is_placeholder && disp_end > val_start &&
-                ns_element_get_attr(n, "disabled") == NULL &&
-                ns_node_spellcheck_used(n)) {
-                ns_inline_attr sc = { .kind = NS_INLINE_SPELLCHECK,
-                                      .start = val_start,
-                                      .len = disp_end - val_start, .dom = n };
-                g_array_append_val(ctx->attrs, sc);
-            }
-            if (focused) {
-                if (anchor_pos != caret_pos) {
-                    gsize s0 = anchor_pos < caret_pos ? anchor_pos : caret_pos;
-                    gsize s1 = anchor_pos < caret_pos ? caret_pos : anchor_pos;
-                    emit_attr(ctx->attrs, NS_INLINE_SELECTION, s0, s1);
-                }
-                emit_attr(ctx->attrs, NS_INLINE_CARET, caret_pos, caret_pos + 1);
-            }
+            emit_text_control(ctx, n, s, start, val_start, disp_end,
+                              is_placeholder, focused, anchor_pos, caret_pos);
             if (focused && g_datalist_open_for_layout)
                 emit_datalist_suggestions(ctx, n);
         } else if (type && (g_ascii_strcasecmp(type, "submit") == 0 ||
@@ -3273,31 +3275,8 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
                 else         { caret_pos = 0; }
             }
         }
-        g_string_append(ctx->out, "\xc2\xa0");
-        ns_inline_attr_kind ta_kind = focused
-                                       ? NS_INLINE_INPUT_FIELD_FOCUSED
-                                       : NS_INLINE_INPUT_FIELD;
-        emit_form_attr_sized(ctx->attrs, ta_kind, start, ctx->out->len,
-                             n, ctx->styles);
-        emit_control_text_style(ctx->attrs, s, start, ctx->out->len,
-                                val_start, disp_end, is_placeholder,
-                                ns_element_get_attr(n, "disabled") != NULL);
-        if (!is_placeholder && disp_end > val_start &&
-            ns_element_get_attr(n, "disabled") == NULL &&
-            ns_node_spellcheck_used(n)) {
-            ns_inline_attr sc = { .kind = NS_INLINE_SPELLCHECK,
-                                  .start = val_start,
-                                  .len = disp_end - val_start, .dom = n };
-            g_array_append_val(ctx->attrs, sc);
-        }
-        if (focused) {
-            if (anchor_pos != caret_pos) {
-                gsize s0 = anchor_pos < caret_pos ? anchor_pos : caret_pos;
-                gsize s1 = anchor_pos < caret_pos ? caret_pos : anchor_pos;
-                emit_attr(ctx->attrs, NS_INLINE_SELECTION, s0, s1);
-            }
-            emit_attr(ctx->attrs, NS_INLINE_CARET, caret_pos, caret_pos + 1);
-        }
+        emit_text_control(ctx, n, s, start, val_start, disp_end,
+                          is_placeholder, focused, anchor_pos, caret_pos);
         return;
     }
 
@@ -4653,57 +4632,59 @@ append_display_contents_children(ns_box *block, const ns_node *n,
 }
 
 static void
+append_blockified_child(ns_box *block, const ns_node *c, GHashTable *styles,
+                        ns_box **pending_before, gboolean block_owns_pending)
+{
+    if (c->kind == NS_NODE_TEXT) {
+        if (text_is_ws_only(c->text)) return;
+        ns_box *item = box_new(NS_BOX_BLOCK);
+        item->style = NULL;
+        ns_box *run = build_inline_run(c, c->next_sibling, styles);
+        if (block_owns_pending && *pending_before) {
+            run = inline_merge_prefix(*pending_before, run);
+            *pending_before = NULL;
+        }
+        if (run && run->text && run->text[0]) {
+            box_append_child(item, run);
+            box_append_child(block, item);
+        } else {
+            if (run) ns_box_free(run);
+            ns_box_free(item);
+        }
+        return;
+    }
+    if (c->kind != NS_NODE_ELEMENT) return;
+    const ns_style *cs = g_hash_table_lookup(styles, c);
+    if (cs && style_is_none(cs)) return;
+    if (style_is_contents(cs)) {
+        append_display_contents_children(block, c, styles, TRUE,
+            block_owns_pending ? pending_before : NULL);
+        return;
+    }
+    if ((cs && style_is_absolute_or_fixed(cs)) || style_is_block(cs) ||
+        contains_block_media(c, styles) || node_has_media_metadata(c) ||
+        (c->name && (strcmp(c->name, "img") == 0 ||
+                     strcmp(c->name, "picture") == 0 ||
+                     strcmp(c->name, "svg") == 0 ||
+                     strcmp(c->name, "audio") == 0 ||
+                     strcmp(c->name, "video") == 0 ||
+                     strcmp(c->name, "table") == 0))) {
+        ns_box *child = build_block(c, styles);
+        if (child) box_append_child(block, child);
+        return;
+    }
+    ns_box *item = build_blockified_inline_item(c, styles, pending_before);
+    if (item) box_append_child(block, item);
+}
+
+static void
 append_flow_children(ns_box *block, const ns_node *n, GHashTable *styles,
                      gboolean blockify_children, ns_box **pending_before)
 {
     const ns_node *c = n->first_child;
     while (c) {
         if (blockify_children) {
-            if (c->kind == NS_NODE_TEXT) {
-                if (text_is_ws_only(c->text)) { c = c->next_sibling; continue; }
-                ns_box *item = box_new(NS_BOX_BLOCK);
-                item->style = NULL;
-                ns_box *run = build_inline_run(c, c->next_sibling, styles);
-                if (run && run->text && run->text[0]) {
-                    box_append_child(item, run);
-                    box_append_child(block, item);
-                } else {
-                    if (run) ns_box_free(run);
-                    ns_box_free(item);
-                }
-                c = c->next_sibling;
-                continue;
-            }
-            if (c->kind != NS_NODE_ELEMENT) { c = c->next_sibling; continue; }
-            const ns_style *cs = g_hash_table_lookup(styles, c);
-            if (cs && style_is_none(cs)) { c = c->next_sibling; continue; }
-            if (style_is_contents(cs)) {
-                append_display_contents_children(block, c, styles, TRUE, NULL);
-                c = c->next_sibling;
-                continue;
-            }
-            if (cs && style_is_absolute_or_fixed(cs)) {
-                ns_box *child = build_block(c, styles);
-                if (child) box_append_child(block, child);
-                c = c->next_sibling;
-                continue;
-            }
-            if (style_is_block(cs) ||
-                contains_block_media(c, styles) ||
-                node_has_media_metadata(c) ||
-                (c->name && (strcmp(c->name, "img") == 0 ||
-                             strcmp(c->name, "picture") == 0 ||
-                             strcmp(c->name, "svg") == 0 ||
-                             strcmp(c->name, "audio") == 0 ||
-                             strcmp(c->name, "video") == 0 ||
-                             strcmp(c->name, "table") == 0))) {
-                ns_box *child = build_block(c, styles);
-                if (child) box_append_child(block, child);
-                c = c->next_sibling;
-                continue;
-            }
-            ns_box *item = build_blockified_inline_item(c, styles, pending_before);
-            if (item) box_append_child(block, item);
+            append_blockified_child(block, c, styles, pending_before, FALSE);
             c = c->next_sibling;
             continue;
         }
@@ -5164,57 +5145,7 @@ build_block_impl(const ns_node *n, GHashTable *styles)
             continue;
         }
         if (blockify_children) {
-            if (c->kind == NS_NODE_TEXT) {
-                if (text_is_ws_only(c->text)) { c = c->next_sibling; continue; }
-                ns_box *item = box_new(NS_BOX_BLOCK);
-                item->style = NULL;
-                ns_box *run = build_inline_run(c, c->next_sibling, styles);
-                if (pending_before) {
-                    run = inline_merge_prefix(pending_before, run);
-                    pending_before = NULL;
-                }
-                if (run && run->text && run->text[0]) {
-                    box_append_child(item, run);
-                    box_append_child(block, item);
-                } else {
-                    if (run) ns_box_free(run);
-                    ns_box_free(item);
-                }
-                c = c->next_sibling;
-                continue;
-            }
-            if (c->kind != NS_NODE_ELEMENT) { c = c->next_sibling; continue; }
-            const ns_style *cs = g_hash_table_lookup(styles, c);
-            if (cs && style_is_none(cs)) { c = c->next_sibling; continue; }
-            if (style_is_contents(cs)) {
-                append_display_contents_children(block, c, styles, TRUE,
-                                                 &pending_before);
-                c = c->next_sibling;
-                continue;
-            }
-            if (cs && style_is_absolute_or_fixed(cs)) {
-                ns_box *child = build_block(c, styles);
-                if (child) box_append_child(block, child);
-                c = c->next_sibling;
-                continue;
-            }
-            if (style_is_block(cs) ||
-                contains_block_media(c, styles) ||
-                node_has_media_metadata(c) ||
-                (c->name && (strcmp(c->name, "img") == 0 ||
-                             strcmp(c->name, "picture") == 0 ||
-                             strcmp(c->name, "svg") == 0 ||
-                             strcmp(c->name, "audio") == 0 ||
-                             strcmp(c->name, "video") == 0 ||
-                             strcmp(c->name, "table") == 0))) {
-                ns_box *child = build_block(c, styles);
-                if (child) box_append_child(block, child);
-                c = c->next_sibling;
-                continue;
-            }
-            ns_box *item = build_blockified_inline_item(c, styles,
-                                                        &pending_before);
-            if (item) box_append_child(block, item);
+            append_blockified_child(block, c, styles, &pending_before, TRUE);
             c = c->next_sibling;
             continue;
         }
