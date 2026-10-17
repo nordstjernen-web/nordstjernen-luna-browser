@@ -4463,6 +4463,15 @@ ns_enum_normalize(const char *attr, const char *v)
 }
 
 static JSValue
+ns_js_doc_url_string(JSContext *ctx, const char *v)
+{
+    if (!v) return JS_NewString(ctx, "");
+    g_autofree char *base = ns_js_doc_base_url(js_from_ctx(ctx));
+    g_autofree char *resolved = base && *base ? ns_url_resolve(base, v) : NULL;
+    return JS_NewString(ctx, resolved ? resolved : v);
+}
+
+static JSValue
 ns_element_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const char *const *names = ns_reflected_attr_names;
@@ -4488,17 +4497,7 @@ ns_element_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
                             magic == 83 || magic == 87 || magic == 116 ||
                             magic == 123 || magic == 124);
     if (is_url_attr) {
-        if (!v) return JS_NewString(ctx, "");
-        g_autofree char *base = ns_js_doc_base_url(js_from_ctx(ctx));
-        if (base && *base) {
-            char *resolved = ns_url_resolve(base, v);
-            if (resolved) {
-                JSValue ret = JS_NewString(ctx, resolved);
-                g_free(resolved);
-                return ret;
-            }
-        }
-        return JS_NewString(ctx, v);
+        return ns_js_doc_url_string(ctx, v);
     }
     const char *norm = ns_enum_normalize_len(names[magic], v, v_len);
     if (norm) return JS_NewString(ctx, norm);
@@ -6549,17 +6548,7 @@ ns_element_get_data(JSContext *ctx, JSValueConst this_val)
     const ns_node *n = ns_unwrap_element(this_val);
     if (ns_node_is_object_element(n)) {
         const char *v = ns_element_get_attr(n, "data");
-        if (!v) return JS_NewString(ctx, "");
-        g_autofree char *base = ns_js_doc_base_url(js_from_ctx(ctx));
-        if (base && *base) {
-            char *resolved = ns_url_resolve(base, v);
-            if (resolved) {
-                JSValue ret = JS_NewString(ctx, resolved);
-                g_free(resolved);
-                return ret;
-            }
-        }
-        return JS_NewString(ctx, v);
+        return ns_js_doc_url_string(ctx, v);
     }
     return ns_element_get_nodeValue(ctx, this_val);
 }
@@ -20098,6 +20087,20 @@ ns_js_ws_close_method(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+static char *
+ns_js_page_url_arg(JSContext *ctx, JSValueConst arg)
+{
+    const char *url_raw = JS_ToCString(ctx, arg);
+    if (!url_raw) return NULL;
+    ns_js *js = js_from_ctx(ctx);
+    char *resolved = js && js->current_url
+        ? ns_url_resolve(js->current_url, url_raw) : NULL;
+    char *target = g_strdup(resolved ? resolved : url_raw);
+    JS_FreeCString(ctx, url_raw);
+    g_free(resolved);
+    return target;
+}
+
 static JSValue
 ns_window_websocket_ctor(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -20105,15 +20108,9 @@ ns_window_websocket_ctor(JSContext *ctx, JSValueConst this_val,
     (void)this_val;
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "WebSocket requires a URL");
-    const char *url_raw = JS_ToCString(ctx, argv[0]);
-    if (!url_raw) return JS_EXCEPTION;
+    char *target = ns_js_page_url_arg(ctx, argv[0]);
+    if (!target) return JS_EXCEPTION;
     ns_js *js = js_from_ctx(ctx);
-    char *resolved = NULL;
-    if (js && js->current_url)
-        resolved = ns_url_resolve(js->current_url, url_raw);
-    char *target = g_strdup(resolved ? resolved : url_raw);
-    JS_FreeCString(ctx, url_raw);
-    g_free(resolved);
 
     if (g_ascii_strncasecmp(target, "http://", 7) == 0) {
         char *remapped = g_strconcat("ws://", target + 7, NULL);
@@ -20368,15 +20365,9 @@ ns_window_eventsource_ctor(JSContext *ctx, JSValueConst this_val,
     (void)this_val;
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "EventSource requires a URL");
-    const char *url_raw = JS_ToCString(ctx, argv[0]);
-    if (!url_raw) return JS_EXCEPTION;
+    char *target = ns_js_page_url_arg(ctx, argv[0]);
+    if (!target) return JS_EXCEPTION;
     ns_js *js = js_from_ctx(ctx);
-    char *resolved = NULL;
-    if (js && js->current_url)
-        resolved = ns_url_resolve(js->current_url, url_raw);
-    char *target = g_strdup(resolved ? resolved : url_raw);
-    JS_FreeCString(ctx, url_raw);
-    g_free(resolved);
 
     if (g_ascii_strncasecmp(target, "http://", 7) != 0 &&
         g_ascii_strncasecmp(target, "https://", 8) != 0) {
@@ -23452,20 +23443,25 @@ ns_qcache_clear(ns_js *js)
     js->qcache_next = 0;
 }
 
+static ns_node *
+ns_js_mutation_root(ns_js *js, ns_node *parent)
+{
+    ns_node *doc = parent;
+    while (doc && doc->parent && doc->kind != NS_NODE_DOCUMENT)
+        doc = doc->parent;
+    if ((!doc || doc->kind != NS_NODE_DOCUMENT) && js && js->current_doc) {
+        for (const ns_node *p = parent; p; p = p->parent)
+            if (p == js->current_doc) return js->current_doc;
+    }
+    return doc;
+}
+
 static void
 ns_js_index_child_change(ns_js *js, ns_node *parent,
                          ns_node *added, ns_node *removed)
 {
     ns_qcache_invalidate(js);
-    ns_node *doc = parent;
-    while (doc && doc->parent && doc->kind != NS_NODE_DOCUMENT)
-        doc = doc->parent;
-    if (!doc || doc->kind != NS_NODE_DOCUMENT) {
-        if (js && js->current_doc) {
-            for (const ns_node *p = parent; p; p = p->parent)
-                if (p == js->current_doc) { doc = js->current_doc; break; }
-        }
-    }
+    ns_node *doc = ns_js_mutation_root(js, parent);
     if (doc) {
         gboolean shadow_scope = FALSE;
         for (const ns_node *p = parent; p && p != doc; p = p->parent)
@@ -23538,15 +23534,7 @@ ns_js_record_child_change_arrays(ns_js *js, ns_node *parent,
                                  ns_node *next_sibling)
 {
     ns_qcache_invalidate(js);
-    ns_node *doc = parent;
-    while (doc && doc->parent && doc->kind != NS_NODE_DOCUMENT)
-        doc = doc->parent;
-    if (!doc || doc->kind != NS_NODE_DOCUMENT) {
-        if (js && js->current_doc) {
-            for (const ns_node *p = parent; p; p = p->parent)
-                if (p == js->current_doc) { doc = js->current_doc; break; }
-        }
-    }
+    ns_node *doc = ns_js_mutation_root(js, parent);
     if (doc) {
         if (removed)
             for (guint i = 0; i < removed->len; i++) {
@@ -26667,6 +26655,20 @@ ns_fire_inline_on_handler(ns_js *js, const ns_node *target, const char *type,
     return TRUE;
 }
 
+static void
+ns_js_log_handler_exception(ns_js *js, JSContext *ctx, const char *type)
+{
+    JSValue ex = JS_GetException(ctx);
+    const char *m = JS_ToCString(ctx, ex);
+    if (m && js->log_cb) {
+        char *line = g_strdup_printf("JS error in on%s: %s", type, m);
+        js->log_cb(line, js->log_user_data);
+        g_free(line);
+    }
+    if (m) JS_FreeCString(ctx, m);
+    JS_FreeValue(ctx, ex);
+}
+
 static gboolean
 ns_fire_property_on_handler(ns_js *js, const ns_node *target, const char *type,
                             JSValue event)
@@ -26705,15 +26707,7 @@ ns_fire_property_on_handler(ns_js *js, const ns_node *target, const char *type,
             ns_node_is_window_handler_holder(target), &special);
         JS_SetPropertyStr(js->ctx, event, "currentTarget", prev_ct);
         if (JS_IsException(ret)) {
-            JSValue ex = JS_GetException(js->ctx);
-            const char *m = JS_ToCString(js->ctx, ex);
-            if (m && js->log_cb) {
-                char *line = g_strdup_printf("JS error in on%s: %s", type, m);
-                js->log_cb(line, js->log_user_data);
-                g_free(line);
-            }
-            if (m) JS_FreeCString(js->ctx, m);
-            JS_FreeValue(js->ctx, ex);
+            ns_js_log_handler_exception(js, js->ctx, type);
         } else if (!special && JS_IsBool(ret) && !JS_ToBool(js->ctx, ret)) {
             ns_event_mark_default_prevented(js->ctx, event);
         }
@@ -26755,15 +26749,7 @@ ns_fire_window_level_handlers(ns_js *js, const char *type, JSValue event,
     if (JS_IsFunction(ctx, handler)) {
         JSValue ret = JS_Call(ctx, handler, doc_obj, 1, &event);
         if (JS_IsException(ret)) {
-            JSValue ex = JS_GetException(ctx);
-            const char *m = JS_ToCString(ctx, ex);
-            if (m && js->log_cb) {
-                char *line = g_strdup_printf("JS error in on%s: %s", type, m);
-                js->log_cb(line, js->log_user_data);
-                g_free(line);
-            }
-            if (m) JS_FreeCString(ctx, m);
-            JS_FreeValue(ctx, ex);
+            ns_js_log_handler_exception(js, ctx, type);
         } else if (JS_IsBool(ret) && !JS_ToBool(ctx, ret)) {
             ns_event_mark_default_prevented(ctx, event);
         }
@@ -27077,15 +27063,7 @@ ns_fire_window_property_handlers(ns_js *js, const ns_node *target,
         JSValue ret = ns_call_on_handler(js, handler, global, type, event,
                                          TRUE, &special);
         if (JS_IsException(ret)) {
-            JSValue ex = JS_GetException(ctx);
-            const char *m = JS_ToCString(ctx, ex);
-            if (m && js->log_cb) {
-                char *line = g_strdup_printf("JS error in on%s: %s", type, m);
-                js->log_cb(line, js->log_user_data);
-                g_free(line);
-            }
-            if (m) JS_FreeCString(ctx, m);
-            JS_FreeValue(ctx, ex);
+            ns_js_log_handler_exception(js, ctx, type);
         } else if (!special && JS_IsBool(ret) && !JS_ToBool(ctx, ret)) {
             ns_event_mark_default_prevented(ctx, event);
         }
