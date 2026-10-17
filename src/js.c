@@ -10978,6 +10978,35 @@ ns_freeze_array(JSContext *ctx, JSValueConst array)
 
 static void ns_event_define_cancel_bubble(JSContext *ctx, JSValueConst ev);
 
+static gboolean
+ns_target_entry_signal_aborted(JSContext *ctx, JSValueConst entry)
+{
+    if (!JS_IsObject(entry)) return FALSE;
+    JSValue sigv = JS_GetPropertyStr(ctx, entry, "signal");
+    gboolean aborted = FALSE;
+    if (JS_IsObject(sigv)) {
+        JSValue ab = JS_GetPropertyStr(ctx, sigv, "aborted");
+        aborted = JS_ToBool(ctx, ab);
+        JS_FreeValue(ctx, ab);
+    }
+    JS_FreeValue(ctx, sigv);
+    return aborted;
+}
+
+static gboolean
+ns_listener_entry_retire(JSContext *ctx, JSValueConst entry, gboolean *any_dead)
+{
+    gboolean aborted = ns_target_entry_signal_aborted(ctx, entry);
+    JSValue oncev = JS_GetPropertyStr(ctx, entry, "once");
+    gboolean once = JS_ToBool(ctx, oncev);
+    JS_FreeValue(ctx, oncev);
+    if (once || aborted) {
+        JS_SetPropertyStr(ctx, entry, "_dead", JS_TRUE);
+        *any_dead = TRUE;
+    }
+    return aborted;
+}
+
 static JSValue
 ns_port_deliver_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -11053,21 +11082,7 @@ ns_port_deliver_job(JSContext *ctx, int argc, JSValueConst *argv)
             JSValue type_v = JS_GetPropertyStr(ctx, entry, "type");
             const char *ts = JS_ToCString(ctx, type_v);
             if (ts && strcmp(ts, "message") == 0) {
-                gboolean skip = FALSE;
-                JSValue sigv = JS_GetPropertyStr(ctx, entry, "signal");
-                if (JS_IsObject(sigv)) {
-                    JSValue ab = JS_GetPropertyStr(ctx, sigv, "aborted");
-                    if (JS_ToBool(ctx, ab)) skip = TRUE;
-                    JS_FreeValue(ctx, ab);
-                }
-                JS_FreeValue(ctx, sigv);
-                JSValue oncev = JS_GetPropertyStr(ctx, entry, "once");
-                gboolean once = JS_ToBool(ctx, oncev);
-                JS_FreeValue(ctx, oncev);
-                if (once || skip) {
-                    JS_SetPropertyStr(ctx, entry, "_dead", JS_TRUE);
-                    any_dead = TRUE;
-                }
+                gboolean skip = ns_listener_entry_retire(ctx, entry, &any_dead);
                 JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
                 if (!skip && JS_IsFunction(ctx, cb)) {
                     JSValueConst args[1] = { ev };
@@ -11260,21 +11275,6 @@ ns_port_post_message(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, cloned);
     JS_FreeValue(ctx, pair);
     return JS_UNDEFINED;
-}
-
-static gboolean
-ns_target_entry_signal_aborted(JSContext *ctx, JSValueConst entry)
-{
-    if (!JS_IsObject(entry)) return FALSE;
-    JSValue sigv = JS_GetPropertyStr(ctx, entry, "signal");
-    gboolean aborted = FALSE;
-    if (JS_IsObject(sigv)) {
-        JSValue ab = JS_GetPropertyStr(ctx, sigv, "aborted");
-        aborted = JS_ToBool(ctx, ab);
-        JS_FreeValue(ctx, ab);
-    }
-    JS_FreeValue(ctx, sigv);
-    return aborted;
 }
 
 static JSValue
@@ -16403,10 +16403,9 @@ static void ns_tag_owner_document(JSContext *ctx, JSValueConst doc_val,
                               JSValueConst node_val);
 
 static JSValue
-ns_window_text_ctor(JSContext *ctx, JSValueConst this_val,
-                    int argc, JSValueConst *argv)
+ns_window_character_data_new(JSContext *ctx, int argc, JSValueConst *argv,
+                             ns_node *(*node_new)(char *, guint32))
 {
-    (void)this_val;
     ns_js *js = js_from_ctx(ctx);
     if (!js) return JS_NULL;
     char *dup;
@@ -16420,7 +16419,7 @@ ns_window_text_ctor(JSContext *ctx, JSValueConst this_val,
     } else {
         dup = g_strdup("");
     }
-    ns_node *n = ns_node_new_text_len(dup, (guint32)len);
+    ns_node *n = node_new(dup, (guint32)len);
     g_hash_table_add(js->orphan_nodes, n);
     JSValue wrapper = ns_make_element(ctx, n);
     JSValue global = JS_GetGlobalObject(ctx);
@@ -16433,33 +16432,20 @@ ns_window_text_ctor(JSContext *ctx, JSValueConst this_val,
 }
 
 static JSValue
+ns_window_text_ctor(JSContext *ctx, JSValueConst this_val,
+                    int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    return ns_window_character_data_new(ctx, argc, argv, ns_node_new_text_len);
+}
+
+static JSValue
 ns_window_comment_ctor(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
 {
     (void)this_val;
-    ns_js *js = js_from_ctx(ctx);
-    if (!js) return JS_NULL;
-    char *dup;
-    size_t len = 0;
-    if (argc >= 1 && !JS_IsUndefined(argv[0])) {
-        const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
-        if (!s) return JS_EXCEPTION;
-        dup = g_memdup2(s, len + 1);
-        dup[len] = '\0';
-        JS_FreeCString(ctx, s);
-    } else {
-        dup = g_strdup("");
-    }
-    ns_node *n = ns_node_new_comment_len(dup, (guint32)len);
-    g_hash_table_add(js->orphan_nodes, n);
-    JSValue wrapper = ns_make_element(ctx, n);
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue active_doc = JS_GetPropertyStr(ctx, global, "document");
-    if (JS_IsObject(active_doc))
-        ns_tag_owner_document(ctx, active_doc, wrapper);
-    JS_FreeValue(ctx, active_doc);
-    JS_FreeValue(ctx, global);
-    return wrapper;
+    return ns_window_character_data_new(ctx, argc, argv,
+                                        ns_node_new_comment_len);
 }
 
 static JSValue
@@ -16469,20 +16455,13 @@ ns_window_image_ctor(JSContext *ctx, JSValueConst this_val,
     (void)this_val;
     if (!js_from_ctx(ctx)) return JS_NULL;
     ns_node *el = ns_node_new_element(g_strdup("img"));
-    if (argc >= 1) {
-        int32_t w = 0;
-        if (JS_ToInt32(ctx, &w, argv[0]) == 0 && w > 0) {
+    static const char *const dimensions[] = { "width", "height" };
+    for (int i = 0; i < argc && i < 2; i++) {
+        int32_t v = 0;
+        if (JS_ToInt32(ctx, &v, argv[i]) == 0 && v > 0) {
             char buf[16];
-            g_snprintf(buf, sizeof buf, "%d", w);
-            ns_element_set_attr(el, "width", buf);
-        }
-    }
-    if (argc >= 2) {
-        int32_t h = 0;
-        if (JS_ToInt32(ctx, &h, argv[1]) == 0 && h > 0) {
-            char buf[16];
-            g_snprintf(buf, sizeof buf, "%d", h);
-            ns_element_set_attr(el, "height", buf);
+            g_snprintf(buf, sizeof buf, "%d", v);
+            ns_element_set_attr(el, dimensions[i], buf);
         }
     }
     g_hash_table_add(js_from_ctx(ctx)->orphan_nodes, el);
@@ -16914,21 +16893,7 @@ ns_target_dispatch_with_event(JSContext *ctx, JSValueConst obj,
                     match = !is_dead;
                 }
                 if (match) {
-                    gboolean skip = FALSE;
-                    JSValue sigv = JS_GetPropertyStr(ctx, entry, "signal");
-                    if (JS_IsObject(sigv)) {
-                        JSValue ab = JS_GetPropertyStr(ctx, sigv, "aborted");
-                        if (JS_ToBool(ctx, ab)) skip = TRUE;
-                        JS_FreeValue(ctx, ab);
-                    }
-                    JS_FreeValue(ctx, sigv);
-                    JSValue oncev = JS_GetPropertyStr(ctx, entry, "once");
-                    gboolean once = JS_ToBool(ctx, oncev);
-                    JS_FreeValue(ctx, oncev);
-                    if (once || skip) {
-                        JS_SetPropertyStr(ctx, entry, "_dead", JS_TRUE);
-                        any_dead = TRUE;
-                    }
+                    gboolean skip = ns_listener_entry_retire(ctx, entry, &any_dead);
                     if (!skip) {
                         JSValue fn = JS_GetPropertyStr(ctx, entry, "fn");
                         if (JS_IsFunction(ctx, fn) || JS_IsObject(fn)) {
