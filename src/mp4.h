@@ -43,6 +43,7 @@ gboolean        ns_mp4_demuxer_has_init(const ns_mp4_demuxer *d);
 guint           ns_mp4_demuxer_n_tracks(const ns_mp4_demuxer *d);
 const ns_mp4_track *ns_mp4_demuxer_track(const ns_mp4_demuxer *d,
                                          guint index);
+void            ns_mp4_sample_free(gpointer sample);
 gboolean        ns_mp4_demuxer_pop_sample(ns_mp4_demuxer *d,
                                           ns_mp4_sample *out);
 void            ns_mp4_demuxer_reset_parser(ns_mp4_demuxer *d);

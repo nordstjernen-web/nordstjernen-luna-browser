@@ -168,15 +168,6 @@ set_source_rgba(cairo_t *cr, rgba c)
     cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
 }
 
-static gboolean
-overflow_kw_clips(const char *ov)
-{
-    return ov && (g_ascii_strcasecmp(ov, "hidden") == 0 ||
-                  g_ascii_strcasecmp(ov, "clip")   == 0 ||
-                  g_ascii_strcasecmp(ov, "auto")   == 0 ||
-                  g_ascii_strcasecmp(ov, "scroll") == 0);
-}
-
 #define length_or ns_css_length_or
 
 #define keyword_is ns_css_keyword_is
@@ -6671,9 +6662,9 @@ box_keeps_negative_descendants(const ns_box *b)
         s->values[NS_CSS_ROTATE] || s->values[NS_CSS_SCALE] ||
         s->values[NS_CSS_MASK_IMAGE] || s->values[NS_CSS_CLIP_PATH])
         return TRUE;
-    if (overflow_kw_clips(ns_style_keyword(s, NS_CSS_OVERFLOW_X)) ||
-        overflow_kw_clips(ns_style_keyword(s, NS_CSS_OVERFLOW_Y)) ||
-        overflow_kw_clips(ns_style_keyword(s, NS_CSS_OVERFLOW)))
+    if (ns_overflow_keyword_clips(ns_style_keyword(s, NS_CSS_OVERFLOW_X)) ||
+        ns_overflow_keyword_clips(ns_style_keyword(s, NS_CSS_OVERFLOW_Y)) ||
+        ns_overflow_keyword_clips(ns_style_keyword(s, NS_CSS_OVERFLOW)))
         return TRUE;
     return ns_css_keyword_is(s->values[NS_CSS_POSITION], "sticky");
 }
@@ -6984,7 +6975,7 @@ paint_walk(cairo_t *cr, const ns_box *b, const char *highlight)
                         (strcmp(b->dom->name, "html") == 0 ||
                          strcmp(b->dom->name, "body") == 0));
     gboolean clip_overflow = !is_root &&
-                             (overflow_kw_clips(ovx) || overflow_kw_clips(ovy));
+                             (ns_overflow_keyword_clips(ovx) || ns_overflow_keyword_clips(ovy));
     if (clip_overflow &&
         (b->kind == NS_BOX_BLOCK || b->kind == NS_BOX_TABLE_CAPTION ||
          b->kind == NS_BOX_TABLE_CELL)) {

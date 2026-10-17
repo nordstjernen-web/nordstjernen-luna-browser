@@ -189,6 +189,10 @@ gboolean    ns_element_hidden_until_found(const ns_node *el);
 gboolean    ns_details_fragment_needs_open(const ns_node *details,
                                            const ns_node *target);
 
+gboolean    ns_node_contains(const ns_node *ancestor, const ns_node *node);
+gboolean    ns_node_is_embedded_document(const ns_node *n);
+gboolean    ns_node_is_shadow_root(const ns_node *n);
+
 void        ns_doc_id_index_build(ns_node *doc);
 void        ns_doc_id_index_subtree_added(ns_node *doc, ns_node *root);
 void        ns_doc_id_index_subtree_removed(ns_node *doc, ns_node *root);

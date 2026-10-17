@@ -291,15 +291,6 @@ webm_track_free(gpointer data)
     g_free(track);
 }
 
-static void
-ready_sample_free(gpointer data)
-{
-    ns_mp4_sample *sample = data;
-    if (!sample) return;
-    if (sample->data) g_bytes_unref(sample->data);
-    g_free(sample);
-}
-
 static webm_track *
 find_track(GPtrArray *tracks, guint64 number)
 {
@@ -1172,7 +1163,7 @@ ns_webm_demuxer_free(ns_webm_demuxer *d)
     if (!d) return;
     g_byte_array_unref(d->input);
     g_ptr_array_unref(d->tracks);
-    g_queue_free_full(d->ready, ready_sample_free);
+    g_queue_free_full(d->ready, ns_mp4_sample_free);
     g_free(d);
 }
 

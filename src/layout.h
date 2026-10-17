@@ -238,6 +238,7 @@ gboolean ns_layout_frame_viewport(const ns_node *frame, double *w, double *h);
  * text, pseudo content or replaced content is labelled with its aria-label
  * or title. */
 gboolean ns_layout_reads_label_attr(const ns_node *n, const char *name);
+gboolean ns_overflow_keyword_clips(const char *overflow);
 
 /* Points the boxes at the new computed styles (styles) where old_to_new maps
  * an old style that differs from its new one only in values paint reads at

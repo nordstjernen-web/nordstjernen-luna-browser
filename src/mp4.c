@@ -289,8 +289,8 @@ demux_track_free(gpointer data)
     g_free(track);
 }
 
-static void
-ready_sample_free(gpointer data)
+void
+ns_mp4_sample_free(gpointer data)
 {
     ns_mp4_sample *sample = data;
     if (!sample) return;
@@ -1371,7 +1371,7 @@ ns_mp4_demuxer_free(ns_mp4_demuxer *d)
     g_byte_array_unref(d->input);
     g_ptr_array_unref(d->tracks);
     g_array_unref(d->pending);
-    g_queue_free_full(d->ready, ready_sample_free);
+    g_queue_free_full(d->ready, ns_mp4_sample_free);
     if (d->index) g_array_unref(d->index);
     g_free(d);
 }
