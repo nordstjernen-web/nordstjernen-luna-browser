@@ -809,6 +809,8 @@ static const char *css_find_top_level_char(const char *p, const char *end,
 static const char *css_find_function(const char *p, const char *end,
                                      const char *name);
 static const char *css_skip_comment(const char *p, const char *end);
+static const char *css_skip_quoted_step(const char *p, const char *end,
+                                        char *quote, gboolean newline_ends);
 static void css_strip_important(char *text, gboolean *important);
 static char *css_trim_dup_range(const char *start, const char *end);
 static int split_ws_limit(const char *s, char *out[], int max);
@@ -3879,28 +3881,12 @@ css_find_nth_of(const char *s, const char *end)
     int paren = 0, bracket = 0;
     const char *p = s;
     while (p < end) {
+        const char *next = css_skip_quoted_step(p, end, &quote, FALSE);
+        if (next) {
+            p = next;
+            continue;
+        }
         char c = *p;
-        if (quote) {
-            if (c == '\\' && p + 1 < end) p += 2;
-            else {
-                if (c == quote) quote = 0;
-                p++;
-            }
-            continue;
-        }
-        if (c == '/' && p + 1 < end && p[1] == '*') {
-            p = css_skip_comment(p, end);
-            continue;
-        }
-        if (c == '\\' && p + 1 < end) {
-            p += 2;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-            p++;
-            continue;
-        }
         if (c == '[') bracket++;
         else if (c == ']' && bracket > 0) bracket--;
         else if (c == '(') paren++;
@@ -18615,6 +18601,27 @@ css_skip_comment(const char *p, const char *end)
 }
 
 static const char *
+css_skip_quoted_step(const char *p, const char *end, char *quote,
+                     gboolean newline_ends)
+{
+    char c = *p;
+    if (*quote) {
+        if (c == '\\' && p + 1 < end) return p + 2;
+        if (c == *quote ||
+            (newline_ends && (c == '\n' || c == '\r' || c == '\f')))
+            *quote = 0;
+        return p + 1;
+    }
+    if (c == '/' && p + 1 < end && p[1] == '*') return css_skip_comment(p, end);
+    if (c == '\\' && p + 1 < end) return p + 2;
+    if (c == '"' || c == '\'') {
+        *quote = c;
+        return p + 1;
+    }
+    return NULL;
+}
+
+static const char *
 css_skip_ws_comments(const char *p, const char *end)
 {
     for (;;) {
@@ -18698,30 +18705,12 @@ css_skip_to_block_end(const char *p, const char *end)
     int depth = 0;
     char quote = 0;
     while (p < end) {
+        const char *next = css_skip_quoted_step(p, end, &quote, TRUE);
+        if (next) {
+            p = next;
+            continue;
+        }
         char c = *p;
-        if (quote) {
-            if (c == '\\' && p + 1 < end) {
-                p += 2;
-                continue;
-            }
-            if (c == quote) quote = 0;
-            else if (c == '\n' || c == '\r' || c == '\f') quote = 0;
-            p++;
-            continue;
-        }
-        if (c == '/' && p + 1 < end && p[1] == '*') {
-            p = css_skip_comment(p, end);
-            continue;
-        }
-        if (c == '\\' && p + 1 < end) {
-            p += 2;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-            p++;
-            continue;
-        }
         if (c == '{') depth++;
         else if (c == '}') {
             depth--;
@@ -18755,28 +18744,9 @@ css_find_function(const char *p, const char *end, const char *name)
     const char *start = p;
     char quote = 0;
     while (p < end) {
-        char c = *p;
-        if (quote) {
-            if (c == '\\' && p + 1 < end) {
-                p += 2;
-                continue;
-            }
-            if (c == quote) quote = 0;
-            else if (c == '\n' || c == '\r' || c == '\f') quote = 0;
-            p++;
-            continue;
-        }
-        if (c == '/' && p + 1 < end && p[1] == '*') {
-            p = css_skip_comment(p, end);
-            continue;
-        }
-        if (c == '\\' && p + 1 < end) {
-            p += 2;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-            p++;
+        const char *next = css_skip_quoted_step(p, end, &quote, TRUE);
+        if (next) {
+            p = next;
             continue;
         }
         if ((gsize)(end - p) > n && p[n] == '(' &&
@@ -20854,28 +20824,12 @@ css_selector_segment_has_scope_marker(const char *p, const char *end)
     char quote = 0;
     int paren = 0, bracket = 0;
     while (p < end) {
+        const char *next = css_skip_quoted_step(p, end, &quote, FALSE);
+        if (next) {
+            p = next;
+            continue;
+        }
         char c = *p;
-        if (quote) {
-            if (c == '\\' && p + 1 < end) p += 2;
-            else {
-                if (c == quote) quote = 0;
-                p++;
-            }
-            continue;
-        }
-        if (c == '/' && p + 1 < end && p[1] == '*') {
-            p = css_skip_comment(p, end);
-            continue;
-        }
-        if (c == '\\' && p + 1 < end) {
-            p += 2;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-            p++;
-            continue;
-        }
         if (c == '[') bracket++;
         else if (c == ']' && bracket > 0) bracket--;
         else if (c == '(') paren++;
@@ -20899,35 +20853,13 @@ css_replace_nesting_amp(GString *out, const char *p, const char *end,
     int bracket = 0;
     gboolean replaced = FALSE;
     while (p < end) {
+        const char *next = css_skip_quoted_step(p, end, &quote, FALSE);
+        if (next) {
+            g_string_append_len(out, p, (gssize)(next - p));
+            p = next;
+            continue;
+        }
         char c = *p;
-        if (quote) {
-            if (c == '\\' && p + 1 < end) {
-                g_string_append_len(out, p, 2);
-                p += 2;
-                continue;
-            }
-            g_string_append_c(out, c);
-            if (c == quote) quote = 0;
-            p++;
-            continue;
-        }
-        if (c == '/' && p + 1 < end && p[1] == '*') {
-            const char *q = css_skip_comment(p, end);
-            g_string_append_len(out, p, (gssize)(q - p));
-            p = q;
-            continue;
-        }
-        if (c == '\\' && p + 1 < end) {
-            g_string_append_len(out, p, 2);
-            p += 2;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-            g_string_append_c(out, c);
-            p++;
-            continue;
-        }
         if (c == '[') bracket++;
         else if (c == ']' && bracket > 0) bracket--;
         if (c == '&' && bracket == 0) {
@@ -24400,6 +24332,34 @@ inline_skip_at_rule(const char *p, const char *end)
     return stop > p ? stop : p + 1;
 }
 
+static gboolean
+inline_next_declaration(const char **cursor, const char *end,
+                        char **name, char **value)
+{
+    const char *p = *cursor;
+    for (;;) {
+        p = css_skip_ws_comments(p, end);
+        while (p < end && *p == ';') p = css_skip_ws_comments(p + 1, end);
+        if (p >= end) return FALSE;
+        if (*p == '@') {
+            p = inline_skip_at_rule(p, end);
+            continue;
+        }
+        char term = 0;
+        const char *kend = css_scan_until(p, end, ":;", &term);
+        if (term != ':') {
+            p = term == ';' ? kend + 1 : kend;
+            continue;
+        }
+        const char *vstart = css_skip_ws_comments(kend + 1, end);
+        const char *vend = css_scan_declaration_value(vstart, end, &term);
+        *name = css_trim_dup_range(p, kend);
+        *value = css_trim_dup_range(vstart, vend);
+        *cursor = term == ';' ? vend + 1 : vend;
+        return TRUE;
+    }
+}
+
 static char *
 inline_all_value_for(const char *style, const char *prefix)
 {
@@ -24407,25 +24367,8 @@ inline_all_value_for(const char *style, const char *prefix)
     const char *end = p + strlen(p);
     char *all_value = NULL;
     gboolean all_important = FALSE;
-    while (p < end) {
-        p = css_skip_ws_comments(p, end);
-        while (p < end && *p == ';') p = css_skip_ws_comments(p + 1, end);
-        if (p >= end) break;
-        if (*p == '@') {
-            p = inline_skip_at_rule(p, end);
-            continue;
-        }
-        char term = 0;
-        const char *kend = css_scan_until(p, end, ":;", &term);
-        char *name = css_trim_dup_range(p, kend);
-        if (term != ':') {
-            g_free(name);
-            p = term == ';' ? kend + 1 : kend;
-            continue;
-        }
-        p = css_skip_ws_comments(kend + 1, end);
-        const char *vend = css_scan_declaration_value(p, end, &term);
-        char *value = css_trim_dup_range(p, vend);
+    char *name, *value;
+    while (inline_next_declaration(&p, end, &name, &value)) {
         gboolean important = FALSE;
         css_strip_important(value, &important);
         g_strstrip(value);
@@ -24446,7 +24389,6 @@ inline_all_value_for(const char *style, const char *prefix)
         }
         g_free(name);
         g_free(value);
-        p = term == ';' ? vend + 1 : vend;
     }
     return all_value;
 }
@@ -25126,30 +25068,8 @@ ns_inline_style_get(const char *style, const char *prop)
     const char *end = style + strlen(style);
     char *winner = NULL;
     gboolean winner_important = FALSE;
-    while (p < end) {
-        p = css_skip_ws_comments(p, end);
-        while (p < end && *p == ';') {
-            p++;
-            p = css_skip_ws_comments(p, end);
-        }
-        if (p >= end) break;
-        if (*p == '@') {
-            p = inline_skip_at_rule(p, end);
-            continue;
-        }
-        const char *kstart = p;
-        char term = 0;
-        const char *kend = css_scan_until(p, end, ":;", &term);
-        char *key = css_trim_dup_range(kstart, kend);
-        if (term != ':') {
-            g_free(key);
-            p = term == ';' ? kend + 1 : kend;
-            continue;
-        }
-        p = css_skip_ws_comments(kend + 1, end);
-        const char *vstart = p;
-        const char *vend = css_scan_declaration_value(p, end, &term);
-        char *value = css_trim_dup_range(vstart, vend);
+    char *key, *value;
+    while (inline_next_declaration(&p, end, &key, &value)) {
         gboolean custom = prop[0] == '-' && prop[1] == '-';
         gboolean match = custom ? strcmp(key, prop) == 0
                                 : g_ascii_strcasecmp(inline_prop_alias(key),
@@ -25178,7 +25098,6 @@ ns_inline_style_get(const char *style, const char *prop)
             }
         }
         g_free(value);
-        p = term == ';' ? vend + 1 : vend;
     }
 
     if (winner) return css_inline_value_canonical(prop, winner);
@@ -25352,30 +25271,8 @@ inline_decl_list_parse(const char *style)
     GPtrArray *decls = g_ptr_array_new_with_free_func(inline_decl_free);
     const char *p = style ? style : "";
     const char *end = p + strlen(p);
-    while (p < end) {
-        p = css_skip_ws_comments(p, end);
-        while (p < end && *p == ';') {
-            p++;
-            p = css_skip_ws_comments(p, end);
-        }
-        if (p >= end) break;
-        if (*p == '@') {
-            p = inline_skip_at_rule(p, end);
-            continue;
-        }
-        const char *kstart = p;
-        char term = 0;
-        const char *kend = css_scan_until(p, end, ":;", &term);
-        char *name = css_trim_dup_range(kstart, kend);
-        if (term != ':') {
-            g_free(name);
-            p = term == ';' ? kend + 1 : kend;
-            continue;
-        }
-        p = css_skip_ws_comments(kend + 1, end);
-        const char *vstart = p;
-        const char *vend = css_scan_declaration_value(p, end, &term);
-        char *value = css_trim_dup_range(vstart, vend);
+    char *name, *value;
+    while (inline_next_declaration(&p, end, &name, &value)) {
         gboolean custom = name[0] == '-' && name[1] == '-';
         if (!custom) {
             char *lower = g_ascii_strdown(name, -1);
@@ -25396,7 +25293,6 @@ inline_decl_list_parse(const char *style)
             !ns_css_named_declaration_valid(name, value)) {
             g_free(name);
             g_free(value);
-            p = term == ';' ? vend + 1 : vend;
             continue;
         }
         value = css_inline_value_canonical(name, value);
@@ -25414,7 +25310,6 @@ inline_decl_list_parse(const char *style)
         if (inline_background_longhand_blocked(decls, name, important)) {
             g_free(name);
             g_free(value);
-            p = term == ';' ? vend + 1 : vend;
             continue;
         }
         if (strcmp(name, "background") == 0)
@@ -25426,7 +25321,6 @@ inline_decl_list_parse(const char *style)
         } else {
             inline_decl_store(decls, name, value, important);
         }
-        p = term == ';' ? vend + 1 : vend;
     }
     return decls;
 }
@@ -25934,43 +25828,21 @@ inline_shorthand_follows(const char *style, const char *prop, int prop_id)
     const char *p = style;
     const char *end = p + strlen(p);
     gboolean seen_prop = FALSE;
-    while (p < end) {
-        p = css_skip_ws_comments(p, end);
-        while (p < end && *p == ';') {
-            p++;
-            p = css_skip_ws_comments(p, end);
-        }
-        if (p >= end) break;
-        if (*p == '@') {
-            p = inline_skip_at_rule(p, end);
-            continue;
-        }
-        char term = 0;
-        const char *kend = css_scan_until(p, end, ":;", &term);
-        char *key = css_trim_dup_range(p, kend);
-        if (term != ':') {
-            g_free(key);
-            p = term == ';' ? kend + 1 : kend;
-            continue;
-        }
-        p = css_skip_ws_comments(kend + 1, end);
-        const char *vend = css_scan_declaration_value(p, end, &term);
+    char *key, *value;
+    while (inline_next_declaration(&p, end, &key, &value)) {
+        gboolean expands = FALSE;
         if (g_ascii_strcasecmp(key, prop) == 0) {
             seen_prop = TRUE;
         } else if (seen_prop && ns_css_prop_id(key) < 0) {
-            char *value = css_trim_dup_range(p, vend);
             gboolean important = FALSE;
             char *expanded = inline_expanded_value(key, value, prop_id,
                                                    &important);
-            g_free(value);
-            if (expanded) {
-                g_free(expanded);
-                g_free(key);
-                return TRUE;
-            }
+            expands = expanded != NULL;
+            g_free(expanded);
         }
         g_free(key);
-        p = term == ';' ? vend + 1 : vend;
+        g_free(value);
+        if (expands) return TRUE;
     }
     return FALSE;
 }
@@ -26141,31 +26013,8 @@ ns_inline_style_set(const char *style, const char *prop, const char *raw_value)
     gboolean found = FALSE;
     const char *p = style ? style : "";
     const char *end = p + strlen(p);
-    while (p < end) {
-        p = css_skip_ws_comments(p, end);
-        while (p < end && *p == ';') {
-            p++;
-            p = css_skip_ws_comments(p, end);
-        }
-        if (p >= end) break;
-        if (*p == '@') {
-            p = inline_skip_at_rule(p, end);
-            continue;
-        }
-        const char *kstart = p;
-        char term = 0;
-        const char *kend = css_scan_until(p, end, ":;", &term);
-        char *key = css_trim_dup_range(kstart, kend);
-        if (term != ':') {
-            g_free(key);
-            p = term == ';' ? kend + 1 : kend;
-            continue;
-        }
-        p = css_skip_ws_comments(kend + 1, end);
-        const char *vstart = p;
-        const char *vend = css_scan_declaration_value(p, end, &term);
-        char *old_value = css_trim_dup_range(vstart, vend);
-        p = term == ';' ? vend + 1 : vend;
+    char *key, *old_value;
+    while (inline_next_declaration(&p, end, &key, &old_value)) {
         gboolean match = custom ? strcmp(key, prop) == 0
                                 : g_ascii_strcasecmp(inline_prop_alias(key),
                                                      inline_prop_alias(prop)) == 0;
