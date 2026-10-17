@@ -22,6 +22,7 @@
 #define length_or ns_css_length_or
 
 static void hit_enter_box(const ns_box *b, double *x, double *y);
+static gboolean hit_enter_painted(const ns_box *b, double *x, double *y);
 
 static double
 length_resolve(const ns_css_value *v, double basis, double fallback)
@@ -6640,6 +6641,24 @@ box_hit_uses_border_bounds(const ns_box *box)
 }
 
 static gboolean
+box_hit_self_contains(const ns_box *root, double x, double y)
+{
+    gboolean block_edges = box_hit_uses_border_bounds(root);
+    double x0 = root->x + (block_edges ? root->margin.left : 0);
+    double y0 = root->y + (block_edges ? root->margin.top : 0);
+    double x1 = x0 + root->content_width
+              + (block_edges ? root->padding.left + root->padding.right +
+                               root->border.left + root->border.right : 0);
+    double y1 = y0 + root->content_height
+              + (block_edges ? root->padding.top + root->padding.bottom +
+                               root->border.top + root->border.bottom : 0);
+    return x >= x0 &&
+        (root->kind == NS_BOX_TABLE_CELL ? x < x1 : x <= x1) &&
+        y >= y0 &&
+        (root->kind == NS_BOX_TABLE_CELL ? y < y1 : y <= y1);
+}
+
+static gboolean
 hit_box_is_positioned(const ns_box *b)
 {
     if (!b || !b->style) return FALSE;
@@ -8213,6 +8232,25 @@ table_collapse_borders(ns_box *box, guint max_cols)
 }
 
 static void
+block_apply_auto_inline_margins(ns_box *box, double available)
+{
+    const ns_style *st = box->style;
+    gboolean ml_auto = length_is_auto(st ? st->values[NS_CSS_MARGIN_LEFT] : NULL);
+    gboolean mr_auto = length_is_auto(st ? st->values[NS_CSS_MARGIN_RIGHT] : NULL);
+    if (available < 0) available = 0;
+    if (ml_auto && mr_auto) {
+        box->margin.left  = available / 2.0;
+        box->margin.right = available / 2.0;
+    } else if (ml_auto) {
+        box->margin.left  = available - box->margin.right;
+        if (box->margin.left < 0) box->margin.left = 0;
+    } else if (mr_auto) {
+        box->margin.right = available - box->margin.left;
+        if (box->margin.right < 0) box->margin.right = 0;
+    }
+}
+
+static void
 layout_table(ns_box *box, double parent_content_width, const ns_style *inherited_style)
 {
     edges_from_style(box->style, parent_content_width,
@@ -8467,26 +8505,9 @@ layout_table(ns_box *box, double parent_content_width, const ns_style *inherited
         }
     }
 
-    {
-        gboolean ml_auto = length_is_auto(box->style ? box->style->values[NS_CSS_MARGIN_LEFT]  : NULL);
-        gboolean mr_auto = length_is_auto(box->style ? box->style->values[NS_CSS_MARGIN_RIGHT] : NULL);
-        if (ml_auto || mr_auto) {
-            double outer = cw + box->padding.left + box->padding.right +
-                           box->border.left + box->border.right;
-            double available = parent_content_width - outer;
-            if (available < 0) available = 0;
-            if (ml_auto && mr_auto) {
-                box->margin.left  = available / 2.0;
-                box->margin.right = available / 2.0;
-            } else if (ml_auto) {
-                box->margin.left  = available - box->margin.right;
-                if (box->margin.left < 0) box->margin.left = 0;
-            } else if (mr_auto) {
-                box->margin.right = available - box->margin.left;
-                if (box->margin.right < 0) box->margin.right = 0;
-            }
-        }
-    }
+    block_apply_auto_inline_margins(box, parent_content_width -
+        (cw + box->padding.left + box->padding.right +
+         box->border.left + box->border.right));
 
     double inner_x = box->x + box->margin.left + box->border.left + box->padding.left;
     double inner_y = box->y + box->margin.top  + box->border.top  + box->padding.top;
@@ -11162,6 +11183,20 @@ grid_track_fixed_px(const ns_css_track *t, double avail)
     return 0;
 }
 
+static void
+grid_item_outer_widths(ns_box *c, const ns_style *inherited, double *min_w,
+                       double *natural_w)
+{
+    *natural_w = measure_natural_width(c, inherited);
+    *min_w = measure_min_width(c, inherited);
+    if (!c->style) return;
+    ns_edges m = {0}, pd = {0}, bd = {0};
+    edges_from_style(c->style, *min_w, &m, &pd, &bd);
+    double extra = m.left + m.right + pd.left + pd.right + bd.left + bd.right;
+    *min_w += extra;
+    *natural_w += extra;
+}
+
 static gboolean
 grid_span_accommodate(const ns_css_tracks *cols, int c0, int span,
                       const double *gap_after, double avail,
@@ -11664,17 +11699,8 @@ layout_grid(ns_box *box, double cw,
                 ? g_array_index(placed_cols, int, k) : -1;
             if (item_col != t ||
                 g_array_index(col_spans, int, k) != 1) continue;
-            ns_box *c = items->pdata[k];
-            double nw = measure_natural_width(c, child_inherited);
-            double mw = measure_min_width(c, child_inherited);
-            if (c->style) {
-                ns_edges m = {0}, pd = {0}, bd = {0};
-                edges_from_style(c->style, mw, &m, &pd, &bd);
-                double extra = m.left + m.right + pd.left + pd.right +
-                               bd.left + bd.right;
-                mw += extra;
-                nw += extra;
-            }
+            double nw, mw;
+            grid_item_outer_widths(items->pdata[k], child_inherited, &mw, &nw);
             if (nw > avail) nw = avail;
             if (nw > col_content[t]) col_content[t] = nw;
             if (mw > col_min[t]) col_min[t] = mw;
@@ -11687,17 +11713,8 @@ layout_grid(ns_box *box, double cw,
             if (c0 < 0 || g_array_index(col_spans, int, k) != span ||
                 c0 + span > n_cols)
                 continue;
-            ns_box *c = items->pdata[k];
-            double nw = measure_natural_width(c, child_inherited);
-            double mw = measure_min_width(c, child_inherited);
-            if (c->style) {
-                ns_edges m = {0}, pd = {0}, bd = {0};
-                edges_from_style(c->style, mw, &m, &pd, &bd);
-                double extra = m.left + m.right + pd.left + pd.right +
-                               bd.left + bd.right;
-                mw += extra;
-                nw += extra;
-            }
+            double nw, mw;
+            grid_item_outer_widths(items->pdata[k], child_inherited, &mw, &nw);
             if (nw > avail) nw = avail;
             if (grid_span_accommodate(cols, c0, span, col_gap_after, avail,
                                       mw, nw, col_min, col_content))
@@ -12669,22 +12686,9 @@ layout_block(ns_box *box, double parent_content_width, const ns_style *inherited
     }
     box->content_width = cw;
 
-    if (explicit_width && !style_is_absolute_or_fixed(box->style)) {
-        gboolean ml_auto = length_is_auto(box->style ? box->style->values[NS_CSS_MARGIN_LEFT]  : NULL);
-        gboolean mr_auto = length_is_auto(box->style ? box->style->values[NS_CSS_MARGIN_RIGHT] : NULL);
-        double available = parent_content_width - cw - horiz_extras;
-        if (available < 0) available = 0;
-        if (ml_auto && mr_auto) {
-            box->margin.left  = available / 2.0;
-            box->margin.right = available / 2.0;
-        } else if (ml_auto) {
-            box->margin.left  = available - box->margin.right;
-            if (box->margin.left < 0) box->margin.left = 0;
-        } else if (mr_auto) {
-            box->margin.right = available - box->margin.left;
-            if (box->margin.right < 0) box->margin.right = 0;
-        }
-    }
+    if (explicit_width && !style_is_absolute_or_fixed(box->style))
+        block_apply_auto_inline_margins(box,
+                                        parent_content_width - cw - horiz_extras);
 
     double inner_x = box->x + box->margin.left + box->border.left + box->padding.left;
     double inner_y = box->y + box->margin.top  + box->border.top  + box->padding.top;
@@ -15333,11 +15337,7 @@ ns_box *
 ns_box_hit_scrollable(ns_box *root, double x, double y)
 {
     if (!root) return NULL;
-    hit_enter_box(root, &x, &y);
-    if (!box_hit_untransform_point(root, &x, &y)) return NULL;
-    if (root->paint_bottom > root->paint_top &&
-        (y < root->paint_top - 1.0 || y > root->paint_bottom + 1.0))
-        return NULL;
+    if (!hit_enter_painted(root, &x, &y)) return NULL;
     gboolean clipped = box_clips_children(root);
     if (clipped && !box_padding_contains(root, x, y))
         return NULL;
@@ -15562,11 +15562,7 @@ ns_box *
 ns_box_hit_scrollbar(ns_box *root, double x, double y, double *lx, double *ly)
 {
     if (!root) return NULL;
-    hit_enter_box(root, &x, &y);
-    if (!box_hit_untransform_point(root, &x, &y)) return NULL;
-    if (root->paint_bottom > root->paint_top &&
-        (y < root->paint_top - 1.0 || y > root->paint_bottom + 1.0))
-        return NULL;
+    if (!hit_enter_painted(root, &x, &y)) return NULL;
     gboolean clipped = box_clips_children(root);
     if (clipped && !box_padding_contains(root, x, y))
         return NULL;
@@ -15771,6 +15767,15 @@ hit_enter_box(const ns_box *b, double *x, double *y)
 }
 
 static gboolean
+hit_enter_painted(const ns_box *b, double *x, double *y)
+{
+    hit_enter_box(b, x, y);
+    if (!box_hit_untransform_point(b, x, y)) return FALSE;
+    return !(b->paint_bottom > b->paint_top &&
+             (*y < b->paint_top - 1.0 || *y > b->paint_bottom + 1.0));
+}
+
+static gboolean
 box_defers_hit_layer(const ns_box *b, int *out_z)
 {
     if (!b || !b->style) return FALSE;
@@ -15873,11 +15878,7 @@ box_hit_test_tree(const ns_box *root, double x, double y)
         g_array_append_val(g_hit_deferred, d);
         return NULL;
     }
-    hit_enter_box(root, &x, &y);
-    if (!box_hit_untransform_point(root, &x, &y)) return NULL;
-    if (root->paint_bottom > root->paint_top &&
-        (y < root->paint_top - 1.0 || y > root->paint_bottom + 1.0))
-        return NULL;
+    if (!hit_enter_painted(root, &x, &y)) return NULL;
     gboolean clipped = box_clips_children(root);
     if (clipped && !box_padding_contains(root, x, y))
         goto self_test;
@@ -15939,21 +15940,9 @@ box_hit_test_tree(const ns_box *root, double x, double y)
     }
     if (best) return best;
 self_test: ;
-    gboolean block_edges = box_hit_uses_border_bounds(root);
-    double x0 = root->x + (block_edges ? root->margin.left : 0);
-    double y0 = root->y + (block_edges ? root->margin.top : 0);
-    double x1 = x0 + root->content_width
-              + (block_edges ? root->padding.left + root->padding.right +
-                               root->border.left + root->border.right : 0);
-    double y1 = y0 + root->content_height
-              + (block_edges ? root->padding.top + root->padding.bottom +
-                               root->border.top + root->border.bottom : 0);
-    gboolean inside_x = x >= x0 &&
-        (root->kind == NS_BOX_TABLE_CELL ? x < x1 : x <= x1);
-    gboolean inside_y = y >= y0 &&
-        (root->kind == NS_BOX_TABLE_CELL ? y < y1 : y <= y1);
     if (!box_blocks_hit_testing(root) && !box_is_table_hit_internal(root) &&
-        !box_svg_yields_hit(root) && inside_x && inside_y && root->dom) {
+        !box_svg_yields_hit(root) && box_hit_self_contains(root, x, y) &&
+        root->dom) {
         g_hit_local_x = x;
         g_hit_local_y = y;
         return root;
@@ -16039,11 +16028,7 @@ static void
 box_hit_stack_walk(const ns_box *root, double x, double y, GArray *hits)
 {
     if (!root || !hits) return;
-    hit_enter_box(root, &x, &y);
-    if (!box_hit_untransform_point(root, &x, &y)) return;
-    if (root->paint_bottom > root->paint_top &&
-        (y < root->paint_top - 1.0 || y > root->paint_bottom + 1.0))
-        return;
+    if (!hit_enter_painted(root, &x, &y)) return;
 
     if (ns_paint_3d_registered(root)) {
         const ns_box *picked = ns_paint_3d_pick(root, x, y);
@@ -16052,21 +16037,8 @@ box_hit_stack_walk(const ns_box *root, double x, double y, GArray *hits)
         return;
     }
 
-    gboolean block_edges = box_hit_uses_border_bounds(root);
-    double x0 = root->x + (block_edges ? root->margin.left : 0);
-    double y0 = root->y + (block_edges ? root->margin.top : 0);
-    double x1 = x0 + root->content_width
-              + (block_edges ? root->padding.left + root->padding.right +
-                               root->border.left + root->border.right : 0);
-    double y1 = y0 + root->content_height
-              + (block_edges ? root->padding.top + root->padding.bottom +
-                               root->border.top + root->border.bottom : 0);
-    gboolean inside_x = x >= x0 &&
-        (root->kind == NS_BOX_TABLE_CELL ? x < x1 : x <= x1);
-    gboolean inside_y = y >= y0 &&
-        (root->kind == NS_BOX_TABLE_CELL ? y < y1 : y <= y1);
-    if (!box_blocks_hit_testing(root) && !box_is_table_hit_internal(root) && root->dom &&
-        inside_x && inside_y)
+    if (!box_blocks_hit_testing(root) && !box_is_table_hit_internal(root) &&
+        root->dom && box_hit_self_contains(root, x, y))
         box_hit_stack_add(hits, root);
 
     if (box_clips_children(root) && !box_padding_contains(root, x, y))
@@ -16190,11 +16162,7 @@ static const ns_node *
 ns_box_hit_inline_dom(const ns_box *root, double x, double y)
 {
     if (!root) return NULL;
-    hit_enter_box(root, &x, &y);
-    if (!box_hit_untransform_point(root, &x, &y)) return NULL;
-    if (root->paint_bottom > root->paint_top &&
-        (y < root->paint_top - 1.0 || y > root->paint_bottom + 1.0))
-        return NULL;
+    if (!hit_enter_painted(root, &x, &y)) return NULL;
     if (root->inline_atomics)
         for (guint i = 0; i < root->inline_atomics->len; i++) {
             const ns_inline_atomic *atomic =
