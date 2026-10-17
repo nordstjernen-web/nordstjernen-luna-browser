@@ -1896,7 +1896,7 @@ svg_render_element(svg_ctx *ctx, const ns_node *n, const svg_state *parent)
     svg_state_clear(&st);
 }
 
-gboolean
+static gboolean
 ns_svg_node_is_root(const ns_node *n)
 {
     return n && n->kind == NS_NODE_ELEMENT && n->name &&

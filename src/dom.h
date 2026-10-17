@@ -184,8 +184,6 @@ gboolean    ns_details_fragment_needs_open(const ns_node *details,
                                            const ns_node *target);
 
 void        ns_doc_id_index_build(ns_node *doc);
-void        ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node);
-void        ns_doc_id_index_unregister(ns_node *doc, const char *id, const ns_node *node);
 void        ns_doc_id_index_subtree_added(ns_node *doc, ns_node *root);
 void        ns_doc_id_index_subtree_removed(ns_node *doc, ns_node *root);
 

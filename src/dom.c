@@ -12,6 +12,10 @@
 #include <math.h>
 #include <string.h>
 
+static void ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node);
+static void ns_doc_id_index_unregister(ns_node *doc, const char *id,
+                                       const ns_node *node);
+
 static void ns_class_set_clear(ns_node *el);
 static void ns_doc_id_index_attr_write(ns_node *el, const char *name,
                                        const char *value);
@@ -1744,7 +1748,7 @@ ns_doc_id_index_count(ns_node *doc, const char *id, int delta)
                             GUINT_TO_POINTER(cur - 1));
 }
 
-void
+static void
 ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node)
 {
     if (!doc || !doc->id_index || !id || !*id || !node) return;
@@ -1753,7 +1757,7 @@ ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node)
     g_hash_table_insert(doc->id_index, g_strdup(id), node);
 }
 
-void
+static void
 ns_doc_id_index_unregister(ns_node *doc, const char *id, const ns_node *node)
 {
     if (!doc || !doc->id_index || !id || !*id) return;
@@ -2792,6 +2796,7 @@ ns_node_collect_all_text_len(const ns_node *root, size_t *out_len)
 }
 
 #include "html.h"
+
 #define is_void_tag ns_html_is_void
 
 static gboolean

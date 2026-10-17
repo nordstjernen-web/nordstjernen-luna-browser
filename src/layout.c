@@ -1866,7 +1866,7 @@ ns_control_css_extra_w(const ns_node *dom, const ns_style *s)
     return p.left + p.right + b.left + b.right;
 }
 
-double
+static double
 ns_control_css_extra_h(const ns_node *dom, const ns_style *s)
 {
     if (!s || control_is_border_box(dom, s)) return 0;
@@ -15541,7 +15541,7 @@ ns_box_match_ordinal(const ns_box *root, const char *needle,
     return 0;
 }
 
-const ns_node *
+static const ns_node *
 ns_box_hit_form_dom(const ns_box *root, double x, double y)
 {
     return ns_form_hit_walk(root, x, y, NULL);
@@ -15857,7 +15857,7 @@ sticky_inset(const ns_css_value *v, double basis, gboolean *set, double *out)
     *set = isfinite(*out);
 }
 
-void
+static void
 ns_box_sticky_offset_in(const ns_box *b, double sp_x0, double sp_y0,
                         double sp_x1, double sp_y1,
                         double *out_dx, double *out_dy)
@@ -16336,7 +16336,7 @@ ns_box_hit_dom_stack(const ns_box *root, double x, double y)
     return hits;
 }
 
-const ns_link_range *
+static const ns_link_range *
 ns_box_hit_link_range(const ns_box *root, double x, double y)
 {
     if (!root) return NULL;
@@ -16405,7 +16405,7 @@ ns_box_hit_link(const ns_box *root, double x, double y)
     return live && *live ? live : r->href;
 }
 
-const ns_node *
+static const ns_node *
 ns_box_hit_inline_dom(const ns_box *root, double x, double y)
 {
     if (!root) return NULL;

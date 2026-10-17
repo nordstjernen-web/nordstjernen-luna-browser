@@ -2409,7 +2409,7 @@ ns_paint_inline_strut_line(const ns_box *b, const ns_style *s,
     return TRUE;
 }
 
-double
+static double
 ns_paint_inline_y_offset_for_layout(const ns_box *b, NsPangoLayout *layout)
 {
     if (!b || !layout) return 0;
@@ -3615,7 +3615,7 @@ paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
     g_object_unref(layout);
 }
 
-NsPangoLayout *
+static NsPangoLayout *
 ns_paint_build_inline_layout(cairo_t *cr, const ns_box *b)
 {
     (void)cr;

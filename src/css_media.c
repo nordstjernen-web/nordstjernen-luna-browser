@@ -85,13 +85,13 @@ mq_vh(void)
     return ns_css_viewport_h();
 }
 
-double
+static double
 ns_css_media_viewport_current_w(void)
 {
     return mq_vw();
 }
 
-double
+static double
 ns_css_media_viewport_current_h(void)
 {
     return mq_vh();

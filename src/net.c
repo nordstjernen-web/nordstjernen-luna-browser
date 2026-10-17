@@ -43,6 +43,11 @@
 #include <sys/sysctl.h>
 #endif
 
+static void ns_net_fetch_async(const char *url, const char *top_url,
+                               GCancellable *cancellable,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data);
+
 static char *g_cookie_dir;
 
 typedef struct {
@@ -1217,7 +1222,7 @@ ns_net_hsts_should_upgrade(const char *host)
     return hit;
 }
 
-char *
+static char *
 ns_net_hsts_upgrade(const char *url)
 {
     if (!url) return NULL;
@@ -1330,7 +1335,7 @@ ns_net_empty_dir(const char *dir)
     g_dir_close(d);
 }
 
-void
+static void
 ns_net_cookies_clear(void)
 {
     g_mutex_lock(&g_cookie_partitions_lock);
@@ -1350,7 +1355,7 @@ ns_net_cookies_clear(void)
     ns_net_empty_dir(ns_net_cookie_dir());
 }
 
-void
+static void
 ns_net_site_storage_clear(void)
 {
     char *base = g_build_filename(g_get_user_data_dir(), NS_APP_DIR_NAME, NULL);
@@ -6416,7 +6421,7 @@ ns_net_complete_blob(const char *url, GCancellable *cancellable,
     return TRUE;
 }
 
-void
+static void
 ns_net_fetch_async(const char        *url,
                    const char        *top_url,
                    GCancellable      *cancellable,
@@ -6646,7 +6651,7 @@ ns_form_set_submission_charset(const char *charset)
     g_form_submission_encoding = ns_encoding_output(g_form_submission_encoding);
 }
 
-void
+static void
 ns_form_urlencoded_append(GString *out, const char *s)
 {
     if (!out || !s) return;

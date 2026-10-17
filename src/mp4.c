@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+static double ns_mp4_time_to_seconds(gint64 time, guint32 timescale);
+
 #define NS_MP4_FOURCC(a, b, c, d)                                     \
     (((guint32)(guint8)(a) << 24) | ((guint32)(guint8)(b) << 16) |    \
      ((guint32)(guint8)(c) << 8) | (guint32)(guint8)(d))
@@ -1528,7 +1530,7 @@ ns_mp4_demuxer_index_extract(ns_mp4_demuxer *d, guint64 position,
     return NS_MP4_INDEX_END;
 }
 
-double
+static double
 ns_mp4_time_to_seconds(gint64 time, guint32 timescale)
 {
     return timescale ? (double)time / (double)timescale : 0.0;

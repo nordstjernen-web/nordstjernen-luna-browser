@@ -348,7 +348,7 @@ media_notify_playing(ns_media_player *p)
     media_queue_settle(p, NULL, NULL);
 }
 
-char *
+static char *
 ns_media_resolve_src(JSContext *ctx, ns_node *node)
 {
     const char *src = ns_media_select_source(node);

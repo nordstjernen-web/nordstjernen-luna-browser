@@ -60,6 +60,10 @@
 #include "js_internal.h"
 #include "font.h"
 
+static void ns_js_dispatch_hashchange(ns_js *js, const char *old_url,
+                                      const char *new_url);
+static void ns_js_refresh_top_layer(ns_js *js);
+
 ns_js_navigation_timing
 ns_js_navigation_timing_from_response(const ns_response *response)
 {
@@ -573,7 +577,7 @@ ns_js_interrupt_rt_cb(JSRuntime *rt, void *opaque)
     return ns_js_interrupt(opaque);
 }
 
-gboolean
+static gboolean
 ns_js_in_pump(const ns_js *js)
 {
     return js && js->in_pump;
@@ -39809,7 +39813,7 @@ ns_dialog_set_modal(ns_js *js, ns_node *dialog, gboolean modal)
     ns_js_note_layout_unscoped(js, G_STRFUNC);
 }
 
-void
+static void
 ns_js_refresh_top_layer(ns_js *js)
 {
     if (!js) return;
@@ -40293,7 +40297,7 @@ ns_js_process_close_request(ns_js *js)
     return TRUE;
 }
 
-void
+static void
 ns_js_dialog_close(ns_js *js, ns_node *dialog, const char *return_value)
 {
     if (!js || !js->ctx || !dialog) return;
@@ -41594,7 +41598,7 @@ ns_js_urls_share_http_authority(const char *a, const char *b)
            (b[n] == '\0' || b[n] == '/' || b[n] == '?' || b[n] == '#');
 }
 
-gboolean
+static gboolean
 ns_js_urls_same_origin(const char *a, const char *b)
 {
     if (!a || !b) return FALSE;
@@ -58021,7 +58025,7 @@ ns_js_storage_partition(const ns_js *js)
     return js ? js->partition_key : NULL;
 }
 
-void
+static void
 ns_js_dispatch_hashchange(ns_js *js, const char *old_url, const char *new_url)
 {
     if (!js || !js->ctx) return;

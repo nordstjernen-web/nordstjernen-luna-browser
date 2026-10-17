@@ -247,7 +247,7 @@ ns_image_supports_mime(const char *mime)
 }
 
 
-ns_texture *
+static ns_texture *
 ns_image_decode_bytes(const guchar *data, gsize len, int *out_w, int *out_h)
 {
     if (!data || len == 0) return NULL;
@@ -633,7 +633,7 @@ on_image_fetched(GObject *src, GAsyncResult *result, gpointer user_data)
     ns_image_fire_pending(pending);
 }
 
-gboolean
+static gboolean
 ns_image_should_retry(const ns_image *img, gint64 now_us)
 {
     if (!img || !img->failed || img->attempts >= 3) return FALSE;

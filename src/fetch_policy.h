@@ -50,7 +50,6 @@ gboolean         ns_fetch_verdict_blocks(ns_fetch_verdict verdict);
 char            *ns_fetch_verdict_message(ns_fetch_verdict verdict,
                                           ns_fetch_destination dest,
                                           const char *url);
-const char      *ns_fetch_destination_name(ns_fetch_destination dest);
 
 G_END_DECLS
 

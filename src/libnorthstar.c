@@ -40,6 +40,8 @@
 #include "camera.h"
 #include "trace.h"
 
+static int ns_browser_animating(ns_browser *browser);
+
 #define NS_IMAGE_RELAYOUT_BATCH 8
 
 struct ns_browser {
@@ -2212,7 +2214,7 @@ ns_browser_next_wake_us(ns_browser *browser)
     return browser->refresh_due_us;
 }
 
-int
+static int
 ns_browser_animating(ns_browser *browser)
 {
     if (!browser) return 0;
@@ -3839,7 +3841,7 @@ ns_browser_key_full(ns_browser *browser, int kind, const char *key,
     return nav;
 }
 
-int
+static int
 ns_browser_focused_editable(ns_browser *browser)
 {
     if (!browser || !browser->js)

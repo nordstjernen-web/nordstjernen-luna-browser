@@ -11,6 +11,8 @@
 #include <lexbor/html/html.h>
 #include <lexbor/html/interfaces/template_element.h>
 
+static void ns_html_parser_free(ns_html_parser *parser);
+
 struct ns_html_parser {
     lxb_html_document_t *document;
     GString *source;
@@ -684,7 +686,7 @@ ns_html_assign_script_positions(ns_node *root, const char *input, size_t len)
     g_array_free(lines, TRUE);
 }
 
-ns_node *
+static ns_node *
 ns_html_parser_finish(ns_html_parser *parser)
 {
     if (!parser || parser->finished || parser->failed) return NULL;
@@ -709,7 +711,7 @@ ns_html_parser_finish(ns_html_parser *parser)
     return root;
 }
 
-ns_html_parser *
+static ns_html_parser *
 ns_html_parser_new(gboolean scripting)
 {
     ns_html_parser *parser = g_new0(ns_html_parser, 1);
@@ -731,7 +733,7 @@ ns_html_parser_new(gboolean scripting)
     return parser;
 }
 
-gboolean
+static gboolean
 ns_html_parser_write(ns_html_parser *parser, const char *input, gsize len)
 {
     if (!parser || parser->finished || parser->failed || (!input && len))
@@ -747,7 +749,7 @@ ns_html_parser_write(ns_html_parser *parser, const char *input, gsize len)
     return TRUE;
 }
 
-void
+static void
 ns_html_parser_free(ns_html_parser *parser)
 {
     if (!parser) return;
