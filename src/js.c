@@ -2728,6 +2728,20 @@ ns_throw_selector_syntax_error(JSContext *ctx, const char *sel)
     return ret;
 }
 
+static GPtrArray *
+ns_selector_list_take(JSContext *ctx, char *sel)
+{
+    gboolean valid = FALSE;
+    GPtrArray *sels = ns_css_parse_selector_list_checked(sel, &valid);
+    if (!valid) {
+        g_ptr_array_free(sels, TRUE);
+        sels = NULL;
+        ns_throw_selector_syntax_error(ctx, sel);
+    }
+    g_free(sel);
+    return sels;
+}
+
 static gboolean
 ns_storage_prop_shadowed_by_proto(JSContext *ctx, JSValueConst obj,
                                   JSAtom prop)
@@ -11203,6 +11217,25 @@ ns_port_bridge_id(JSContext *ctx, JSValueConst port)
 }
 
 static JSValue
+ns_transfer_ports(JSContext *ctx, JSValueConst transfer)
+{
+    JSValue ports = JS_NewArray(ctx);
+    if (JS_IsArray(transfer)) {
+        uint32_t len = ns_js_array_length(ctx, transfer);
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < len; i++) {
+            JSValue item = JS_GetPropertyUint32(ctx, transfer, i);
+            JSValue is_port = JS_GetPropertyStr(ctx, item, "_is_port");
+            if (JS_ToBool(ctx, is_port))
+                JS_SetPropertyUint32(ctx, ports, k++, JS_DupValue(ctx, item));
+            JS_FreeValue(ctx, is_port);
+            JS_FreeValue(ctx, item);
+        }
+    }
+    return ports;
+}
+
+static JSValue
 ns_port_post_message(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 {
@@ -11228,19 +11261,7 @@ ns_port_post_message(JSContext *ctx, JSValueConst this_val,
         JS_FreeValue(ctx, transfer);
         return JS_EXCEPTION;
     }
-    JSValue ports = JS_NewArray(ctx);
-    if (JS_IsArray(transfer)) {
-        uint32_t len = ns_js_array_length(ctx, transfer);
-        uint32_t k = 0;
-        for (uint32_t i = 0; i < len; i++) {
-            JSValue item = JS_GetPropertyUint32(ctx, transfer, i);
-            JSValue is_port = JS_GetPropertyStr(ctx, item, "_is_port");
-            if (JS_ToBool(ctx, is_port))
-                JS_SetPropertyUint32(ctx, ports, k++, JS_DupValue(ctx, item));
-            JS_FreeValue(ctx, is_port);
-            JS_FreeValue(ctx, item);
-        }
-    }
+    JSValue ports = ns_transfer_ports(ctx, transfer);
     JS_FreeValue(ctx, transfer);
 
     JSValue pair = JS_GetPropertyStr(ctx, this_val, "_pair");
@@ -11766,19 +11787,7 @@ ns_post_message_to_target(JSContext *ctx, JSValue target,
                       JS_NewString(ctx, src_origin ? src_origin : ""));
     JS_SetPropertyStr(ctx, ev, "lastEventId", JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, ev, "source", source);
-    JSValue ports = JS_NewArray(ctx);
-    if (JS_IsArray(transfer)) {
-        uint32_t len = ns_js_array_length(ctx, transfer);
-        uint32_t k = 0;
-        for (uint32_t i = 0; i < len; i++) {
-            JSValue item = JS_GetPropertyUint32(ctx, transfer, i);
-            JSValue is_port = JS_GetPropertyStr(ctx, item, "_is_port");
-            if (JS_ToBool(ctx, is_port))
-                JS_SetPropertyUint32(ctx, ports, k++, JS_DupValue(ctx, item));
-            JS_FreeValue(ctx, is_port);
-            JS_FreeValue(ctx, item);
-        }
-    }
+    JSValue ports = ns_transfer_ports(ctx, transfer);
     JS_SetPropertyStr(ctx, ev, "ports", ports);
     JS_FreeValue(ctx, transfer);
 
@@ -31600,15 +31609,8 @@ ns_query_selector_impl(JSContext *ctx, const ns_node *root,
         g_free(sel);
         return fast;
     }
-    gboolean valid = FALSE;
-    GPtrArray *sels = ns_css_parse_selector_list_checked(sel, &valid);
-    if (!valid) {
-        g_ptr_array_free(sels, TRUE);
-        JSValue exc = ns_throw_selector_syntax_error(ctx, sel);
-        g_free(sel);
-        return exc;
-    }
-    g_free(sel);
+    GPtrArray *sels = ns_selector_list_take(ctx, sel);
+    if (!sels) return JS_EXCEPTION;
     const ns_node *prev_scope = ns_css_set_match_scope(root);
     ns_js *js = js_from_ctx(ctx);
     char *cur_frag = ns_element_target_fragment(ctx, root);
@@ -31775,15 +31777,8 @@ ns_element_matches(JSContext *ctx, JSValueConst this_val,
         g_free(sel);
         return m ? JS_TRUE : JS_FALSE;
     }
-    gboolean valid = FALSE;
-    GPtrArray *sels = ns_css_parse_selector_list_checked(sel, &valid);
-    if (!valid) {
-        g_ptr_array_free(sels, TRUE);
-        JSValue exc = ns_throw_selector_syntax_error(ctx, sel);
-        g_free(sel);
-        return exc;
-    }
-    g_free(sel);
+    GPtrArray *sels = ns_selector_list_take(ctx, sel);
+    if (!sels) return JS_EXCEPTION;
     const ns_node *prev_scope = ns_css_set_match_scope(el);
     ns_js *js = js_from_ctx(ctx);
     char *cur_frag = ns_element_target_fragment(ctx, el);
@@ -31849,15 +31844,8 @@ ns_element_closest(JSContext *ctx, JSValueConst this_val,
         g_free(sel);
         return JS_NULL;
     }
-    gboolean valid = FALSE;
-    GPtrArray *sels = ns_css_parse_selector_list_checked(sel, &valid);
-    if (!valid) {
-        g_ptr_array_free(sels, TRUE);
-        JSValue exc = ns_throw_selector_syntax_error(ctx, sel);
-        g_free(sel);
-        return exc;
-    }
-    g_free(sel);
+    GPtrArray *sels = ns_selector_list_take(ctx, sel);
+    if (!sels) return JS_EXCEPTION;
     const ns_node *prev_scope = ns_css_set_match_scope(el);
     ns_js *js = js_from_ctx(ctx);
     char *cur_frag = ns_element_target_fragment(ctx, el);
@@ -52544,6 +52532,25 @@ static const JSCFunctionListEntry ns_location_funcs[] = {
 };
 
 static void
+ns_release_pinned_wrappers(ns_js *js)
+{
+    if (!js->pinned_wrappers_set) return;
+    GList *pinned = g_hash_table_get_keys(js->pinned_wrappers_set);
+    g_hash_table_remove_all(js->pinned_wrappers_set);
+    for (GList *l = pinned; l; l = l->next) {
+        ns_node *node = l->data;
+        if (node && node->js_wrapper) {
+            JSValue v = JS_MKPTR(JS_TAG_OBJECT, node->js_wrapper);
+            JS_SetOpaque(v, NULL);
+            node->js_wrapper = NULL;
+            node->js_invalidate = NULL;
+            JS_FreeValue(js->ctx, v);
+        }
+    }
+    g_list_free(pinned);
+}
+
+static void
 ns_js_reset_runtime_state(ns_js *js)
 {
     if (!js) return;
@@ -52650,21 +52657,7 @@ ns_js_reset_runtime_state(ns_js *js)
 
     ns_attr_detach_all(js);
     ns_attribute_maps_release_all(js);
-    if (js->pinned_wrappers_set) {
-        GList *pinned = g_hash_table_get_keys(js->pinned_wrappers_set);
-        g_hash_table_remove_all(js->pinned_wrappers_set);
-        for (GList *l = pinned; l; l = l->next) {
-            ns_node *node = l->data;
-            if (node && node->js_wrapper) {
-                JSValue v = JS_MKPTR(JS_TAG_OBJECT, node->js_wrapper);
-                JS_SetOpaque(v, NULL);
-                node->js_wrapper = NULL;
-                node->js_invalidate = NULL;
-                JS_FreeValue(js->ctx, v);
-            }
-        }
-        g_list_free(pinned);
-    }
+    ns_release_pinned_wrappers(js);
 
     if (js->mutation_observers) {
         for (guint i = 0; i < js->mutation_observers->len; i++) {
@@ -53433,23 +53426,8 @@ ns_js_free(ns_js *js)
         g_hash_table_destroy(js->attribute_maps);
         js->attribute_maps = NULL;
     }
-    if (js->pinned_wrappers_set) {
-        GList *pinned = g_hash_table_get_keys(js->pinned_wrappers_set);
-        g_hash_table_remove_all(js->pinned_wrappers_set);
-        for (GList *l = pinned; l; l = l->next) {
-            ns_node *node = l->data;
-            if (node && node->js_wrapper) {
-                JSValue v = JS_MKPTR(JS_TAG_OBJECT, node->js_wrapper);
-                JS_SetOpaque(v, NULL);
-                node->js_wrapper = NULL;
-                node->js_invalidate = NULL;
-                JS_FreeValue(js->ctx, v);
-            }
-        }
-        g_list_free(pinned);
-        g_hash_table_destroy(js->pinned_wrappers_set);
-        js->pinned_wrappers_set = NULL;
-    }
+    ns_release_pinned_wrappers(js);
+    g_clear_pointer(&js->pinned_wrappers_set, g_hash_table_destroy);
     if (js->deferred_script_roots) {
         g_ptr_array_free(js->deferred_script_roots, TRUE);
         js->deferred_script_roots = NULL;
