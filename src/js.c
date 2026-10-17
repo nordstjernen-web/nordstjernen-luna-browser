@@ -8058,6 +8058,18 @@ ns_listener_target_is_passive_root(ns_js *js, const ns_node *target,
     return target == html || target == body;
 }
 
+static gboolean
+ns_listener_add_skipped(JSContext *ctx, JSValueConst callback,
+                        const char *type, JSValue signal)
+{
+    if ((JS_IsFunction(ctx, callback) || JS_IsObject(callback)) &&
+        !ns_signal_is_aborted(ctx, signal))
+        return FALSE;
+    JS_FreeValue(ctx, signal);
+    JS_FreeCString(ctx, type);
+    return TRUE;
+}
+
 static JSValue
 ns_add_listener_impl(JSContext *ctx, ns_node *target, int argc,
                      JSValueConst *argv, gboolean window_level)
@@ -8073,16 +8085,8 @@ ns_add_listener_impl(JSContext *ctx, ns_node *target, int argc,
         JS_FreeCString(ctx, type);
         return JS_EXCEPTION;
     }
-    if (!JS_IsFunction(ctx, argv[1]) && !JS_IsObject(argv[1])) {
-        JS_FreeValue(ctx, signal);
-        JS_FreeCString(ctx, type);
+    if (ns_listener_add_skipped(ctx, argv[1], type, signal))
         return JS_UNDEFINED;
-    }
-    if (ns_signal_is_aborted(ctx, signal)) {
-        JS_FreeValue(ctx, signal);
-        JS_FreeCString(ctx, type);
-        return JS_UNDEFINED;
-    }
     ns_js *_js = js_from_ctx(ctx);
     _js->listener_snapshots++;
     GPtrArray *own = ns_listeners_for(_js, target);
@@ -17018,16 +17022,8 @@ ns_target_addEventListener(JSContext *ctx, JSValueConst this_val,
         JS_FreeCString(ctx, type);
         return JS_EXCEPTION;
     }
-    if (!JS_IsFunction(ctx, argv[1]) && !JS_IsObject(argv[1])) {
-        JS_FreeValue(ctx, signal);
-        JS_FreeCString(ctx, type);
+    if (ns_listener_add_skipped(ctx, argv[1], type, signal))
         return JS_UNDEFINED;
-    }
-    if (ns_signal_is_aborted(ctx, signal)) {
-        JS_FreeValue(ctx, signal);
-        JS_FreeCString(ctx, type);
-        return JS_UNDEFINED;
-    }
     JSValue listeners = JS_GetPropertyStr(ctx, this_val, "_listeners");
     if (!JS_IsArray(listeners)) {
         JS_FreeValue(ctx, listeners);
@@ -22653,6 +22649,26 @@ ns_sw_registration_for_scope(JSContext *ctx, JSValueConst container,
     return found;
 }
 
+static void
+ns_worker_host_orphan(ns_worker_host *host)
+{
+    g_atomic_int_set(&host->owner_alive, 0);
+    host->owner = NULL;
+    host->owner_ctx = NULL;
+    host->log_cb = NULL;
+    host->log_user_data = NULL;
+    ns_worker_host_stop(host, TRUE);
+}
+
+static void
+ns_worker_host_release_owner_obj(JSContext *ctx, ns_worker_host *host)
+{
+    if (JS_IsUndefined(host->owner_obj)) return;
+    JS_SetOpaque(host->owner_obj, NULL);
+    JS_FreeValue(ctx, host->owner_obj);
+    host->owner_obj = JS_UNDEFINED;
+}
+
 static JSValue
 ns_sw_unregister(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -22671,17 +22687,8 @@ ns_sw_unregister(JSContext *ctx, JSValueConst this_val,
             if (!host || !host->is_service_worker ||
                 g_strcmp0(host->scope, scope) != 0)
                 continue;
-            g_atomic_int_set(&host->owner_alive, 0);
-            host->owner = NULL;
-            host->owner_ctx = NULL;
-            host->log_cb = NULL;
-            host->log_user_data = NULL;
-            ns_worker_host_stop(host, TRUE);
-            if (!JS_IsUndefined(host->owner_obj)) {
-                JS_SetOpaque(host->owner_obj, NULL);
-                JS_FreeValue(ctx, host->owner_obj);
-                host->owner_obj = JS_UNDEFINED;
-            }
+            ns_worker_host_orphan(host);
+            ns_worker_host_release_owner_obj(ctx, host);
             g_ptr_array_remove_index(js->workers, i);
             ns_worker_host_unref(host);
             removed = TRUE;
@@ -22796,17 +22803,8 @@ ns_sw_prepare_document(ns_js *js)
         for (gint i = (gint)js->workers->len - 1; i >= 0; i--) {
             ns_worker_host *host = g_ptr_array_index(js->workers, (guint)i);
             if (!host || !host->is_service_worker) continue;
-            g_atomic_int_set(&host->owner_alive, 0);
-            host->owner = NULL;
-            host->owner_ctx = NULL;
-            host->log_cb = NULL;
-            host->log_user_data = NULL;
-            ns_worker_host_stop(host, TRUE);
-            if (!JS_IsUndefined(host->owner_obj)) {
-                JS_SetOpaque(host->owner_obj, NULL);
-                JS_FreeValue(ctx, host->owner_obj);
-                host->owner_obj = JS_UNDEFINED;
-            }
+            ns_worker_host_orphan(host);
+            ns_worker_host_release_owner_obj(ctx, host);
             g_ptr_array_remove_index(js->workers, (guint)i);
             ns_worker_host_unref(host);
         }
@@ -44629,20 +44627,31 @@ ns_hit_point_to_layout(JSContext *ctx, ns_js *js, const ns_node *scope,
     return TRUE;
 }
 
+static gboolean
+ns_point_args(JSContext *ctx, int argc, JSValueConst *argv, double *x,
+              double *y)
+{
+    if (argc < 2) {
+        JS_ThrowTypeError(ctx, "2 arguments required, but only %d present",
+                          argc);
+        return FALSE;
+    }
+    if (JS_ToFloat64(ctx, x, argv[0]) < 0 || JS_ToFloat64(ctx, y, argv[1]) < 0)
+        return FALSE;
+    if (!isfinite(*x) || !isfinite(*y)) {
+        JS_ThrowTypeError(ctx, "coordinates must be finite");
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static JSValue
 ns_document_element_from_point(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
 {
     (void)this_val;
-    if (argc < 2)
-        return JS_ThrowTypeError(ctx,
-            "2 arguments required, but only %d present", argc);
     double x = 0, y = 0;
-    if (JS_ToFloat64(ctx, &x, argv[0]) < 0 ||
-        JS_ToFloat64(ctx, &y, argv[1]) < 0)
-        return JS_EXCEPTION;
-    if (!isfinite(x) || !isfinite(y))
-        return JS_ThrowTypeError(ctx, "coordinates must be finite");
+    if (!ns_point_args(ctx, argc, argv, &x, &y)) return JS_EXCEPTION;
     if (x < 0 || y < 0) return JS_NULL;
     ns_js *js = js_from_ctx(ctx);
     if (!js || !js->current_doc) return JS_NULL;
@@ -44662,15 +44671,8 @@ ns_document_elements_from_point(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
 {
     (void)this_val;
-    if (argc < 2)
-        return JS_ThrowTypeError(ctx,
-            "2 arguments required, but only %d present", argc);
     double x = 0, y = 0;
-    if (JS_ToFloat64(ctx, &x, argv[0]) < 0 ||
-        JS_ToFloat64(ctx, &y, argv[1]) < 0)
-        return JS_EXCEPTION;
-    if (!isfinite(x) || !isfinite(y))
-        return JS_ThrowTypeError(ctx, "coordinates must be finite");
+    if (!ns_point_args(ctx, argc, argv, &x, &y)) return JS_EXCEPTION;
     JSValue arr = JS_NewArray(ctx);
     if (x < 0 || y < 0) return arr;
     ns_js *js = js_from_ctx(ctx);
@@ -52322,6 +52324,19 @@ ns_location_nav_in_iframe(ns_js *js)
     return js && js->iframe_load_depth > 0;
 }
 
+static void
+ns_location_navigate(ns_js *js, const char *url)
+{
+    if (!ns_location_target_allowed(js, url)) {
+        ns_location_log_blocked(js, url);
+        return;
+    }
+    if (ns_location_nav_in_iframe(js)) return;
+    g_autofree char *abs_url = ns_url_resolve(js->current_url, url);
+    if (!abs_url || !ns_js_anchor_fragment_navigate(js, abs_url))
+        js->nav_cb(url, FALSE, js->nav_user_data);
+}
+
 static JSValue
 ns_location_set_href(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -52335,16 +52350,7 @@ ns_location_set_href(JSContext *ctx, JSValueConst this_val, JSValueConst val)
         return ns_throw_dom_exception(ctx, "SyntaxError", 12,
                                       "location.href: invalid URL");
     }
-    if (!ns_location_target_allowed(js, s)) {
-        ns_location_log_blocked(js, s);
-        JS_FreeCString(ctx, s);
-        return JS_UNDEFINED;
-    }
-    if (!ns_location_nav_in_iframe(js)) {
-        g_autofree char *abs_url = ns_url_resolve(js->current_url, s);
-        if (!abs_url || !ns_js_anchor_fragment_navigate(js, abs_url))
-            js->nav_cb(s, FALSE, js->nav_user_data);
-    }
+    ns_location_navigate(js, s);
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
@@ -52357,16 +52363,7 @@ ns_location_assign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     if (!js || !js->nav_cb || argc < 1) return JS_UNDEFINED;
     const char *s = JS_ToCString(ctx, argv[0]);
     if (!s) return JS_UNDEFINED;
-    if (!ns_location_target_allowed(js, s)) {
-        ns_location_log_blocked(js, s);
-        JS_FreeCString(ctx, s);
-        return JS_UNDEFINED;
-    }
-    if (!ns_location_nav_in_iframe(js)) {
-        g_autofree char *abs_url = ns_url_resolve(js->current_url, s);
-        if (!abs_url || !ns_js_anchor_fragment_navigate(js, abs_url))
-            js->nav_cb(s, FALSE, js->nav_user_data);
-    }
+    ns_location_navigate(js, s);
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
@@ -53186,22 +53183,13 @@ ns_js_free(ns_js *js)
         for (guint i = 0; i < js->workers->len; i++) {
             ns_worker_host *host = g_ptr_array_index(js->workers, i);
             if (!host) continue;
-            g_atomic_int_set(&host->owner_alive, 0);
-            host->owner = NULL;
-            host->owner_ctx = NULL;
-            host->log_cb = NULL;
-            host->log_user_data = NULL;
-            ns_worker_host_stop(host, TRUE);
+            ns_worker_host_orphan(host);
         }
         if (js->ctx) {
             for (guint i = 0; i < js->workers->len; i++) {
                 ns_worker_host *host = g_ptr_array_index(js->workers, i);
                 if (!host) continue;
-                if (!JS_IsUndefined(host->owner_obj)) {
-                    JS_SetOpaque(host->owner_obj, NULL);
-                    JS_FreeValue(js->ctx, host->owner_obj);
-                    host->owner_obj = JS_UNDEFINED;
-                }
+                ns_worker_host_release_owner_obj(js->ctx, host);
             }
         }
         for (guint i = 0; i < js->workers->len; i++) {

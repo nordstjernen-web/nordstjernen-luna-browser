@@ -128,23 +128,7 @@ ns_canvas_state_reset(ns_canvas_state *st, int w, int h)
 JSValue
 ns_throw_security_error(JSContext *ctx, const char *message)
 {
-    JSValue err = JS_NewError(ctx);
-    JS_DefinePropertyValueStr(ctx, err, "name", JS_NewString(ctx, "SecurityError"),
-        JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, message),
-        JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, err, "code", JS_NewInt32(ctx, 18),
-        JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue dx = JS_GetPropertyStr(ctx, global, "DOMException");
-    if (JS_IsObject(dx)) {
-        JSValue proto = JS_GetPropertyStr(ctx, dx, "prototype");
-        if (JS_IsObject(proto)) JS_SetPrototype(ctx, err, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    JS_FreeValue(ctx, dx);
-    JS_FreeValue(ctx, global);
-    return JS_Throw(ctx, err);
+    return ns_throw_dom_exception(ctx, "SecurityError", 18, message);
 }
 
 gboolean
