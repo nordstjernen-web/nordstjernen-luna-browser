@@ -567,12 +567,6 @@ ns_url_is_ftp(const char *url)
     return url && g_str_has_prefix(url, "ftp://");
 }
 
-static gboolean
-refresh_is_space(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
-}
-
 gboolean
 ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
 {
@@ -581,7 +575,7 @@ ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
     if (!input) return FALSE;
 
     const char *p = input;
-    while (refresh_is_space(*p)) p++;
+    while (ns_is_ascii_ws(*p)) p++;
 
     const char *digits = p;
     while (g_ascii_isdigit(*p)) p++;
@@ -595,10 +589,10 @@ ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
     while (*p == '.' || g_ascii_isdigit(*p)) p++;
 
     if (*p) {
-        if (*p != ';' && *p != ',' && !refresh_is_space(*p)) return FALSE;
-        while (refresh_is_space(*p)) p++;
+        if (*p != ';' && *p != ',' && !ns_is_ascii_ws(*p)) return FALSE;
+        while (ns_is_ascii_ws(*p)) p++;
         if (*p == ';' || *p == ',') p++;
-        while (refresh_is_space(*p)) p++;
+        while (ns_is_ascii_ws(*p)) p++;
     }
 
     if (*p == 'u' || *p == 'U') {
@@ -607,10 +601,10 @@ ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
             q++;
             if (*q == 'l' || *q == 'L') {
                 q++;
-                while (refresh_is_space(*q)) q++;
+                while (ns_is_ascii_ws(*q)) q++;
                 if (*q == '=') {
                     q++;
-                    while (refresh_is_space(*q)) q++;
+                    while (ns_is_ascii_ws(*q)) q++;
                     p = q;
                 }
             }

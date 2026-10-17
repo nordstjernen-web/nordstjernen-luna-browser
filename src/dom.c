@@ -1088,30 +1088,24 @@ typedef struct ns_class_set {
 
 static ns_class_set g_nd_empty_class_set;
 
-static inline gboolean
-ns_clsset_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
 static ns_class_set *
 ns_class_set_build(const char *cls)
 {
     guint n = 0;
     for (const char *s = cls; *s; ) {
-        while (*s && ns_clsset_ws(*s)) s++;
+        while (*s && ns_is_ascii_ws(*s)) s++;
         if (!*s) break;
-        while (*s && !ns_clsset_ws(*s)) s++;
+        while (*s && !ns_is_ascii_ws(*s)) s++;
         n++;
     }
     if (n == 0) return &g_nd_empty_class_set;
     ns_class_set *cs = g_malloc(sizeof *cs + (gsize)n * sizeof cs->tok[0]);
     cs->n = 0;
     for (const char *s = cls; *s; ) {
-        while (*s && ns_clsset_ws(*s)) s++;
+        while (*s && ns_is_ascii_ws(*s)) s++;
         if (!*s) break;
         const char *t = s;
-        while (*s && !ns_clsset_ws(*s)) s++;
+        while (*s && !ns_is_ascii_ws(*s)) s++;
         cs->tok[cs->n].p = t;
         cs->tok[cs->n].len = (guint)(s - t);
         cs->n++;
@@ -2081,22 +2075,16 @@ ns_doc_class_index_remove_token(GHashTable *map, const char *tok, gsize tok_len,
     if (bucket) ns_doc_index_bucket_remove(bucket, node);
 }
 
-static gboolean
-ns_class_is_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
 void
 ns_doc_class_index_register(ns_node *doc, const char *class_attr, ns_node *node)
 {
     if (!doc || !doc->class_index || !class_attr || !node) return;
     const char *p = class_attr;
     while (*p) {
-        while (*p && ns_class_is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !ns_class_is_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         ns_doc_class_index_add_token(doc->class_index, tok, (gsize)(p - tok), node);
     }
 }
@@ -2107,10 +2095,10 @@ ns_doc_class_index_unregister(ns_node *doc, const char *class_attr, ns_node *nod
     if (!doc || !doc->class_index || !class_attr || !node) return;
     const char *p = class_attr;
     while (*p) {
-        while (*p && ns_class_is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (!*p) break;
         const char *tok = p;
-        while (*p && !ns_class_is_ws(*p)) p++;
+        while (*p && !ns_is_ascii_ws(*p)) p++;
         ns_doc_class_index_remove_token(doc->class_index, tok, (gsize)(p - tok), node);
     }
 }

@@ -22,7 +22,7 @@ gboolean
 ns_html_parse_float(const char *s, double *out)
 {
     if (!s) return FALSE;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\f' || *s == '\r')
+    while (ns_is_ascii_ws(*s))
         s++;
     const char *p = s;
     GString *num = g_string_new(NULL);

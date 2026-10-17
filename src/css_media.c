@@ -264,16 +264,10 @@ mq_query_clear(mq_query *q)
     q->type = NULL;
 }
 
-static gboolean
-mq_is_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
 static const char *
 mq_skip_ws(const char *p, const char *end)
 {
-    while (p < end && mq_is_ws(*p)) p++;
+    while (p < end && ns_is_ascii_ws(*p)) p++;
     return p;
 }
 
@@ -303,7 +297,7 @@ mq_kw_at(const char *p, const char *end, const char *kw)
     if ((gsize)(end - p) < n) return FALSE;
     if (g_ascii_strncasecmp(p, kw, n) != 0) return FALSE;
     const char *after = p + n;
-    return after == end || mq_is_ws(*after) || *after == '(';
+    return after == end || ns_is_ascii_ws(*after) || *after == '(';
 }
 
 static const char *
@@ -386,7 +380,7 @@ mq_value_parse(const char *s, const char *e, mq_feature_type type,
                const mq_feature_def *f, mq_value *out)
 {
     s = mq_skip_ws(s, e);
-    while (e > s && mq_is_ws(e[-1])) e--;
+    while (e > s && ns_is_ascii_ws(e[-1])) e--;
     if (s >= e) return FALSE;
     memset(out, 0, sizeof *out);
     out->denom = 1;
@@ -527,7 +521,7 @@ static gboolean
 mq_side_is_feature(const char *s, const char *e, const mq_feature_def **out)
 {
     s = mq_skip_ws(s, e);
-    while (e > s && mq_is_ws(e[-1])) e--;
+    while (e > s && ns_is_ascii_ws(e[-1])) e--;
     char ident[40];
     const char *p = mq_read_ident(s, e, ident, sizeof ident);
     if (!p || p != e) return FALSE;
@@ -543,7 +537,7 @@ static mq_node *
 mq_parse_feature(const char *s, const char *e)
 {
     s = mq_skip_ws(s, e);
-    while (e > s && mq_is_ws(e[-1])) e--;
+    while (e > s && ns_is_ascii_ws(e[-1])) e--;
     if (s >= e) return NULL;
 
     const char *colon = NULL;
@@ -773,7 +767,7 @@ mq_parse_query(const char *s, const char *e, mq_query *out)
 {
     memset(out, 0, sizeof *out);
     s = mq_skip_ws(s, e);
-    while (e > s && mq_is_ws(e[-1])) e--;
+    while (e > s && ns_is_ascii_ws(e[-1])) e--;
     if (s >= e) return;
 
     const char *p = s;

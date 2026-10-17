@@ -87,17 +87,11 @@ static void svg_render_node(svg_ctx *ctx, const ns_node *n,
 static void svg_render_element(svg_ctx *ctx, const ns_node *n,
                                const svg_state *parent);
 
-static gboolean
-svg_is_ws(char c)
-{
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f';
-}
-
 static void
 svg_skip_sep(const char **pp)
 {
     const char *p = *pp;
-    while (*p && (svg_is_ws(*p) || *p == ',')) p++;
+    while (*p && (ns_is_ascii_ws(*p) || *p == ',')) p++;
     *pp = p;
 }
 
@@ -130,12 +124,12 @@ static double
 svg_length_str(const char *s, double pct_basis, double font_size, double fallback)
 {
     if (!s) return fallback;
-    while (*s && svg_is_ws(*s)) s++;
+    while (*s && ns_is_ascii_ws(*s)) s++;
     if (!*s) return fallback;
     char *end = NULL;
     double v = g_ascii_strtod(s, &end);
     if (!end || end == s || !isfinite(v)) return fallback;
-    while (*end && svg_is_ws(*end)) end++;
+    while (*end && ns_is_ascii_ws(*end)) end++;
     if (*end == '%')                        return v / 100.0 * pct_basis;
     if (g_ascii_strncasecmp(end, "px", 2) == 0) return v;
     if (g_ascii_strncasecmp(end, "pt", 2) == 0) return v * 4.0 / 3.0;
@@ -173,10 +167,10 @@ static char *
 svg_url_id(const char *s, const char **rest)
 {
     if (!s) return NULL;
-    while (*s && svg_is_ws(*s)) s++;
+    while (*s && ns_is_ascii_ws(*s)) s++;
     if (g_ascii_strncasecmp(s, "url(", 4) != 0) return NULL;
     const char *p = s + 4;
-    while (*p && svg_is_ws(*p)) p++;
+    while (*p && ns_is_ascii_ws(*p)) p++;
     char quote = 0;
     if (*p == '"' || *p == '\'') { quote = *p; p++; }
     const char *start = p;
@@ -186,7 +180,7 @@ svg_url_id(const char *s, const char **rest)
     while (*p && *p != ')') p++;
     if (*p == ')') p++;
     if (rest) *rest = p;
-    while (end > start && svg_is_ws(end[-1])) end--;
+    while (end > start && ns_is_ascii_ws(end[-1])) end--;
     if (end > start && *start == '#') start++;
     if (end <= start) return NULL;
     char *raw = g_strndup(start, (gsize)(end - start));
@@ -201,7 +195,7 @@ static gboolean
 svg_parse_paint(const char *text, const svg_state *st, svg_paint *out)
 {
     if (!text) return FALSE;
-    while (*text && svg_is_ws(*text)) text++;
+    while (*text && ns_is_ascii_ws(*text)) text++;
     if (!*text) return FALSE;
 
     if (g_ascii_strncasecmp(text, "url(", 4) == 0) {
@@ -213,7 +207,7 @@ svg_parse_paint(const char *text, const svg_state *st, svg_paint *out)
         out->ref = id;
         out->have_fallback = FALSE;
         if (rest) {
-            while (*rest && svg_is_ws(*rest)) rest++;
+            while (*rest && ns_is_ascii_ws(*rest)) rest++;
             if (*rest) {
                 guint8 r, g, b, a;
                 if (g_ascii_strncasecmp(rest, "none", 4) == 0) {
@@ -308,7 +302,7 @@ svg_set_dashes(svg_state *st, const char *text, double basis, double font_size)
     double v;
     gboolean any_positive = FALSE;
     while (svg_num(&p, &v) && out->len < NS_SVG_MAX_DASHES) {
-        while (*p && !svg_is_ws(*p) && *p != ',' && *p != '-' && *p != '+' &&
+        while (*p && !ns_is_ascii_ws(*p) && *p != ',' && *p != '-' && *p != '+' &&
                !g_ascii_isdigit(*p) && *p != '.')
             p++;
         if (v < 0) { g_array_free(out, TRUE); return; }
@@ -366,18 +360,18 @@ svg_style_decl(svg_ctx *ctx, const ns_node *n, const char *prop)
     const char *found = NULL;
     gsize found_len = 0;
     while (*p) {
-        while (*p && (svg_is_ws(*p) || *p == ';')) p++;
+        while (*p && (ns_is_ascii_ws(*p) || *p == ';')) p++;
         const char *name = p;
         while (*p && *p != ':' && *p != ';') p++;
         if (*p != ':') { while (*p && *p != ';') p++; continue; }
         const char *name_end = p;
-        while (name_end > name && svg_is_ws(name_end[-1])) name_end--;
+        while (name_end > name && ns_is_ascii_ws(name_end[-1])) name_end--;
         p++;
-        while (*p && svg_is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         const char *val = p;
         while (*p && *p != ';') p++;
         const char *val_end = p;
-        while (val_end > val && svg_is_ws(val_end[-1])) val_end--;
+        while (val_end > val && ns_is_ascii_ws(val_end[-1])) val_end--;
         if ((gsize)(name_end - name) == plen &&
             g_ascii_strncasecmp(name, prop, plen) == 0) {
             found = val;
@@ -582,13 +576,13 @@ svg_parse_transform(const char *s, cairo_matrix_t *out)
     gboolean any = FALSE;
     const char *p = s;
     while (*p) {
-        while (*p && (svg_is_ws(*p) || *p == ',')) p++;
+        while (*p && (ns_is_ascii_ws(*p) || *p == ',')) p++;
         if (!*p) break;
         const char *name = p;
         while (g_ascii_isalpha(*p)) p++;
         gsize nlen = (gsize)(p - name);
         if (nlen == 0) break;
-        while (*p && svg_is_ws(*p)) p++;
+        while (*p && ns_is_ascii_ws(*p)) p++;
         if (*p != '(') break;
         p++;
         double a[6] = {0};
@@ -1013,7 +1007,7 @@ svg_href_target(svg_ctx *ctx, const ns_node *n)
 {
     const char *h = svg_href(n);
     if (!h) return NULL;
-    while (*h && svg_is_ws(*h)) h++;
+    while (*h && ns_is_ascii_ws(*h)) h++;
     if (*h != '#') return NULL;
     return svg_by_id(ctx, h + 1);
 }
@@ -1448,7 +1442,7 @@ svg_render_text(svg_ctx *ctx, const ns_node *n, const svg_state *st)
     gboolean prev_ws = TRUE;
     for (gsize i = 0; i < len; i++) {
         char c = text[i];
-        if (svg_is_ws(c)) {
+        if (ns_is_ascii_ws(c)) {
             if (!prev_ws) g_string_append_c(flat, ' ');
             prev_ws = TRUE;
         } else {
