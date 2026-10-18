@@ -143,6 +143,13 @@ Significant changes in each release:
     of millions of such runs held the main thread for hours. Its extent
     is now computed in one step.
 
+* Security: on musl systems such as Alpine, an `<img>` whose SVG nests
+  about 250 groups no longer crashes the browser. Images decode on GLib
+  worker threads, which get the C library's default thread stack, and
+  musl's is 128 KiB, less than the SVG renderer's 256 allowed levels need.
+  The Linux binary now asks for 2 MiB default thread stacks, which musl
+  honours and glibc, already at 8 MiB, ignores.
+
 1.0.14:
 =======
 * Security: fixes from a source-wide review on 2026-10-10. Each was

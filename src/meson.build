@@ -206,6 +206,11 @@ if host_machine.system() == 'windows'
   )
   northstar_link_args += ['-lbcrypt', '-ladvapi32', '-lshell32', '-luser32']
 endif
+if host_machine.system() == 'linux'
+  northstar_link_args += cc.get_supported_link_arguments(
+    ['-Wl,-z,stack-size=2097152'],
+  )
+endif
 
 # NetBSD pkgsrc gnutls (pulled in transitively) carries an undefined
 # reference to libc's mbrtoc32, which the hardened --no-undefined link
