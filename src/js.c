@@ -36309,9 +36309,12 @@ ns_live_build(JSContext *ctx, ns_live_back *b)
     }
     case NS_LIVE_ATTRIBUTES:
         for (const ns_attr *a = root->attrs; a; a = a->next)
-            if (!ns_attr_name_is_internal(a->name))
+            if (!ns_attr_name_is_internal(a->name)) {
+                guint32 attr_gen = root->attr_gen;
                 JS_SetPropertyUint32(ctx, arr, i++,
                                      ns_attr_to_js(ctx, b->owner, a, FALSE));
+                if (root->attr_gen != attr_gen) break;
+            }
         break;
     case NS_LIVE_LABELS:
         ns_collect_labels_for(ctx, ns_node_root(root), root, arr, &i, 0);
