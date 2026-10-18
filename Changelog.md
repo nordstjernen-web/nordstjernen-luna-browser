@@ -163,6 +163,21 @@ Significant changes in each release:
   of its wrap's patches, as one downloaded before a patch was added does:
   delete it and download it again.
 
+* Security: `structuredClone()` and `postMessage()` no longer copy an
+  `ArrayBuffer` from freed memory. The clone took the buffer's data
+  pointer and then read its `resizable` property, which a page can
+  redefine to detach the buffer, so the clone held whatever the heap had
+  put there since. The pointer is now taken after every getter and the
+  constructor have run.
+* Security: the native MediaSource hooks no longer use a SourceBuffer
+  that page script removed while its arguments were converted. A
+  `valueOf` passed to `__ndMseAppend`, `__ndMseRemove` or
+  `__ndMseSetDuration` could call `__ndMseRemoveBuffer` between the
+  lookup and the append, and `__ndMseRemoveBuffer` converted its id twice,
+  so it could free one buffer and unregister another. Every argument is
+  now converted before the lookup, and the append result is built without
+  running property setters.
+
 1.0.14:
 =======
 * Security: fixes from a source-wide review on 2026-10-10. Each was

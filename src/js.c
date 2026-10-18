@@ -12161,28 +12161,50 @@ ns_sc_buffer_detached(JSContext *ctx, JSValueConst buffer)
     return detached;
 }
 
+static gboolean
+ns_sc_buffer_bytes(JSContext *ctx, JSValueConst buffer, uint8_t **bytes,
+                   size_t *size)
+{
+    *bytes = JS_GetArrayBuffer(ctx, size, buffer);
+    if (*bytes || !JS_HasException(ctx)) return TRUE;
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return FALSE;
+}
+
 static JSValue
 ns_sc_copy_array_buffer(ns_sc *s, JSValueConst src)
 {
     JSContext *ctx = s->ctx;
     if (ns_sc_buffer_detached(ctx, src)) return ns_sc_fail(ctx);
-    size_t size = 0;
-    uint8_t *bytes = JS_GetArrayBuffer(ctx, &size, src);
     JSValue resizable = JS_GetPropertyStr(ctx, src, "resizable");
     gboolean is_resizable = JS_ToBool(ctx, resizable) > 0;
     JS_FreeValue(ctx, resizable);
+    JSValue opts = JS_UNDEFINED;
+    if (is_resizable) {
+        opts = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, opts, "maxByteLength",
+                          JS_GetPropertyStr(ctx, src, "maxByteLength"));
+    }
+    size_t size = 0;
+    uint8_t *bytes = NULL;
+    if (!ns_sc_buffer_bytes(ctx, src, &bytes, &size)) {
+        JS_FreeValue(ctx, opts);
+        return ns_sc_fail(ctx);
+    }
     if (!is_resizable) return JS_NewArrayBufferCopy(ctx, bytes, size);
-    JSValue opts = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, opts, "maxByteLength",
-                      JS_GetPropertyStr(ctx, src, "maxByteLength"));
     JSValue len = JS_NewInt64(ctx, (int64_t)size);
     JSValueConst args[2] = { len, opts };
     JSValue clone = JS_CallConstructor(ctx, s->array_buffer_ctor, 2, args);
     JS_FreeValue(ctx, opts);
     if (JS_IsException(clone)) return clone;
     size_t clone_size = 0;
-    uint8_t *dst = JS_GetArrayBuffer(ctx, &clone_size, clone);
-    if (dst && bytes && clone_size >= size) memcpy(dst, bytes, size);
+    uint8_t *dst = NULL;
+    if (!ns_sc_buffer_bytes(ctx, clone, &dst, &clone_size) ||
+        !ns_sc_buffer_bytes(ctx, src, &bytes, &size)) {
+        JS_FreeValue(ctx, clone);
+        return ns_sc_fail(ctx);
+    }
+    if (dst && bytes) memcpy(dst, bytes, MIN(size, clone_size));
     return clone;
 }
 

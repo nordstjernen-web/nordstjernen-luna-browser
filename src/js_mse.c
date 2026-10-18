@@ -37,12 +37,19 @@ mse_ensure_tables(ns_js *js)
 }
 
 static mse_handle *
-mse_lookup(JSContext *ctx, JSValueConst id_value)
+mse_find(JSContext *ctx, uint32_t id)
 {
     ns_js *js = js_from_ctx(ctx);
-    uint32_t id = 0;
-    if (!js || !js->mse_objects || JS_ToUint32(ctx, &id, id_value)) return NULL;
+    if (!js || !js->mse_objects) return NULL;
     return g_hash_table_lookup(js->mse_objects, GUINT_TO_POINTER(id));
+}
+
+static mse_handle *
+mse_lookup(JSContext *ctx, JSValueConst id_value)
+{
+    uint32_t id = 0;
+    if (JS_ToUint32(ctx, &id, id_value)) return NULL;
+    return mse_find(ctx, id);
 }
 
 static guint
@@ -103,6 +110,22 @@ ranges_to_array(JSContext *ctx, GArray *ranges)
 }
 
 static JSValue
+mse_append_result(JSContext *ctx, const char *status, double offset,
+                  GArray *ranges)
+{
+    JSValue result = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx, result, "status", JS_NewString(ctx, status),
+                              JS_PROP_C_W_E);
+    if (ranges) {
+        JS_DefinePropertyValueStr(ctx, result, "offset",
+                                  JS_NewFloat64(ctx, offset), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, result, "ranges",
+                                  ranges_to_array(ctx, ranges), JS_PROP_C_W_E);
+    }
+    return result;
+}
+
+static JSValue
 js_mse_type_supported(JSContext *ctx, JSValueConst this_val, int argc,
                       JSValueConst *argv)
 {
@@ -134,10 +157,15 @@ js_mse_bind_url(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
 {
     (void)this_val;
     ns_js *js = js_from_ctx(ctx);
-    mse_handle *handle = argc >= 2 ? mse_lookup(ctx, argv[0]) : NULL;
-    if (!js || !handle || handle->buffer) return JS_FALSE;
+    uint32_t id = 0;
+    if (argc < 2 || JS_ToUint32(ctx, &id, argv[0])) return JS_FALSE;
     const char *url = JS_ToCString(ctx, argv[1]);
     if (!url) return JS_EXCEPTION;
+    mse_handle *handle = mse_find(ctx, id);
+    if (!js || !handle || handle->buffer) {
+        JS_FreeCString(ctx, url);
+        return JS_FALSE;
+    }
     g_hash_table_replace(js->mse_urls, g_strdup(url),
                          ns_mse_source_ref(handle->source));
     JS_FreeCString(ctx, url);
@@ -150,11 +178,14 @@ js_mse_add_buffer(JSContext *ctx, JSValueConst this_val, int argc,
 {
     (void)this_val;
     ns_js *js = js_from_ctx(ctx);
-    mse_handle *handle = argc >= 2 ? mse_lookup(ctx, argv[0]) : NULL;
-    if (!js || !handle || handle->buffer) return JS_NewUint32(ctx, 0);
+    uint32_t id = 0;
+    if (argc < 2 || JS_ToUint32(ctx, &id, argv[0])) return JS_NewUint32(ctx, 0);
     const char *type = JS_ToCString(ctx, argv[1]);
     if (!type) return JS_EXCEPTION;
-    ns_mse_buffer *buffer = ns_mse_source_add_buffer(handle->source, type);
+    mse_handle *handle = mse_find(ctx, id);
+    ns_mse_buffer *buffer = js && handle && !handle->buffer
+                                ? ns_mse_source_add_buffer(handle->source, type)
+                                : NULL;
     JS_FreeCString(ctx, type);
     if (!buffer) return JS_NewUint32(ctx, 0);
     return JS_NewUint32(ctx, mse_register(js, handle->source, buffer));
@@ -166,10 +197,10 @@ js_mse_remove_buffer(JSContext *ctx, JSValueConst this_val, int argc,
 {
     (void)this_val;
     ns_js *js = js_from_ctx(ctx);
-    mse_handle *handle = argc >= 1 ? mse_lookup(ctx, argv[0]) : NULL;
-    if (!js || !handle || !handle->buffer) return JS_FALSE;
     uint32_t id = 0;
-    JS_ToUint32(ctx, &id, argv[0]);
+    if (argc < 1 || JS_ToUint32(ctx, &id, argv[0])) return JS_FALSE;
+    mse_handle *handle = mse_find(ctx, id);
+    if (!js || !handle || !handle->buffer) return JS_FALSE;
     ns_mse_source_remove_buffer(handle->source, handle->buffer);
     g_hash_table_remove(js->mse_objects, GUINT_TO_POINTER(id));
     return JS_TRUE;
@@ -179,25 +210,21 @@ static JSValue
 js_mse_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val;
-    mse_handle *handle = argc >= 6 ? mse_lookup(ctx, argv[0]) : NULL;
-    JSValue result = JS_NewObject(ctx);
-    if (!handle || !handle->buffer) {
-        JS_SetPropertyStr(ctx, result, "status", JS_NewString(ctx, "error"));
-        return result;
-    }
+    uint32_t id = 0;
+    double offset = 0, window_start = 0, window_end = INFINITY;
+    if (argc < 6 || JS_ToUint32(ctx, &id, argv[0]) ||
+        JS_ToFloat64(ctx, &offset, argv[2]) ||
+        JS_ToFloat64(ctx, &window_start, argv[4]) ||
+        JS_ToFloat64(ctx, &window_end, argv[5]))
+        return argc < 6 ? mse_append_result(ctx, "error", 0, NULL) : JS_EXCEPTION;
+    gboolean sequence = JS_ToBool(ctx, argv[3]) > 0;
+    mse_handle *handle = mse_find(ctx, id);
     const guint8 *data = NULL;
     size_t len = 0;
     JSValue holder = JS_UNDEFINED;
-    double offset = 0, window_start = 0, window_end = INFINITY;
-    if (!mse_bytes(ctx, argv[1], &data, &len, &holder) ||
-        JS_ToFloat64(ctx, &offset, argv[2]) ||
-        JS_ToFloat64(ctx, &window_start, argv[4]) ||
-        JS_ToFloat64(ctx, &window_end, argv[5])) {
-        JS_FreeValue(ctx, holder);
-        JS_SetPropertyStr(ctx, result, "status", JS_NewString(ctx, "error"));
-        return result;
-    }
-    gboolean sequence = JS_ToBool(ctx, argv[3]) > 0;
+    if (!handle || !handle->buffer ||
+        !mse_bytes(ctx, argv[1], &data, &len, &holder))
+        return mse_append_result(ctx, "error", 0, NULL);
     gint64 trace_start = ns_trace_now();
     ns_mse_append_result status = ns_mse_buffer_append(handle->buffer, data, len,
                                                        &offset, sequence,
@@ -206,22 +233,22 @@ js_mse_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     JS_FreeValue(ctx, holder);
     const char *name = status == NS_MSE_APPEND_OK ? "ok"
                      : status == NS_MSE_APPEND_QUOTA_EXCEEDED ? "quota" : "error";
-    JS_SetPropertyStr(ctx, result, "status", JS_NewString(ctx, name));
-    JS_SetPropertyStr(ctx, result, "offset", JS_NewFloat64(ctx, offset));
-    JS_SetPropertyStr(ctx, result, "ranges",
-                      ranges_to_array(ctx, ns_mse_buffer_ranges(handle->buffer)));
-    return result;
+    return mse_append_result(ctx, name, offset,
+                             ns_mse_buffer_ranges(handle->buffer));
 }
 
 static JSValue
 js_mse_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val;
-    mse_handle *handle = argc >= 3 ? mse_lookup(ctx, argv[0]) : NULL;
-    if (!handle || !handle->buffer) return JS_NewArray(ctx);
+    uint32_t id = 0;
     double start = 0, end = 0;
-    if (JS_ToFloat64(ctx, &start, argv[1]) || JS_ToFloat64(ctx, &end, argv[2]))
+    if (argc < 3) return JS_NewArray(ctx);
+    if (JS_ToUint32(ctx, &id, argv[0]) || JS_ToFloat64(ctx, &start, argv[1]) ||
+        JS_ToFloat64(ctx, &end, argv[2]))
         return JS_EXCEPTION;
+    mse_handle *handle = mse_find(ctx, id);
+    if (!handle || !handle->buffer) return JS_NewArray(ctx);
     ns_mse_buffer_remove(handle->buffer, start, end);
     return ranges_to_array(ctx, ns_mse_buffer_ranges(handle->buffer));
 }
@@ -240,9 +267,13 @@ js_mse_set_duration(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv)
 {
     (void)this_val;
-    mse_handle *handle = argc >= 2 ? mse_lookup(ctx, argv[0]) : NULL;
+    uint32_t id = 0;
     double duration = NAN;
-    if (!handle || JS_ToFloat64(ctx, &duration, argv[1])) return JS_UNDEFINED;
+    if (argc < 2 || JS_ToUint32(ctx, &id, argv[0]) ||
+        JS_ToFloat64(ctx, &duration, argv[1]))
+        return JS_UNDEFINED;
+    mse_handle *handle = mse_find(ctx, id);
+    if (!handle) return JS_UNDEFINED;
     ns_mse_source_set_duration(handle->source, duration);
     return JS_UNDEFINED;
 }
@@ -262,11 +293,14 @@ js_mse_set_live_seekable_range(JSContext *ctx, JSValueConst this_val, int argc,
                                JSValueConst *argv)
 {
     (void)this_val;
-    mse_handle *handle = argc >= 1 ? mse_lookup(ctx, argv[0]) : NULL;
+    uint32_t id = 0;
     double start = 0.0, end = 0.0;
+    if (argc < 1 || JS_ToUint32(ctx, &id, argv[0])) return JS_UNDEFINED;
+    gboolean range = argc >= 3 && !JS_ToFloat64(ctx, &start, argv[1]) &&
+                     !JS_ToFloat64(ctx, &end, argv[2]);
+    mse_handle *handle = mse_find(ctx, id);
     if (!handle) return JS_UNDEFINED;
-    if (argc < 3 || JS_ToFloat64(ctx, &start, argv[1]) ||
-        JS_ToFloat64(ctx, &end, argv[2]))
+    if (!range)
         ns_mse_source_clear_live_seekable_range(handle->source);
     else
         ns_mse_source_set_live_seekable_range(handle->source, start, end);
