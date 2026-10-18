@@ -42177,10 +42177,12 @@ ns_select_add(JSContext *ctx, JSValueConst this_val,
         }
     }
     if (opt->parent) ns_node_remove(opt);
-    if (before && before->parent)
+    if (before && before->parent) {
         ns_element_insert_before_single(_j, before->parent, opt, before);
-    else
+    } else {
+        if (_j) g_hash_table_remove(_j->orphan_nodes, opt);
         ns_node_append_child(sel, opt);
+    }
     ns_css_mark_restyle_dirty(sel);
     if (_j) ns_js_note_layout_unscoped(_j, G_STRFUNC);
     return JS_UNDEFINED;
