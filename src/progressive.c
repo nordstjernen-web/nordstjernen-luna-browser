@@ -243,13 +243,14 @@ progressive_walk_boxes(ns_progressive *file, guint64 start, const guint8 *data,
         guint64 rel = file->probe_offset - start;
         gboolean beyond = file->file_size > 0 &&
                           file->probe_offset + 8 > file->file_size;
+        gboolean fetchable = !whole && (file->file_size == 0 ||
+                                        file->probe_offset + 16 <= file->file_size);
         if (file->probe_offset < start || beyond ||
-            (rel + 8 > len && whole)) {
+            (rel + 8 > len && !fetchable)) {
             progressive_fail(file);
             return;
         }
-        if (rel + 16 > len && !whole &&
-            (file->file_size == 0 || file->probe_offset + 16 <= file->file_size)) {
+        if (rel + 16 > len && fetchable) {
             guint64 rest = file->file_size - file->probe_offset;
             progressive_fetch(file, REQUEST_PROBE, file->probe_offset,
                               file->file_size > 0 && rest <= NS_PROGRESSIVE_TAIL_BYTES
@@ -268,7 +269,7 @@ progressive_walk_boxes(ns_progressive *file, guint64 start, const guint8 *data,
             size = (file->file_size ? file->file_size : start + len) -
                    file->probe_offset;
         }
-        if (size < header) {
+        if (size < header || size > G_MAXUINT64 - file->probe_offset) {
             progressive_fail(file);
             return;
         }

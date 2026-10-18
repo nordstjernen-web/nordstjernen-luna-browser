@@ -125,6 +125,24 @@ Significant changes in each release:
     `replaceWith`, listener retirement, selector-list parsing and worker
     teardown, among others.
 
+* Security: the media demuxers no longer read past a buffer, hang or
+  exhaust memory on hostile files.
+  - The progressive MP4 box walk read an 8-byte box header beyond the
+    response body when a 206 response stopped short and the next box
+    began in the file's last 8 to 15 bytes, where no further range was
+    requested. It now gives up there.
+  - A 64-bit box size near 2^64 wrapped the walk's file offset back to
+    an earlier box, and two such boxes looped forever on the main thread.
+  - The sample index of an ordinary MP4 was capped at 2^21 samples only
+    after every track had been parsed, so 64 small `trak` boxes could
+    each allocate 84 MB first, about 5 GB in all, which aborted the
+    browser on 32-bit systems. The cap now applies as each track is
+    read, and a 65th track is refused before it is parsed.
+  - A fragment's `trun` for a track the movie does not declare walked
+    up to 2^18 samples one by one without recording any, so a `moof`
+    of millions of such runs held the main thread for hours. Its extent
+    is now computed in one step.
+
 1.0.14:
 =======
 * Security: fixes from a source-wide review on 2026-10-10. Each was

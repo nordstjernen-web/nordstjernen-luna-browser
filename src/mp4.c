@@ -915,6 +915,21 @@ merge_sample_indexes(GPtrArray *tracks)
     return index;
 }
 
+static guint
+claim_index_budget(GPtrArray *tracks, demux_track *track, guint indexed)
+{
+    if (!track->samples) return indexed;
+    if (indexed <= NS_MP4_MAX_INDEXED_SAMPLES &&
+        track->samples->len <= NS_MP4_MAX_INDEXED_SAMPLES - indexed)
+        return indexed + track->samples->len;
+    for (guint i = 0; i < tracks->len; i++) {
+        demux_track *other = g_ptr_array_index(tracks, i);
+        g_clear_pointer(&other->samples, g_array_unref);
+    }
+    g_clear_pointer(&track->samples, g_array_unref);
+    return NS_MP4_MAX_INDEXED_SAMPLES + 1;
+}
+
 static gboolean
 parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
 {
@@ -925,15 +940,18 @@ parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
     cursor_init(&c, payload, length);
     child_box child;
     int status = 0;
+    guint indexed = 0;
     while (ok && (status = cursor_next_box(&c, &child)) > 0) {
         if (child.type == NS_MP4_FOURCC('t', 'r', 'a', 'k')) {
-            demux_track *track = parse_trak(&child);
-            ok = track && tracks->len < NS_MP4_MAX_TRACKS &&
-                 !find_track(tracks, track->public.id);
-            if (ok)
+            demux_track *track = tracks->len < NS_MP4_MAX_TRACKS
+                                     ? parse_trak(&child) : NULL;
+            ok = track && !find_track(tracks, track->public.id);
+            if (ok) {
+                indexed = claim_index_budget(tracks, track, indexed);
                 g_ptr_array_add(tracks, track);
-            else
+            } else {
                 demux_track_free(track);
+            }
         } else if (child.type == NS_MP4_FOURCC('m', 'v', 'e', 'x')) {
             ok = parse_mvex(extends, &child);
         }
@@ -1004,6 +1022,17 @@ parse_trun(ns_mp4_demuxer *d, fragment_run_context *run, const child_box *box)
                                        : run->base_data_offset;
     }
     run->seen_trun = TRUE;
+    if (!run->track && bytes_per_sample == 0) {
+        guint64 span = (guint64)sample_count * run->default_size;
+        gint64 elapsed = (gint64)sample_count * run->default_duration;
+        if (data_position + span >= NS_MP4_MAX_STREAM_POSITION ||
+            run->decode_time + elapsed > NS_MP4_MAX_TIMESTAMP ||
+            run->decode_time < -NS_MP4_MAX_TIMESTAMP)
+            return FALSE;
+        run->decode_time += elapsed;
+        run->next_data_position = data_position + span;
+        return TRUE;
+    }
     for (guint32 i = 0; i < sample_count; i++) {
         guint32 duration = (flags & 0x100) ? cursor_u32(&c)
                                            : run->default_duration;
