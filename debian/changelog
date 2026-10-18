@@ -1,4 +1,4 @@
-northstar (1.0.15-1) UNRELEASED; urgency=medium
+northstar (1.0.15-1) unstable; urgency=medium
 
   * New upstream release.
   * Build-depend on libdav1d-dev, libvpx-dev and libopus-dev so MP4 and
