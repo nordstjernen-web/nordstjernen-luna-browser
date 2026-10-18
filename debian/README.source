@@ -9,13 +9,30 @@ access, and debhelper's meson buildsystem passes
 --wrap-mode=nodownload, so the orig tarball must already contain the
 subproject sources.
 
+Meson applies the patches listed in each wrap's diff_files (from
+subprojects/packagefiles/) when it downloads the subproject, and never
+again, so the tarball has to carry the patched checkouts as they are on
+disk. Neither `git archive` nor `meson dist` keeps those uncommitted
+changes. Meson also never moves an existing checkout when a wrap's
+revision changes, so check that every checkout matches its pin first.
+
 To produce a suitable orig tarball from a git checkout:
 
     meson subprojects download lexbor quickjs-ng ns-pango
+    scripts/check-subprojects.sh
     tar --exclude-vcs --exclude='subprojects/*/.git' \
         --exclude='builddir' \
         -czf ../northstar_<version>.orig.tar.gz .
 
+If check-subprojects.sh reports a stale checkout, delete
+subprojects/<name> and download it again.
+
 The wuffs and plmpeg subprojects are vendored directly in the tree and
 need no download. After that, `dpkg-buildpackage -us -uc` builds the
 package the normal debhelper way.
+
+debian/rules builds without H.264: only Cisco's prebuilt OpenH264
+binaries carry Cisco's H.264 patent licence, and a distribution build
+from source is not covered by it. AV1 (libdav1d) and VP9 (libvpx) are
+enabled. The build date shown in the About dialog comes from
+SOURCE_DATE_EPOCH, so the build is reproducible.

@@ -1,11 +1,23 @@
 #!/usr/bin/make -f
 
 include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/pkg-info.mk
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
+BUILD_DATE := $(shell date -u -d @$(SOURCE_DATE_EPOCH) +%Y-%m-%d)
+
 %:
 	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-Dbuild_date=$(BUILD_DATE) \
+		-Daudio=enabled \
+		-Davif=enabled \
+		-Dav1=enabled \
+		-Dvp9=enabled \
+		-Dh264=disabled
 
 override_dh_auto_install:
 	meson install -C obj-$(DEB_HOST_GNU_TYPE) \

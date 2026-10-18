@@ -14,6 +14,8 @@ Build-Depends:
  libharfbuzz-dev (>= 8.3),
  libfribidi-dev (>= 1.0.6),
  libfontconfig-dev (>= 2.15),
+ libfreetype-dev,
+ libthai-dev,
  libcurl4-openssl-dev (>= 8.5),
  libssl-dev,
  libuchardet-dev,
@@ -23,9 +25,14 @@ Build-Depends:
  libavif-dev,
  libsdl2-dev,
  libenchant-2-dev,
+ libdav1d-dev (>= 1.0.0),
+ libvpx-dev (>= 1.8.0),
+ libopus-dev,
  libopusfile-dev,
  libvorbis-dev,
-Standards-Version: 4.7.0
+ zlib1g-dev,
+ python3,
+Standards-Version: 4.7.2
 Homepage: https://github.com/nordstjernen-web/northstar-browser
 Vcs-Browser: https://github.com/nordstjernen-web/northstar-browser
 Vcs-Git: https://github.com/nordstjernen-web/northstar-browser.git
@@ -34,6 +41,7 @@ Rules-Requires-Root: no
 Package: northstar
 Architecture: any
 Depends:
+ ca-certificates,
  ${shlibs:Depends},
  ${misc:Depends},
 Recommends:
@@ -46,5 +54,8 @@ Description: minimalist GTK 4 web browser with an original engine
   * An original HTML5, CSS, and JavaScript engine — not a fork of
     Gecko, WebKit, or Blink.
   * No JIT, which keeps the JavaScript attack surface small.
-  * Sandboxed with seccomp on Linux.
+  * Confined by a Landlock file-system allow-list and a seccomp
+    system-call filter on Linux.
+  * Plays MP3, Ogg, MPEG-1, and MP4 or WebM video (AV1, VP9) in
+    process, without plugins.
   * No telemetry: it does not phone home and does not track the user.

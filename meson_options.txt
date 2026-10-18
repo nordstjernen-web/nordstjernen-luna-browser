@@ -1,7 +1,7 @@
 option('build_date', type: 'string', value: '',
        description: 'Build date stamp shown in the About dialog (defaults to the configure-time date).')
 option('wasm', type: 'feature', value: 'auto',
-       description: 'Build the WebAssembly JS API over the vendored WAMR interpreter (on by default; disable on platforms WAMR does not support, e.g. NetBSD).')
+       description: 'Build the WebAssembly JS API over the vendored WAMR interpreter (on by default on x86-64 and 64-bit Arm, the CPUs its call stubs cover; disable on platforms WAMR does not support, e.g. NetBSD).')
 option('av1', type: 'feature', value: 'auto',
        description: 'Decode AV1 <video> through libdav1d (on by default when dav1d is present): the codec YouTube streams to browsers that support it.')
 option('vp9', type: 'feature', value: 'auto',

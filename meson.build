@@ -319,9 +319,10 @@ else
   libquickjs = dependency('quickjs-ng', fallback: ['quickjs-ng', 'qjs_dep'])
 endif
 
-wasm_unsupported_cpu = host_machine.cpu_family() == 'x86'
+wasm_unsupported_cpu = not (host_machine.cpu_family() == 'x86_64' or
+  (host_machine.cpu_family() == 'aarch64' and host_machine.system() != 'windows'))
 if get_option('wasm').enabled() and wasm_unsupported_cpu
-  error('wasm (WAMR) is not supported on 32-bit x86; build with -Dwasm=disabled')
+  error('wasm (WAMR) is built only for x86-64 and 64-bit Arm (not Arm Windows); build with -Dwasm=disabled')
 endif
 wasm_feature = get_option('wasm').disable_auto_if(wasm_unsupported_cpu)
 have_wasm = false
