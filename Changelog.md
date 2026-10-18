@@ -4,6 +4,20 @@ Significant changes in each release:
 
 1.0.16:
 =======
+* Security: seven crash fixes backported from Nordstjernen's
+  memory-safety review, each with a `Security-Fix:` trailer.
+  `element.attributes` crashed when page script run while it was built
+  (a redefined `Attr` prototype or an `Array.prototype` setter) removed
+  the attribute being converted; the custom element upgrade walk read a
+  registry slot freed by a nested `customElements.define()`;
+  `navigation.entries()` read a freed history entry when an
+  `Object.prototype` setter called `history.pushState()`;
+  `select.add(option)` left the option registered as an orphan node
+  while the select owned it; the `document.body` setter could link a
+  node under its own descendant, after which tree walks overflowed the
+  stack; and SVG path data with a number after closepath (`M0 0Z1`)
+  looped until memory ran out, both in `getTotalLength()` and when the
+  path was painted.
 * Linux: the browser starts again on NVIDIA's proprietary driver under
   X11. The Landlock sandbox let the GUI read `/dev/dri` but not open the
   render nodes read-write, and gave no access to `/dev/nvidia*` at all,
