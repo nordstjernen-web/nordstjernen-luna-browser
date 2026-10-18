@@ -2,6 +2,17 @@ Changelog:
 =========
 Significant changes in each release:
 
+1.0.16:
+=======
+* Linux: the browser starts again on NVIDIA's proprietary driver under
+  X11. The Landlock sandbox let the GUI read `/dev/dri` but not open the
+  render nodes read-write, and gave no access to `/dev/nvidia*` at all,
+  so GTK's OpenGL and Vulkan drivers were refused the GPU ("Permission
+  denied" on `/dev/dri/renderD128`) and the window died with an X
+  `BadDrawable` error; the watchdog restarted it until it gave up. In GUI
+  mode the sandbox now lets those device nodes be opened read-write;
+  headless runs keep them read-only. Backported from Nordstjernen.
+
 1.0.15:
 =======
 * Browser identity and engine behaviour that bot detection (Google's

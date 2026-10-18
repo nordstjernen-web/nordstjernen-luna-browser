@@ -295,6 +295,17 @@ ns_security_refuse_root(void)
 }
 
 static GPtrArray *ns_extra_writable_dirs = NULL;
+#ifdef __linux__
+static gboolean ns_gpu_devices_allowed = FALSE;
+#endif
+
+void
+ns_security_allow_gpu_devices(void)
+{
+#ifdef __linux__
+    ns_gpu_devices_allowed = TRUE;
+#endif
+}
 
 void
 ns_security_add_writable_dir(const char *dir)
@@ -350,6 +361,23 @@ add_path_rw(int rfd, guint64 allowed, const char *path)
     };
     (void)landlock_add_rule_(rfd, LANDLOCK_RULE_PATH_BENEATH, &pb, 0);
     close(pfd);
+}
+
+static void
+add_gpu_devices(int rfd, guint64 fs_read, guint64 fs_dev)
+{
+    add_path_rw(rfd, fs_read | LANDLOCK_ACCESS_FS_WRITE_FILE, "/dev/dri");
+    GDir *dev = g_dir_open("/dev", 0, NULL);
+    if (!dev) return;
+    const char *name;
+    while ((name = g_dir_read_name(dev))) {
+        if (!g_str_has_prefix(name, "nvidia")) continue;
+        g_autofree char *path = g_build_filename("/dev", name, NULL);
+        gboolean is_dir = g_file_test(path, G_FILE_TEST_IS_DIR);
+        add_path_rw(rfd, is_dir ? fs_read | LANDLOCK_ACCESS_FS_WRITE_FILE : fs_dev,
+                    path);
+    }
+    g_dir_close(dev);
 }
 
 void
@@ -413,6 +441,8 @@ ns_security_sandbox_init(const char *self_exe)
         if (g_file_test(vdev, G_FILE_TEST_EXISTS))
             add_path_rw(rfd, fs_dev, vdev);
     }
+    if (ns_gpu_devices_allowed)
+        add_gpu_devices(rfd, fs_read, fs_dev);
     if (g_file_test("/dev/snd", G_FILE_TEST_IS_DIR))
         add_path_rw(rfd, fs_read | fs_write_file, "/dev/snd");
 

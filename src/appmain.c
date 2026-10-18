@@ -528,8 +528,10 @@ main(int argc, char **argv)
             g_printerr("northstar: cannot write a trace to %s\n", argv[i] + 8);
     ns_add_screenshot_writable_dirs(argc, argv);
 
-    if (proc_mode)
+    if (proc_mode) {
         ns_security_add_writable_dir("/dev/shm");
+        ns_security_allow_gpu_devices();
+    }
     ns_security_sandbox_init(g_self_exe);
     if (!proc_mode)
         ns_security_deny_exec_memory(TRUE);

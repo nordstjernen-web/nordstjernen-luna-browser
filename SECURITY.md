@@ -135,7 +135,7 @@ unconfined.
     directory the running executable sits in, and a `../lib` or
     `../lib64` beside it.
   - *Read-only:* `/etc`, the CA-certificate and fontconfig caches,
-    `/proc`, `/sys`, `/run`, `/dev/dri`, `/dev/urandom`, the X11 and ICE
+    `/proc`, `/sys`, `/run`, `/dev/urandom`, the X11 and ICE
     socket directories, the user's font and theme directories
     (`~/.fonts`, `~/.fontconfig`, `~/.icons`, `~/.themes`), the whole
     XDG config, data and cache directories (`~/.config`,
@@ -143,13 +143,15 @@ unconfined.
     the data directories found near the executable
     (`../share/northstar`, or `data/` in a build tree — where the source
     tree itself, the nearest directory holding a `meson.build` up to
-    three levels above the executable, is readable too). `/dev/shm` is
-    read-only in headless mode.
+    three levels above the executable, is readable too). `/dev/shm` and
+    `/dev/dri` are read-only in headless mode.
   - *Read + write:* the per-user runtime directory (which holds the
     Wayland socket), the browser's own state under
     `~/.config/northstar`, `~/.local/share/northstar` and
     `~/.cache/northstar`, the download directory when its path starts
-    with `$HOME`, `/dev/null`, `/dev/shm` in GUI mode, `/dev/snd` and any
+    with `$HOME`, `/dev/null`, `/dev/shm` in GUI mode, the GPU device
+    nodes `/dev/dri` and `/dev/nvidia*` in GUI mode (GTK's OpenGL and
+    Vulkan drivers open them to draw the window), `/dev/snd` and any
     `/dev/video0`–`/dev/video63` node that exists, and the output
     directory of a `--dump=png:`, `pdf:` or `print:` run.
 
