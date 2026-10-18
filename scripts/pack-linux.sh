@@ -40,7 +40,7 @@ fi
 
 if [ "$LIBC" = musl ]; then
     LIBC_REQ='- musl libc (Alpine 3.19+ era and later)'
-    RUNTIME_INSTALL='    sudo apk add gtk4.0 libcurl uchardet libavif \
+    RUNTIME_INSTALL='    sudo apk add gtk4.0 libcurl uchardet libavif dav1d libvpx opus libthai \
         libseccomp libpsl sqlite-libs ca-certificates font-dejavu sdl2 # Alpine (musl)'
 else
     # Don't guess the glibc floor — read it from the binary we just built.

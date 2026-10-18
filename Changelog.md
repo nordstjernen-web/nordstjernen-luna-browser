@@ -190,6 +190,13 @@ Significant changes in each release:
 * Security: an `AudioBufferSourceNode` with an infinite `playbackRate`
   no longer indexes its buffer with a NaN position, which C leaves
   undefined and 32-bit builds could turn into an out-of-bounds read.
+* Alpine Linux builds install the full dependency set. The musl CI
+  build now also compiles AV1 (dav1d), VP9 (libvpx), H.264 (OpenH264)
+  and Opus video sound, Thai word breaking and zlib, and the nightly
+  Alpine package installs the HarfBuzz, FriBidi, Cairo and FreeType
+  headers that ns-pango needs, plus the AV1, VP9 and Opus decoders,
+  instead of the system Pango it no longer uses. The musl package's
+  README lists the matching runtime packages.
 
 1.0.14:
 =======

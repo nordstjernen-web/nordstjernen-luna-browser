@@ -56,9 +56,10 @@ install_apk() {
     apk add --no-cache \
         build-base clang pkgconf meson ninja cmake git zip alpine-sdk \
         linux-headers gtk4.0-dev curl-dev openssl-dev uchardet-dev libpsl-dev sqlite-dev \
-        libseccomp-dev libavif-dev sdl2-dev
+        harfbuzz-dev fribidi-dev cairo-dev fontconfig-dev freetype-dev zlib-dev \
+        libseccomp-dev libavif-dev sdl2-dev dav1d-dev libvpx-dev opus-dev
     apk add --no-cache \
-        fontconfig-dev pango-dev || true
+        libthai-dev || true
 }
 
 case "$DISTRO" in
