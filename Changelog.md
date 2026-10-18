@@ -178,6 +178,19 @@ Significant changes in each release:
   now converted before the lookup, and the append result is built without
   running property setters.
 
+* Security: a 2D canvas context no longer draws through a freed Cairo
+  context. Changing a canvas's `width` or `height` replaces its Cairo
+  surface and context the next time the context is used, and a page
+  could do that from inside a call already drawing, through a
+  `valueOf` argument or a `globalAlpha` or `globalCompositeOperation`
+  getter, so `fillRect`, `drawImage`, `clearRect`, `moveTo` and others
+  carried on with the destroyed one. Every `CanvasRenderingContext2D`
+  method now keeps a replaced context alive until the outermost canvas
+  call returns.
+* Security: an `AudioBufferSourceNode` with an infinite `playbackRate`
+  no longer indexes its buffer with a NaN position, which C leaves
+  undefined and 32-bit builds could turn into an out-of-bounds read.
+
 1.0.14:
 =======
 * Security: fixes from a source-wide review on 2026-10-10. Each was

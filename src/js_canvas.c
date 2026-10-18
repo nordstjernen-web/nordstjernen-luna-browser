@@ -105,11 +105,24 @@ ns_canvas_state_free(gpointer data)
 }
 
 static void
-ns_canvas_state_reset(ns_canvas_state *st, int w, int h)
+ns_canvas_retire(ns_js *js, cairo_t *cr)
+{
+    if (!js || js->canvas_calls == 0) {
+        cairo_destroy(cr);
+        return;
+    }
+    if (!js->canvas_retired)
+        js->canvas_retired =
+            g_ptr_array_new_with_free_func((GDestroyNotify)cairo_destroy);
+    g_ptr_array_add(js->canvas_retired, cr);
+}
+
+static void
+ns_canvas_state_reset(ns_js *js, ns_canvas_state *st, int w, int h)
 {
     if (st->fill_pattern)   { cairo_pattern_destroy(st->fill_pattern);   st->fill_pattern = NULL; }
     if (st->stroke_pattern) { cairo_pattern_destroy(st->stroke_pattern); st->stroke_pattern = NULL; }
-    if (st->cr)   cairo_destroy(st->cr);
+    if (st->cr)   ns_canvas_retire(js, st->cr);
     if (st->surf) cairo_surface_destroy(st->surf);
     g_free(st->font);
     st->w = w;
@@ -754,10 +767,10 @@ ns_canvas_state_for(ns_js *js, const ns_node *el)
     int w = ns_canvas_dim_from_attr(el, "width",  300);
     int h = ns_canvas_dim_from_attr(el, "height", 150);
     if (st && (st->w != w || st->h != h)) {
-        ns_canvas_state_reset(st, w, h);
+        ns_canvas_state_reset(js, st, w, h);
     } else if (!st) {
         st = g_new0(ns_canvas_state, 1);
-        ns_canvas_state_reset(st, w, h);
+        ns_canvas_state_reset(js, st, w, h);
         g_hash_table_insert(js->canvas_states, (gpointer)el, st);
     }
     return st;
@@ -3440,6 +3453,72 @@ ns_ctx_attr_set(JSContext *ctx, JSValueConst this_val, int argc,
     return ns_ctx_attr_slot(ctx, this_val, magic, &argv[0]);
 }
 
+typedef struct {
+    const char  *name;
+    JSCFunction *fn;
+    int          length;
+} ns_ctx_method_def;
+
+static const ns_ctx_method_def ns_ctx_methods[] = {
+    { "fillRect", ns_ctx_fillRect, 4 },
+    { "strokeRect", ns_ctx_strokeRect, 4 },
+    { "clearRect", ns_ctx_clearRect, 4 },
+    { "beginPath", ns_ctx_beginPath, 0 },
+    { "closePath", ns_ctx_closePath, 0 },
+    { "moveTo", ns_ctx_moveTo, 2 },
+    { "lineTo", ns_ctx_lineTo, 2 },
+    { "arc", ns_ctx_arc, 6 },
+    { "rect", ns_ctx_rect, 4 },
+    { "roundRect", ns_ctx_roundRect, 5 },
+    { "fill", ns_ctx_fill, 2 },
+    { "stroke", ns_ctx_stroke, 1 },
+    { "save", ns_ctx_save, 0 },
+    { "restore", ns_ctx_restore, 0 },
+    { "reset", ns_ctx_reset, 0 },
+    { "translate", ns_ctx_translate, 2 },
+    { "scale", ns_ctx_scale, 2 },
+    { "rotate", ns_ctx_rotate, 1 },
+    { "fillText", ns_ctx_fillText, 4 },
+    { "strokeText", ns_ctx_strokeText, 4 },
+    { "measureText", ns_ctx_measureText, 1 },
+    { "clip", ns_ctx_clip, 2 },
+    { "isPointInPath", ns_ctx_isPointInPath, 4 },
+    { "isPointInStroke", ns_ctx_isPointInStroke, 3 },
+    { "drawImage", ns_ctx_drawImage, 9 },
+    { "arcTo", ns_ctx_arcTo, 5 },
+    { "quadraticCurveTo", ns_ctx_quadraticCurveTo, 4 },
+    { "bezierCurveTo", ns_ctx_bezierCurveTo, 6 },
+    { "ellipse", ns_ctx_ellipse, 8 },
+    { "setTransform", ns_ctx_setTransform, 6 },
+    { "transform", ns_ctx_transform, 6 },
+    { "resetTransform", ns_ctx_resetTransform, 0 },
+    { "getTransform", ns_ctx_getTransform, 0 },
+    { "setLineDash", ns_ctx_setLineDash, 1 },
+    { "getLineDash", ns_ctx_getLineDash, 0 },
+    { "createLinearGradient", ns_ctx_createLinearGradient, 4 },
+    { "createRadialGradient", ns_ctx_createRadialGradient, 6 },
+    { "createConicGradient", ns_ctx_createConicGradient, 3 },
+    { "createPattern", ns_ctx_createPattern, 2 },
+    { "createImageData", ns_ctx_createImageData, 2 },
+    { "getImageData", ns_ctx_getImageData, 4 },
+    { "putImageData", ns_ctx_putImageData, 7 },
+    { "getContextAttributes", ns_ctx_get_attrs, 0 },
+    { "isContextLost", ns_ctx_is_context_lost, 0 },
+    { "drawFocusIfNeeded", ns_ctx_draw_focus_if_needed, 2 },
+};
+
+static JSValue
+ns_ctx_method(JSContext *ctx, JSValueConst this_val, int argc,
+              JSValueConst *argv, int magic)
+{
+    ns_js *js = js_from_ctx(ctx);
+    if (js) js->canvas_calls++;
+    JSValue ret = ns_ctx_methods[magic].fn(ctx, this_val, argc, argv);
+    if (js && --js->canvas_calls == 0 && js->canvas_retired)
+        g_ptr_array_set_size(js->canvas_retired, 0);
+    return ret;
+}
+
 static JSValue
 ns_ctx_prototype(JSContext *ctx)
 {
@@ -3471,51 +3550,11 @@ ns_ctx_prototype(JSContext *ctx)
             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, atom);
     }
-    ns_bind_fn(ctx, proto, "fillRect", ns_ctx_fillRect, 4);
-    ns_bind_fn(ctx, proto, "strokeRect", ns_ctx_strokeRect, 4);
-    ns_bind_fn(ctx, proto, "clearRect", ns_ctx_clearRect, 4);
-    ns_bind_fn(ctx, proto, "beginPath", ns_ctx_beginPath, 0);
-    ns_bind_fn(ctx, proto, "closePath", ns_ctx_closePath, 0);
-    ns_bind_fn(ctx, proto, "moveTo", ns_ctx_moveTo, 2);
-    ns_bind_fn(ctx, proto, "lineTo", ns_ctx_lineTo, 2);
-    ns_bind_fn(ctx, proto, "arc", ns_ctx_arc, 6);
-    ns_bind_fn(ctx, proto, "rect", ns_ctx_rect, 4);
-    ns_bind_fn(ctx, proto, "roundRect", ns_ctx_roundRect, 5);
-    ns_bind_fn(ctx, proto, "fill", ns_ctx_fill, 2);
-    ns_bind_fn(ctx, proto, "stroke", ns_ctx_stroke, 1);
-    ns_bind_fn(ctx, proto, "save", ns_ctx_save, 0);
-    ns_bind_fn(ctx, proto, "restore", ns_ctx_restore, 0);
-    ns_bind_fn(ctx, proto, "reset", ns_ctx_reset, 0);
-    ns_bind_fn(ctx, proto, "translate", ns_ctx_translate, 2);
-    ns_bind_fn(ctx, proto, "scale", ns_ctx_scale, 2);
-    ns_bind_fn(ctx, proto, "rotate", ns_ctx_rotate, 1);
-    ns_bind_fn(ctx, proto, "fillText", ns_ctx_fillText, 4);
-    ns_bind_fn(ctx, proto, "strokeText", ns_ctx_strokeText, 4);
-    ns_bind_fn(ctx, proto, "measureText", ns_ctx_measureText, 1);
-    ns_bind_fn(ctx, proto, "clip", ns_ctx_clip, 2);
-    ns_bind_fn(ctx, proto, "isPointInPath", ns_ctx_isPointInPath, 4);
-    ns_bind_fn(ctx, proto, "isPointInStroke", ns_ctx_isPointInStroke, 3);
-    ns_bind_fn(ctx, proto, "drawImage", ns_ctx_drawImage, 9);
-    ns_bind_fn(ctx, proto, "arcTo", ns_ctx_arcTo, 5);
-    ns_bind_fn(ctx, proto, "quadraticCurveTo", ns_ctx_quadraticCurveTo, 4);
-    ns_bind_fn(ctx, proto, "bezierCurveTo", ns_ctx_bezierCurveTo, 6);
-    ns_bind_fn(ctx, proto, "ellipse", ns_ctx_ellipse, 8);
-    ns_bind_fn(ctx, proto, "setTransform", ns_ctx_setTransform, 6);
-    ns_bind_fn(ctx, proto, "transform", ns_ctx_transform, 6);
-    ns_bind_fn(ctx, proto, "resetTransform", ns_ctx_resetTransform, 0);
-    ns_bind_fn(ctx, proto, "getTransform", ns_ctx_getTransform, 0);
-    ns_bind_fn(ctx, proto, "setLineDash", ns_ctx_setLineDash, 1);
-    ns_bind_fn(ctx, proto, "getLineDash", ns_ctx_getLineDash, 0);
-    ns_bind_fn(ctx, proto, "createLinearGradient", ns_ctx_createLinearGradient, 4);
-    ns_bind_fn(ctx, proto, "createRadialGradient", ns_ctx_createRadialGradient, 6);
-    ns_bind_fn(ctx, proto, "createConicGradient", ns_ctx_createConicGradient, 3);
-    ns_bind_fn(ctx, proto, "createPattern", ns_ctx_createPattern, 2);
-    ns_bind_fn(ctx, proto, "createImageData", ns_ctx_createImageData, 2);
-    ns_bind_fn(ctx, proto, "getImageData", ns_ctx_getImageData, 4);
-    ns_bind_fn(ctx, proto, "putImageData", ns_ctx_putImageData, 7);
-    ns_bind_fn(ctx, proto, "getContextAttributes", ns_ctx_get_attrs, 0);
-    ns_bind_fn(ctx, proto, "isContextLost", ns_ctx_is_context_lost, 0);
-    ns_bind_fn(ctx, proto, "drawFocusIfNeeded", ns_ctx_draw_focus_if_needed, 2);
+    for (gsize i = 0; i < G_N_ELEMENTS(ns_ctx_methods); i++)
+        JS_SetPropertyStr(ctx, proto, ns_ctx_methods[i].name,
+            JS_NewCFunctionMagic(ctx, ns_ctx_method, ns_ctx_methods[i].name,
+                                 ns_ctx_methods[i].length,
+                                 JS_CFUNC_generic_magic, (int)i));
     if (fresh)
         ns_make_interface_object(ctx, global, "CanvasRenderingContext2D", proto);
     JS_FreeValue(ctx, global);

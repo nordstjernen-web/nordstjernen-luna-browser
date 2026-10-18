@@ -53783,6 +53783,7 @@ ns_js_free(ns_js *js)
         g_array_free(js->raf_pending, TRUE);
     }
     if (js->canvas_states) g_hash_table_destroy(js->canvas_states);
+    if (js->canvas_retired) g_ptr_array_unref(js->canvas_retired);
     if (js->js_image_loads) {
         g_hash_table_destroy(js->js_image_loads);
         js->js_image_loads = NULL;

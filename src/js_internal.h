@@ -155,6 +155,8 @@ struct ns_js {
     gint64         user_activation_us;
     gboolean       user_ever_activated;
     GHashTable   *canvas_states;
+    GPtrArray    *canvas_retired;
+    int           canvas_calls;
     ns_image_cache *image_cache;
     struct ns_anim *anim;
     GHashTable   *js_image_loads;
