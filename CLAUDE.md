@@ -176,17 +176,21 @@ The JavaScript engine is
 [quickjs-ng](https://github.com/quickjs-ng/quickjs), consumed as an
 **upstream meson subproject** pinned to a commit
 (`subprojects/quickjs-ng.wrap`, currently master `9b06171`, after
-v0.17.0) — no in-tree fork. The wrap carries five patches
+v0.17.0) — no in-tree fork. The wrap carries six patches
 (`subprojects/packagefiles/`): one changes how it links on Windows,
 `quickjs-ng-test262.patch` fixes the test262 failures upstream still has,
 so the engine passes every test its own `test262.conf` enables,
 `quickjs-ng-json-number.patch` makes `JSON.parse` convert numbers without
 the C library's locale-dependent `strtod()`,
 `quickjs-ng-regexp-first-char.patch` lets a regexp search skip the start
-positions where its first character cannot match, and
+positions where its first character cannot match,
 `quickjs-ng-v8-type-errors.patch` words property-access and call TypeErrors
 as V8 does, naming the callee, since bot detection reads those messages to
-identify the engine. Keep these patches small and send their fixes
+identify the engine, and `quickjs-ng-external-buffer-transfer.patch` makes
+`ArrayBuffer.prototype.transfer()` refuse a buffer whose memory the engine
+does not own — a `WebAssembly.Memory` buffer, which would otherwise move
+the linear memory's address into a buffer nothing detaches when the memory
+grows or its instance is freed. Keep these patches small and send their fixes
 upstream; when the pin moves, drop the hunks upstream has taken. `meson setup` uses a system quickjs-ng when it finds
 one, and otherwise fetches it and exposes it as the `libquickjs`
 dependency. The browser includes only the public `<quickjs.h>`. A
@@ -202,7 +206,8 @@ single-realm, no-JIT edition.
 instead (`subprojects/quickjs.wrap`, pinned to the 2026-06-04 release
 commit, built by the meson file in `subprojects/packagefiles/quickjs/`,
 since upstream ships none, plus one patch so `Array.prototype.sort` always
-calls its comparator). The meson option defines `NS_QUICKJS_ORIGINAL`, and
+calls its comparator and the same external-buffer transfer refusal,
+`quickjs-external-buffer-transfer.patch`). The meson option defines `NS_QUICKJS_ORIGINAL`, and
 `src/quickjs_compat.h` then maps the quickjs-ng API the engine uses onto
 the original's public API. Keep writing against the quickjs-ng API; when a
 new quickjs-ng-only call is used, add its shim to `src/quickjs_compat.c`
@@ -380,7 +385,9 @@ built with quickjs-ng 0.16.1 while `quickjs-ng.wrap` pinned v0.17.0
 (and lexbor sat at v3.0.0 against a v3.0.1 pin).
 
 - `scripts/check-subprojects.sh` compares every git-wrap checkout with
-  its pinned revision and exits non-zero on any mismatch.
+  its pinned revision, checks that each of the wrap's `diff_files`
+  patches is applied (a patch added to a wrap later never reaches an
+  existing checkout either), and exits non-zero on any mismatch.
   `pack-windows.sh`, `pack-linux.sh`, `pack-appimage.sh` and
   `pack-srpm.sh` run it first, so the installer, MSIX, zip, deb, rpm,
   AppImage and SRPM builds refuse to package a stale tree. Never bypass

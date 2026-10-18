@@ -1,0 +1,11 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -56902,6 +56902,8 @@
+         return JS_EXCEPTION;
+     if (abuf->detached)
+         return JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
++    if (!abuf->free_func)
++        return JS_ThrowTypeError(ctx, "cannot transfer an externally managed ArrayBuffer");
+     pmax_len = NULL;
+     if (!transfer_to_fixed_length) {
+         if (array_buffer_is_resizable(abuf)) { // carry over maxByteLength

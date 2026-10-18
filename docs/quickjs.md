@@ -18,7 +18,7 @@ is fetched and built.
 | Source | [quickjs-ng/quickjs](https://github.com/quickjs-ng/quickjs) | [bellard/quickjs](https://github.com/bellard/quickjs), the original engine |
 | Wrap | `subprojects/quickjs-ng.wrap`; a system quickjs-ng is preferred when found | `subprojects/quickjs.wrap`, always the subproject |
 | Version | master `9b06171` (after v0.17.0) | release 2026-06-04, pinned by commit `3d5e064` |
-| Local patches | Windows link fix; test262 conformance fixes; locale-independent `JSON.parse` numbers; regexp first-character search | `Array.prototype.sort` always calls the comparator |
+| Local patches | Windows link fix; test262 conformance fixes; locale-independent `JSON.parse` numbers; regexp first-character search; V8-worded TypeErrors; no `transfer()` of externally managed buffers | `Array.prototype.sort` always calls the comparator; no `transfer()` of externally managed buffers |
 | `about:northstar` | `JavaScript (quickjs-ng) 0.17.0` | `JavaScript (QuickJS) 2026-06-04` |
 | CI | every workflow | none; build it locally (see below) |
 
@@ -40,12 +40,19 @@ same defines (`_GNU_SOURCE`, `CONFIG_VERSION`, `-fwrapv`, and
 `__USE_MINGW_ANSI_STDIO` on Windows) into a static library. Nothing is
 installed.
 
-One source patch rides on top, named by `diff_files`:
-`quickjs-sort-calls-comparator.patch`. The original `Array.prototype.sort`
+Two source patches ride on top, named by `diff_files`.
+`quickjs-sort-calls-comparator.patch`: the original `Array.prototype.sort`
 skips the comparator when both values are the same, which V8,
 SpiderMonkey, JavaScriptCore and quickjs-ng never do. jQuery 4's
 `uniqueSort` counts on that call to spot duplicates, so on the unpatched
 engine `$(a).add(a)` and `.closest()` return the same element twice.
+`quickjs-external-buffer-transfer.patch`: `ArrayBuffer.prototype.transfer()`
+refuses a buffer created without a free function, which in the browser is
+only a `WebAssembly.Memory` buffer. Unpatched, a same-length transfer moves
+the linear memory's address into a new buffer that nothing detaches when the
+memory grows or its instance is freed, and any other length calls the
+missing free function. quickjs-ng takes the same fix as
+`quickjs-ng-external-buffer-transfer.patch`.
 
 To move to a newer release, point `revision` in the wrap at the new release
 commit, run `meson subprojects update --reset quickjs`, regenerate the patch

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-subprojects.sh: fail when a subprojects/ checkout is not at the revision its .wrap pins.
+# check-subprojects.sh: fail when a subprojects/ checkout is not at its .wrap's pinned revision with its patches applied.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -41,6 +41,13 @@ for wrap in "$ROOT"/subprojects/*.wrap; do
             stale=1
             ;;
     esac
+    for patch in $(wrap_value "$wrap" diff_files | tr ',' ' '); do
+        if ! git -C "$dir" apply --reverse --check \
+                "$ROOT/subprojects/packagefiles/$patch" 2>/dev/null; then
+            echo "check-subprojects: $name lacks $patch, which $(basename "$wrap") applies" >&2
+            stale=1
+        fi
+    done
 done
 
 if [ "$stale" -ne 0 ]; then

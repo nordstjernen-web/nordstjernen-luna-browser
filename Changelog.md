@@ -150,6 +150,19 @@ Significant changes in each release:
   The Linux binary now asks for 2 MiB default thread stacks, which musl
   honours and glibc, already at 8 MiB, ignores.
 
+* Security: `WebAssembly.Memory`'s `buffer` can no longer be moved out
+  with `ArrayBuffer.prototype.transfer()`. The buffer views the
+  instance's linear memory, which the engine does not own; a transfer of
+  the same length handed that address to a new buffer that nothing
+  detached, so after `memory.grow()` remapped the memory, or the instance
+  was freed, the page read and wrote freed memory. Both engines now refuse
+  to transfer a buffer whose memory they do not own, with the `TypeError`
+  other browsers throw (`quickjs-ng-external-buffer-transfer.patch`,
+  `quickjs-external-buffer-transfer.patch`), and
+  `scripts/check-subprojects.sh` now also fails when a checkout lacks one
+  of its wrap's patches, as one downloaded before a patch was added does:
+  delete it and download it again.
+
 1.0.14:
 =======
 * Security: fixes from a source-wide review on 2026-10-10. Each was

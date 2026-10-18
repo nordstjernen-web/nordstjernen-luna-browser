@@ -1,0 +1,11 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -59827,6 +59827,8 @@
+         return JS_ThrowTypeErrorImmutableArrayBuffer(ctx);
+     if (abuf->detached)
+         return JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
++    if (!abuf->realloc_func)
++        return JS_ThrowTypeError(ctx, "cannot transfer an externally managed ArrayBuffer");
+     pmax_len = NULL;
+     if (magic == JS_ARRAY_BUFFER_TRANSFER) {
+         if (array_buffer_is_resizable(abuf)) { // carry over maxByteLength
