@@ -197,6 +197,9 @@ Significant changes in each release:
   headers that ns-pango needs, plus the AV1, VP9 and Opus decoders,
   instead of the system Pango it no longer uses. The musl package's
   README lists the matching runtime packages.
+* The Windows release packaging (zip, installer and MSIX) links with lld
+  when it builds with clang, since clang's link-time optimisation could
+  not load the GNU linker plugin it needs in MSYS2's MINGW64.
 
 1.0.14:
 =======
