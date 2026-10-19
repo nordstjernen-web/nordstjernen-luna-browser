@@ -63,7 +63,6 @@ cp "$ROOT"/data/icons/hicolor/scalable/apps/northstar*.svg \
    "$ROOT"/data/icons/hicolor/scalable/apps/northstar.gif \
    "$STAGE/data/icons/hicolor/scalable/apps/"
 cp "$ROOT/data/northstar.desktop" "$STAGE/data/"
-cp "$ROOT/data/splash.gif" "$STAGE/data/"
 
 cp "$ROOT/README.md" "$STAGE/"
 cp "$ROOT/THIRD-PARTY-LICENSES.md" "$STAGE/"

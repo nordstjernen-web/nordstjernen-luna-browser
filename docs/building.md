@@ -382,7 +382,7 @@ verified by running the browser.
 | `ci-pull-image.sh` | Pull a Docker official image for CI from Docker Hub, `mirror.gcr.io` or ECR Public, whichever serves it. |
 | `render-screenshots.sh` | Render each URL listed in `data/screenshots/sites.txt` to a PNG beside it. |
 | `speedometer-bench.sh`, `speedometer4-bench.sh`, `sample-profile.sh` | Benchmarks and a sampling profiler. |
-| `gen-architecture.py`, `gen-badge.sh`, `gen-splash.py`, `gen-splash.sh`, `gen-windows-icon.py` | Regenerate the architecture diagram, the badge, the splash and the Windows icon. |
+| `gen-architecture.py`, `gen-badge.sh`, `gen-windows-icon.py` | Regenerate the architecture diagram, the badge and the Windows icon. |
 | `embed-text.py`, `verify-polyfills.py`, `verify-polyfills.js` | Build helpers: embed the JS polyfills and hooks, check the polyfills. |
 
 ## Definition of done

@@ -2698,43 +2698,6 @@ about_logo_markup(void)
                            "aria-hidden=\"true\">", uri);
 }
 
-static const char *
-about_splash_data_uri(void)
-{
-    static char *cached = NULL;
-    if (cached) return cached;
-
-    static const char *const gif_paths[] = {
-        "share/northstar/splash.gif",
-        "../share/northstar/splash.gif",
-        "../Resources/share/northstar/splash.gif",
-        "../../../data/splash.gif",
-        "data/splash.gif",
-        NULL,
-    };
-    gsize gif_len = 0;
-    char *gif = about_read_first(gif_paths, &gif_len);
-    if (!gif) return NULL;
-    gchar *b64 = g_base64_encode((const guchar *)gif, gif_len);
-    g_free(gif);
-    cached = g_strconcat("data:image/gif;base64,", b64, NULL);
-    g_free(b64);
-    return cached;
-}
-
-static char *
-about_splash_markup(void)
-{
-    const char *uri = about_splash_data_uri();
-    if (!uri) return g_strdup("");
-    return g_strdup_printf(
-        "<img class=\"splash\" src=\"%s\" "
-        "alt=\"Northstar " NS_VERSION " splash\" "
-        "style=\"display:block;width:auto;max-width:96%%;height:auto;"
-        "margin:2px auto 36px;border-radius:4px;\">",
-        uri);
-}
-
 static char *
 about_substitute(const char *template_text,
                  const char *placeholder, const char *value)
@@ -4086,7 +4049,6 @@ static const char k_about_start_template[] =
     " .links { color:#8b93a1; } }\n"
     "</style></head>"
     "<body><main class=\"wrap\">"
-    "__ND_SPLASH__"
     "<form class=\"search\" id=\"dsearch\">"
     "<input id=\"sq\" name=\"q\" autocomplete=\"off\" autofocus dir=\"auto\""
     " aria-label=\"Search the web\""
@@ -4575,14 +4537,9 @@ synthesize_about_response(const char *url, const char *top_url,
                                            logo_markup);
         g_free(logo_markup);
         g_free(with_name);
-        char *splash_markup = about_splash_markup();
-        char *with_splash = about_substitute(with_logo, "__ND_SPLASH__",
-                                             splash_markup);
-        g_free(splash_markup);
-        g_free(with_logo);
-        char *body = about_substitute(with_splash, "__ND_TAGLINE__",
+        char *body = about_substitute(with_logo, "__ND_TAGLINE__",
                                       about_start_tagline());
-        g_free(with_splash);
+        g_free(with_logo);
         g_byte_array_append(resp->body, (const guint8 *)body,
                             (guint)strlen(body));
         g_free(body);

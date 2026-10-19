@@ -43,6 +43,10 @@ Significant changes in each release:
   internet-browser` picks which one the name starts; the Windows
   installer adds it as an App Paths alias and the MSIX package as an app
   execution alias.
+* The animated cartoon splash is gone from `about:start`, which now
+  opens on the search row. `data/splash.gif` is no longer installed or
+  packaged, and `scripts/gen-splash.py` and `scripts/gen-splash.sh`,
+  which drew it, are removed.
 
 1.0.15:
 =======
