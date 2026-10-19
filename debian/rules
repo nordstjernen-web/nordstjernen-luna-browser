@@ -22,3 +22,4 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	meson install -C obj-$(DEB_HOST_GNU_TYPE) \
 		--destdir $(CURDIR)/debian/northstar --skip-subprojects
+	rm debian/northstar/usr/bin/internet-browser

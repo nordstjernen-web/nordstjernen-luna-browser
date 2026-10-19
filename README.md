@@ -178,6 +178,19 @@ that `meson setup` fetches; see
 [docs/building.md](docs/building.md#updating-a-pinned-dependency) for how
 a pin is moved.
 
+### The `internet-browser` command
+
+`meson install` puts `internet-browser` beside `northstar` in the binary
+directory, a symbolic link to it, so `internet-browser https://example.com`
+starts Northstar. Nordstjernen and Southstar install the same name, so the
+command opens whichever of the browsers is installed. The `.deb` and `.rpm`
+packages register it with `update-alternatives` instead of shipping the
+link, so the browsers install side by side and
+`sudo update-alternatives --config internet-browser` chooses the one it
+runs. On Windows the installer registers `internet-browser` as an App
+Paths alias (the Run dialog and `start internet-browser` find it) and the
+MSIX package declares it as an app execution alias.
+
 ## Dependencies
 
 Northstar's engine is written from scratch — it contains no forked

@@ -37,3 +37,11 @@ executable(
   link_args: northstar_exe_link_args + northstar_gtk_platform_link_args,
   install: true,
 )
+
+if host_machine.system() != 'windows'
+  install_symlink(
+    'internet-browser',
+    pointing_to: 'northstar',
+    install_dir: get_option('bindir'),
+  )
+endif

@@ -38,6 +38,8 @@ BuildRequires:  pkgconfig(sdl2)
 BuildRequires:  pkgconfig(sqlite3)
 BuildRequires:  pkgconfig(uchardet)
 Requires:       hicolor-icon-theme
+Requires(post): update-alternatives
+Requires(postun): update-alternatives
 Recommends:     myspell-en_US
 
 %description
@@ -75,13 +77,27 @@ test -f meson.build
 
 %install
 %meson_install
+mkdir -p %{buildroot}%{_sysconfdir}/alternatives
+ln -sf %{_sysconfdir}/alternatives/internet-browser %{buildroot}%{_bindir}/internet-browser
+touch %{buildroot}%{_sysconfdir}/alternatives/internet-browser
 
 %suse_update_desktop_file org.northstar.WebBrowser
+
+%post
+%{_sbindir}/update-alternatives --install %{_bindir}/internet-browser \
+    internet-browser %{_bindir}/northstar 50
+
+%postun
+if [ ! -f %{_bindir}/northstar ]; then
+    %{_sbindir}/update-alternatives --remove internet-browser %{_bindir}/northstar
+fi
 
 %files
 %doc README.md
 %license %{_datadir}/northstar/LICENSE
 %{_bindir}/northstar
+%{_bindir}/internet-browser
+%ghost %{_sysconfdir}/alternatives/internet-browser
 %{_datadir}/applications/org.northstar.WebBrowser.desktop
 %{_datadir}/metainfo/org.northstar.WebBrowser.metainfo.xml
 %{_datadir}/northstar/
