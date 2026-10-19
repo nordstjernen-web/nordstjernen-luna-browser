@@ -18,6 +18,16 @@ Significant changes in each release:
   stack; and SVG path data with a number after closepath (`M0 0Z1`)
   looped until memory ran out, both in `getTotalLength()` and when the
   path was painted.
+* Security: four more crash fixes backported from Nordstjernen.
+  `getAttributeNames()` and `querySelectorAll()` (its class, tag and key
+  index paths) stored results into the returned array while still
+  walking the attribute list or index bucket, so a setter the page
+  defined on `Array.prototype` could remove the attribute or call
+  `document.open()` and free what the walk was reading; reading an SVG
+  length such as `rect.width` let an `Object.prototype` setter free the
+  attribute value still in use; and a WebAssembly call with an
+  `externref` argument followed by a numeric one whose `valueOf` made a
+  nested call could free the externref's box before the call used it.
 * Linux: the browser starts again on NVIDIA's proprietary driver under
   X11. The Landlock sandbox let the GUI read `/dev/dri` but not open the
   render nodes read-write, and gave no access to `/dev/nvidia*` at all,
