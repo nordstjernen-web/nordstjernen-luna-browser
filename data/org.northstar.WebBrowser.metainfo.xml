@@ -28,13 +28,13 @@
   <launchable type="desktop-id">org.northstar.WebBrowser.desktop</launchable>
 
   <url type="homepage">https://nordstjernen.org</url>
-  <url type="bugtracker">https://github.com/nordstjernen-web/northstar-browser/issues</url>
-  <url type="vcs-browser">https://github.com/nordstjernen-web/northstar-browser</url>
+  <url type="bugtracker">https://github.com/nordstjernen-web/nordstjernen-luna-browser/issues</url>
+  <url type="vcs-browser">https://github.com/nordstjernen-web/nordstjernen-luna-browser</url>
 
   <screenshots>
     <screenshot type="default">
       <caption>Northstar showing a Wikipedia article</caption>
-      <image>https://raw.githubusercontent.com/nordstjernen-web/northstar-browser/main/docs/screenshot.png</image>
+      <image>https://raw.githubusercontent.com/nordstjernen-web/nordstjernen-luna-browser/main/docs/screenshot.png</image>
     </screenshot>
   </screenshots>
 

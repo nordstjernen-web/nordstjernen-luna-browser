@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Northstar
 Upstream-Contact: Andreas Røsdal <andreas.rosdal@gmail.com>
-Source: https://github.com/nordstjernen-web/northstar-browser
+Source: https://github.com/nordstjernen-web/nordstjernen-luna-browser
 Comment:
  Northstar is the open-source GPL edition of the Nordstjernen project.
  The browser engine is original C written from scratch — it is not a

@@ -245,8 +245,8 @@ License, version 3 or later** — see [LICENSE](LICENSE).
 Project home: <https://nordstjernen.org/northstar-browser/> · Copyright 2026 Andreas Røsdal.
 
 ## Builds
-[![linux](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/linux.yml)
-[![linux-i386](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/linux-i386.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/linux-i386.yml)
-[![musl](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/musl.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/musl.yml)
-[![macos](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/macos.yml)
-[![windows](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-browser/actions/workflows/windows.yml)
+[![linux](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/linux.yml)
+[![linux-i386](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/linux-i386.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/linux-i386.yml)
+[![musl](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/musl.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/musl.yml)
+[![macos](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/macos.yml)
+[![windows](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-luna-browser/actions/workflows/windows.yml)

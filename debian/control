@@ -33,9 +33,9 @@ Build-Depends:
  zlib1g-dev,
  python3,
 Standards-Version: 4.7.2
-Homepage: https://github.com/nordstjernen-web/northstar-browser
-Vcs-Browser: https://github.com/nordstjernen-web/northstar-browser
-Vcs-Git: https://github.com/nordstjernen-web/northstar-browser.git
+Homepage: https://github.com/nordstjernen-web/nordstjernen-luna-browser
+Vcs-Browser: https://github.com/nordstjernen-web/nordstjernen-luna-browser
+Vcs-Git: https://github.com/nordstjernen-web/nordstjernen-luna-browser.git
 Rules-Requires-Root: no
 
 Package: northstar

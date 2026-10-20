@@ -35,7 +35,7 @@ git clone --depth 1 https://github.com/web-platform-tests/wpt.git ~/wpt
 cd ~/wpt && ./wpt make-hosts-file | sudo tee -a /etc/hosts
 cd ~/wpt && ./wpt serve &
 
-cd northstar-browser
+cd nordstjernen-luna-browser
 scripts/dev.sh build
 scripts/wpt-run.sh --wpt-root=$HOME/wpt --no-serve dom/nodes css/cssom
 ```

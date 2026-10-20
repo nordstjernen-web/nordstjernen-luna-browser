@@ -28,6 +28,10 @@ Significant changes in each release:
   attribute value still in use; and a WebAssembly call with an
   `externref` argument followed by a numeric one whose `valueOf` made a
   nested call could free the externref's box before the call used it.
+* The repository moved to
+  <https://github.com/nordstjernen-web/nordstjernen-luna-browser>; the
+  README badges, AppStream metadata, Debian packaging and man page link
+  there.
 * Linux: the browser starts again on NVIDIA's proprietary driver under
   X11. The Landlock sandbox let the GUI read `/dev/dri` but not open the
   render nodes read-write, and gave no access to `/dev/nvidia*` at all,
