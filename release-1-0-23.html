@@ -13,7 +13,7 @@
 <div class="frame">
 
   <div class="header">
-    <a class="bestviewed" href="https://github.com/nordstjernen-web/nordstjernen-browser">
+    <a class="bestviewed" href="https://github.com/nordstjernen-web/nordstjernen-sol-browser">
       <img src="assets/best-viewed-in-nordstjernen.png" width="144" height="50" alt="Best viewed in Nordstjernen">
     </a>
     <div class="brand">
@@ -28,14 +28,14 @@
     <a href="index.html#news">News</a>
     <a href="screenshots.html">Screenshots</a>
     <a href="download.html">Download</a>
-    <a href="https://github.com/nordstjernen-web/nordstjernen-browser">GitHub</a>
+    <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser">GitHub</a>
     <input type="checkbox" id="nav-more" class="nav-more-toggle">
     <label class="nav-more-btn" for="nav-more">More <span aria-hidden="true">&#9662;</span></label>
     <div class="nav-sec">
       <a href="index.html#specs">Specifications</a>
       <a href="northstar-browser/">Northstar</a>
       <a href="https://github.com/nordstjernen-web/southstar-browser">Southstar</a>
-      <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases">Releases</a>
+      <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases">Releases</a>
       <a href="https://discord.gg/4W959nW5vF">Discord</a>
     </div>
   </nav>
@@ -46,7 +46,7 @@
         <h1>Nordstjernen Browser 1.0.23 released!</h1>
         <p>Today, 8 August 2026, we are pleased to announce the release of <b>Nordstjernen 1.0.23</b>. The headline is that the browser prints: <code>Ctrl+P</code> lays the page out for paper and hands the sheets to the operating system&rsquo;s own print dialog. Underneath it are the layout fixes that came out of getting there &mdash; correct <code>offsetLeft</code> and <code>offsetTop</code>, flexbox static positions, <code>flex-wrap: wrap-reverse</code> and CSS Scroll Snap &mdash; and a JavaScript engine moved up to quickjs-ng 0.16.1. Nordstjernen is a web browser, written from scratch in C, focused on supporting the HTML and CSS standards. It runs on Windows, macOS and Linux, with builds for Android, iOS, FreeBSD, NetBSD and the JVM. Nordstjernen is built in Norway.</p>
 
-        <p>Nordstjernen Browser version 1.0.23 is available now! <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.23">Read the full release notes here</a>, or <a href="#download">jump straight to the downloads</a>.</p>
+        <p>Nordstjernen Browser version 1.0.23 is available now! <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.23">Read the full release notes here</a>, or <a href="#download">jump straight to the downloads</a>.</p>
 
         <p>It ships alongside <a href="northstar-release-1-0-7.html">Northstar 1.0.7</a>, the GPL-licensed single-process edition of the same engine.</p>
 
@@ -70,11 +70,11 @@
           <li><b>Licences and vendored sources.</b> The bundled MP3 decoder and the WebGPU headers match their upstreams again &mdash; the headers move to wgpu-native v29.0.1.1, the release the build actually downloads. The third-party notices name every library in the binary: pl_mpeg and minimp3 are compiled into it and were listed nowhere, the wgpu-native headers were missing too, and lexbor&rsquo;s <code>NOTICE</code> file, which Apache 2.0 requires be propagated, was recorded as not existing.</li>
           <li><b>Packaging that builds on a clean machine.</b> A distribution package built from a release tarball now declares the FFmpeg <code>libav*</code> libraries it needs &mdash; meson has required them on Linux and Windows since inline WebM landed, but the Debian control file, the OBS and Fedora spec files, the Alpine APKBUILD and the source-RPM recipe all still described them as optional, so each of those builds failed at configure time. A package built where the build host has no network reaches the system Pango, since ns-pango is cloned by meson at setup time and an OBS worker, an sbuild chroot, a mock root and Alpine&rsquo;s build phase all forbid that. The source RPM carries a version rpm accepts and installs everything it built, and the Debian tree has the changelog <code>dpkg-buildpackage</code> needs.</li>
           <li><b>Android, iOS and the JVM compile again.</b> Each of those hosts builds its bridge against the engine&rsquo;s headers with nothing on the include path but <code>src/</code>, and printing had put <code>&lt;glib.h&gt;</code> and <code>print.h</code> into three of them. Every print entry point moves to <code>print.h</code> beside the pagination it drives, and the three headers are self-contained again. The Android bridge also attaches its in-process renderer again, after the callback that hands one over began returning a connection where Android still returned a status code.</li>
-          <li><b>Documentation and build instructions.</b> The build instructions install what the build requires: the Debian/Ubuntu, Fedora and openSUSE package lines omitted FFmpeg, so following them exactly produced a failing configure. The documentation stops pointing at files that are not there, the threading model no longer describes a per-tab worker thread that the move to process-per-tab removed, and every link to the project&rsquo;s own repository points at <a href="https://github.com/nordstjernen-web/nordstjernen-browser">nordstjernen-web/nordstjernen-browser</a>, its new home. The NetBSD build no longer rests on one package mirror.</li>
+          <li><b>Documentation and build instructions.</b> The build instructions install what the build requires: the Debian/Ubuntu, Fedora and openSUSE package lines omitted FFmpeg, so following them exactly produced a failing configure. The documentation stops pointing at files that are not there, the threading model no longer describes a per-tab worker thread that the move to process-per-tab removed, and every link to the project&rsquo;s own repository points at <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser">nordstjernen-web/nordstjernen-browser</a>, its new home. The NetBSD build no longer rests on one package mirror.</li>
         </ul>
 
         <h2>about Nordstjernen</h2>
-        <p><b>HTML Standard.</b> Behaviour is measured against the spec text, section by section, not against another browser &mdash; 140 spec rows fully implemented, 31 partial, 0 absent across WHATWG HTML sections 1&ndash;16 as of July 2026. Against the <a href="https://github.com/web-platform-tests/wpt">Web Platform Tests</a>, the full wpt-fast tree passes 88.4% of subtests overall &mdash; 91.7% of the HTML suite. See <a href="https://github.com/nordstjernen-web/nordstjernen-browser/blob/main/docs/HTML-compatibility.md">docs/HTML-compatibility.md</a>.</p>
+        <p><b>HTML Standard.</b> Behaviour is measured against the spec text, section by section, not against another browser &mdash; 140 spec rows fully implemented, 31 partial, 0 absent across WHATWG HTML sections 1&ndash;16 as of July 2026. Against the <a href="https://github.com/web-platform-tests/wpt">Web Platform Tests</a>, the full wpt-fast tree passes 88.4% of subtests overall &mdash; 91.7% of the HTML suite. See <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/blob/main/docs/HTML-compatibility.md">docs/HTML-compatibility.md</a>.</p>
         <p><b>Secure.</b> Process-per-tab design &mdash; each tab's engine runs in its own sandboxed process (seccomp + Landlock on Linux), talking to the UI over IPC and shared-memory framebuffers &middot; no JIT.</p>
         <p><b>Minimalism.</b> The core engine is about 185,000 lines of project C and headers (plus a thin GTK 4 shell), excluding the vendored libraries and generated assets &mdash; small enough for one person to read and audit end-to-end.</p>
         <p><b>Private.</b> Nordstjernen has no JIT so it is much more secure, and can still be fast enough. It ships no telemetry of any kind, and deliberately includes no AI assistant and no AI-style web APIs.</p>
@@ -83,42 +83,42 @@
         <h2>news</h2>
         <p><span class="date">8&nbsp;AUG&nbsp;2026</span> &middot;
         Nordstjernen <b>1.0.23</b> released &mdash; printing with <code>@page</code> and print stylesheets, correct <code>offsetLeft</code>/<code>offsetTop</code>, flexbox static positions, CSS Scroll Snap, and quickjs-ng 0.16.1.
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.23">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.23">Release notes &raquo;</a></p>
 
         <p><span class="date">8&nbsp;AUG&nbsp;2026</span> &middot;
         Northstar <b>1.0.7</b> released &mdash; printing, a rebuilt about:start sky and earth, CSS Scroll Snap, frames that talk to their parent, and quickjs-ng 0.16.1.
         <a href="northstar-release-1-0-7.html">Announcement &raquo;</a> &middot;
-        <a href="https://github.com/nordstjernen-web/northstar-browser/releases/tag/1.0.7">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-luna-browser/releases/tag/1.0.7">Release notes &raquo;</a></p>
 
         <p><span class="date">31&nbsp;JUL&nbsp;2026</span> &middot;
         Nordstjernen <b>1.0.22</b> released &mdash; real-site layout fixes, a rebuilt grid, faster text through ns-pango, a reworked toolbar, and a much more capable Android app.
         <a href="release-1-0-22.html">Announcement &raquo;</a> &middot;
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.22">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.22">Release notes &raquo;</a></p>
 
         <p><span class="date">31&nbsp;JUL&nbsp;2026</span> &middot;
         Northstar <b>1.0.6</b> released &mdash; a rebuilt grid, an indexed CSS cascade, Web Audio that renders, and relative colour syntax.
         <a href="northstar-release-1-0-6.html">Announcement &raquo;</a> &middot;
-        <a href="https://github.com/nordstjernen-web/northstar-browser/releases/tag/1.0.6">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-luna-browser/releases/tag/1.0.6">Release notes &raquo;</a></p>
 
         <p><span class="date">28&nbsp;JUL&nbsp;2026</span> &middot;
         Nordstjernen <b>1.0.21</b> released &mdash; Media Queries Level 4, in-engine SVG, HLS and DASH streaming, a redesigned about:start, and honest client hints.
         <a href="release-1-0-21.html">Announcement &raquo;</a> &middot;
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.21">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.21">Release notes &raquo;</a></p>
 
         <p><span class="date">22&nbsp;JUL&nbsp;2026</span> &middot;
         Nordstjernen <b>1.0.20</b> released &mdash; WebGL on by default, a blinking caret, site-compatibility and memory-safety work.
         <a href="release-1-0-20.html">Announcement &raquo;</a> &middot;
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.20">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.20">Release notes &raquo;</a></p>
 
         <p><span class="date">5&nbsp;JUN&nbsp;2026</span> &middot;
         Nordstjernen <b>1.0.0</b> released &mdash; the first stable release.
         <a href="release-1-0-0.html">Announcement &raquo;</a> &middot;
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.0">Release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.0">Release notes &raquo;</a></p>
 
         <a id="download"></a>
         <h2>download</h2>
         <p>Latest tagged release: Nordstjernen <b>1.0.23</b> &mdash; released 8 August 2026.
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.23">full release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.23">full release notes &raquo;</a></p>
 
         <p>Nordstjernen is also available on the
         <a href="https://apps.microsoft.com/detail/9nw8t7w5z4pl">Microsoft Store</a> and
@@ -127,40 +127,40 @@
         <table class="spec dl">
           <tr>
             <th>Windows</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-windows-x86_64.zip">nordstjernen-windows-x86_64.zip</a> &middot;
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-windows-x86_64.zip">nordstjernen-windows-x86_64.zip</a> &middot;
                 <a href="https://apps.microsoft.com/detail/9nw8t7w5z4pl">Microsoft Store</a></td>
           </tr>
           <tr>
             <th>macOS</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-macos.dmg">nordstjernen-macos.dmg</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-macos.dmg">nordstjernen-macos.dmg</a></td>
           </tr>
           <tr>
             <th>Debian</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-debian-amd64.deb">nordstjernen-debian-amd64.deb</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-debian-amd64.deb">nordstjernen-debian-amd64.deb</a></td>
           </tr>
           <tr>
             <th>Ubuntu</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-ubuntu-amd64.deb">nordstjernen-ubuntu-amd64.deb</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-ubuntu-amd64.deb">nordstjernen-ubuntu-amd64.deb</a></td>
           </tr>
           <tr>
             <th>openSUSE</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-opensuse-x86_64.rpm">nordstjernen-opensuse-x86_64.rpm</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-opensuse-x86_64.rpm">nordstjernen-opensuse-x86_64.rpm</a></td>
           </tr>
           <tr>
             <th>Linux (portable)</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-linux-x86_64.zip">nordstjernen-linux-x86_64.zip</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-linux-x86_64.zip">nordstjernen-linux-x86_64.zip</a></td>
           </tr>
           <tr>
             <th>Alpine (musl)</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-alpine-x86_64.apk">nordstjernen-alpine-x86_64.apk</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-alpine-x86_64.apk">nordstjernen-alpine-x86_64.apk</a></td>
           </tr>
           <tr>
             <th>FreeBSD (portable)</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-freebsd-x86_64.zip">nordstjernen-freebsd-x86_64.zip</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-freebsd-x86_64.zip">nordstjernen-freebsd-x86_64.zip</a></td>
           </tr>
           <tr>
             <th>NetBSD (portable)</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-netbsd-x86_64.zip">nordstjernen-netbsd-x86_64.zip</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-netbsd-x86_64.zip">nordstjernen-netbsd-x86_64.zip</a></td>
           </tr>
           <tr>
             <th>Android</th>
@@ -168,16 +168,16 @@
           </tr>
           <tr>
             <th>Java API (JDK 21)</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.23/nordstjernen-java.jar">nordstjernen-java.jar</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.23/nordstjernen-java.jar">nordstjernen-java.jar</a></td>
           </tr>
           <tr>
             <th>Source</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/archive/refs/tags/1.0.23.tar.gz">1.0.23.tar.gz</a> &middot;
-                <a href="https://github.com/nordstjernen-web/nordstjernen-browser/archive/refs/tags/1.0.23.zip">1.0.23.zip</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/archive/refs/tags/1.0.23.tar.gz">1.0.23.tar.gz</a> &middot;
+                <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/archive/refs/tags/1.0.23.zip">1.0.23.zip</a></td>
           </tr>
           <tr>
             <th>All releases</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases">github.com/nordstjernen-web/nordstjernen-browser/releases</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases">github.com/nordstjernen-web/nordstjernen-sol-browser/releases</a></td>
           </tr>
         </table>
 
@@ -185,7 +185,7 @@
 
   <div class="footer">
     Copyright &copy; 2026 the Nordstjernen project &middot;
-    <a href="https://github.com/nordstjernen-web/nordstjernen-browser/blob/main/License.md">GPL-3.0-or-later or NSL-1.0</a> &middot;
+    <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/blob/main/License.md">GPL-3.0-or-later or NSL-1.0</a> &middot;
     <a href="https://discord.gg/4W959nW5vF">Discord</a>
   </div>
 

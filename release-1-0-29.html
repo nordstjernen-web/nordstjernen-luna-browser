@@ -13,7 +13,7 @@
 <div class="frame">
 
   <div class="header">
-    <a class="bestviewed" href="https://github.com/nordstjernen-web/nordstjernen-browser">
+    <a class="bestviewed" href="https://github.com/nordstjernen-web/nordstjernen-sol-browser">
       <img src="assets/best-viewed-in-nordstjernen.png" width="144" height="50" alt="Best viewed in Nordstjernen">
     </a>
     <div class="brand">
@@ -28,14 +28,14 @@
     <a href="index.html#news">News</a>
     <a href="screenshots.html">Screenshots</a>
     <a href="download.html">Download</a>
-    <a href="https://github.com/nordstjernen-web/nordstjernen-browser">GitHub</a>
+    <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser">GitHub</a>
     <input type="checkbox" id="nav-more" class="nav-more-toggle">
     <label class="nav-more-btn" for="nav-more">More <span aria-hidden="true">&#9662;</span></label>
     <div class="nav-sec">
       <a href="index.html#specs">Specifications</a>
       <a href="northstar-browser/">Northstar</a>
       <a href="https://github.com/nordstjernen-web/southstar-browser">Southstar</a>
-      <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases">Releases</a>
+      <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases">Releases</a>
       <a href="https://discord.gg/4W959nW5vF">Discord</a>
     </div>
   </nav>
@@ -46,7 +46,7 @@
         <h1>Nordstjernen Browser 1.0.29 released!</h1>
         <p>On 5 October 2026 we released <b>Nordstjernen 1.0.29</b>. Pages are now drawn at the screen&rsquo;s real pixel density, so text and images are sharp on Retina and other HiDPI displays, and scrolling is smooth: the window keeps the page as tiles and moves them itself, so a busy script no longer stops the page from moving. Text fields get the clipboard and a right-click menu, signing in to Google reaches Gmail, text flows around floated pictures as in other browsers, and a security audit of the engine, the shell and the helpers closes a long list of memory-safety bugs. Nordstjernen is a web browser, written from scratch in C, focused on supporting the HTML and CSS standards. It runs on Windows, macOS and Linux, with builds for Android, iOS, FreeBSD, NetBSD and the JVM. Nordstjernen is built in Norway.</p>
 
-        <p>Nordstjernen Browser version 1.0.29 is available now, with a portable Linux zip and a Debian/Ubuntu package for each of Ubuntu 24.04, Ubuntu 26.04 and Debian 13. <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.29">Read the full release notes here</a>, or <a href="#download">jump straight to the downloads</a>. The previous release was <a href="release-1-0-28.html">1.0.28</a>.</p>
+        <p>Nordstjernen Browser version 1.0.29 is available now, with a portable Linux zip and a Debian/Ubuntu package for each of Ubuntu 24.04, Ubuntu 26.04 and Debian 13. <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.29">Read the full release notes here</a>, or <a href="#download">jump straight to the downloads</a>. The previous release was <a href="release-1-0-28.html">1.0.28</a>.</p>
 
         <p>&laquo; <a href="index.html">Back to nordstjernen.org</a></p>
 
@@ -75,39 +75,39 @@
         </div>
 
         <h2>about Nordstjernen</h2>
-        <p><b>HTML Standard.</b> Behaviour is measured against the spec text, section by section, not against another browser &mdash; 140 spec rows fully implemented, 31 partial, 0 absent across WHATWG HTML sections 1&ndash;16. See <a href="https://github.com/nordstjernen-web/nordstjernen-browser/blob/main/docs/HTML-compatibility.md">docs/HTML-compatibility.md</a>.</p>
+        <p><b>HTML Standard.</b> Behaviour is measured against the spec text, section by section, not against another browser &mdash; 140 spec rows fully implemented, 31 partial, 0 absent across WHATWG HTML sections 1&ndash;16. See <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/blob/main/docs/HTML-compatibility.md">docs/HTML-compatibility.md</a>.</p>
         <p><b>Secure.</b> Process-per-tab design &mdash; each tab's engine runs in its own sandboxed process (seccomp + Landlock on Linux), talking to the UI over IPC and shared-memory framebuffers &middot; no JIT.</p>
         <p><b>Minimalism.</b> The core engine is about 210,000 lines of project C and headers, excluding the vendored libraries and generated assets &mdash; small enough for one person to read and audit end-to-end.</p>
-        <p><b>Free software.</b> Dual-licensed under the <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU GPL, version 3 or later</a>, or the <a href="https://github.com/nordstjernen-web/nordstjernen-browser/blob/main/License.md">Nordstjernen Source License 1.0</a>, at your option.</p>
+        <p><b>Free software.</b> Dual-licensed under the <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU GPL, version 3 or later</a>, or the <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/blob/main/License.md">Nordstjernen Source License 1.0</a>, at your option.</p>
         <p><b>Private.</b> Nordstjernen ships no telemetry of any kind, and deliberately includes no AI assistant and no AI-style web APIs.</p>
         <p><b>The family.</b> <a href="northstar-browser/">Northstar</a> is the minimalist GPL edition of the same engine, and <a href="https://github.com/nordstjernen-web/southstar-browser">Southstar</a> is the Rust version: it starts from the Nordstjernen codebase and is being ported to Rust module by module.</p>
 
         <a id="download"></a>
         <h2>download</h2>
         <p>Nordstjernen <b>1.0.29</b> &mdash; released 5 October 2026.
-        <a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/tag/1.0.29">full release notes &raquo;</a></p>
+        <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/tag/1.0.29">full release notes &raquo;</a></p>
 
         <table class="spec dl">
           <caption class="sr-only">Nordstjernen 1.0.29 downloads</caption>
           <tr>
             <th scope="row">Linux (portable)</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.29/nordstjernen-1.0.29-linux-x86_64.zip">nordstjernen-1.0.29-linux-x86_64.zip</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.29/nordstjernen-1.0.29-linux-x86_64.zip">nordstjernen-1.0.29-linux-x86_64.zip</a></td>
           </tr>
           <tr>
             <th scope="row">Ubuntu 24.04</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.29/nordstjernen_1.0.29_ubuntu24.04_amd64.deb">nordstjernen_1.0.29_ubuntu24.04_amd64.deb</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.29/nordstjernen_1.0.29_ubuntu24.04_amd64.deb">nordstjernen_1.0.29_ubuntu24.04_amd64.deb</a></td>
           </tr>
           <tr>
             <th scope="row">Ubuntu 26.04</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.29/nordstjernen_1.0.29_ubuntu26.04_amd64.deb">nordstjernen_1.0.29_ubuntu26.04_amd64.deb</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.29/nordstjernen_1.0.29_ubuntu26.04_amd64.deb">nordstjernen_1.0.29_ubuntu26.04_amd64.deb</a></td>
           </tr>
           <tr>
             <th scope="row">Debian 13</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.29/nordstjernen_1.0.29_debian13_amd64.deb">nordstjernen_1.0.29_debian13_amd64.deb</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.29/nordstjernen_1.0.29_debian13_amd64.deb">nordstjernen_1.0.29_debian13_amd64.deb</a></td>
           </tr>
           <tr>
             <th scope="row">Checksums</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/releases/download/1.0.29/SHA256SUMS">SHA256SUMS</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/releases/download/1.0.29/SHA256SUMS">SHA256SUMS</a></td>
           </tr>
           <tr>
             <th scope="row">Windows</th>
@@ -119,8 +119,8 @@
           </tr>
           <tr>
             <th scope="row">Source</th>
-            <td><a href="https://github.com/nordstjernen-web/nordstjernen-browser/archive/refs/tags/1.0.29.tar.gz">1.0.29.tar.gz</a> &middot;
-                <a href="https://github.com/nordstjernen-web/nordstjernen-browser/archive/refs/tags/1.0.29.zip">1.0.29.zip</a></td>
+            <td><a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/archive/refs/tags/1.0.29.tar.gz">1.0.29.tar.gz</a> &middot;
+                <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/archive/refs/tags/1.0.29.zip">1.0.29.zip</a></td>
           </tr>
           <tr>
             <th scope="row">Other platforms</th>
@@ -132,7 +132,7 @@
 
   <div class="footer">
     Copyright &copy; 2026 the Nordstjernen project &middot;
-    <a href="https://github.com/nordstjernen-web/nordstjernen-browser/blob/main/License.md">GPL-3.0-or-later or NSL-1.0</a> &middot;
+    <a href="https://github.com/nordstjernen-web/nordstjernen-sol-browser/blob/main/License.md">GPL-3.0-or-later or NSL-1.0</a> &middot;
     <a href="https://discord.gg/4W959nW5vF">Discord</a>
   </div>
 
