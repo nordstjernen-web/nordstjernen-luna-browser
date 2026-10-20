@@ -1,4 +1,4 @@
-/* Northstar — JavaScript engine binding (QuickJS).
+/* Nordstjernen Luna — JavaScript engine binding (QuickJS).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -9245,7 +9245,7 @@ ns_audio_analysis_throw(JSContext *ctx, JSValueConst this_val,
         JS_NewString(ctx, "NotSupportedError"),
         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
     JS_DefinePropertyValueStr(ctx, err, "message",
-        JS_NewString(ctx, "Northstar does not implement Web Audio analysis"),
+        JS_NewString(ctx, "Nordstjernen Luna does not implement Web Audio analysis"),
         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
     JS_DefinePropertyValueStr(ctx, err, "code",
         JS_NewInt32(ctx, 9),
@@ -10473,7 +10473,7 @@ ns_media_set_media_keys(JSContext *ctx, JSValueConst this_val,
                       JS_NewString(ctx, "NotSupportedError"));
     JS_SetPropertyStr(ctx, err, "message",
                       JS_NewString(ctx,
-                          "Northstar does not implement EME / DRM"));
+                          "Nordstjernen Luna does not implement EME / DRM"));
     JS_SetPropertyStr(ctx, err, "code", JS_NewInt32(ctx, 9));
     JS_Call(ctx, resolvers[1], JS_UNDEFINED, 1, &err);
     JS_FreeValue(ctx, err);

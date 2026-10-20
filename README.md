@@ -1,29 +1,30 @@
-# Northstar web browser
+# Nordstjernen Luna web browser
 
-![Northstar showing a Wikipedia article](docs/screenshot.png)
+![Nordstjernen Luna showing a Wikipedia article](docs/screenshot.png)
 
-Northstar is a minimalist web browser written from scratch in C. Its
+Nordstjernen Luna is a minimalist web browser written from scratch in C. Its
 engine targets practical HTML5, modern CSS and JavaScript compatibility
 without embedding Gecko, WebKit, Blink or another browser engine. Linux
 is the primary platform; macOS and Windows are also supported.
 
-This repository is **Nordstjernen Luna**:
-<https://github.com/nordstjernen-web/nordstjernen-luna-browser>.
+Repository: <https://github.com/nordstjernen-web/nordstjernen-luna-browser>.
+Nordstjernen Luna was previously named Northstar; the executable is
+still `northstar`.
 
 **See [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) also, which is
 the most complete, fully featured web browser project we are making. Nordstjernen has builds for Windows, Linux, MacOs.**
 
-Northstar is licensed under the GNU General Public License, version 3 or
+Nordstjernen Luna is licensed under the GNU General Public License, version 3 or
 later.
 
 ## Multiple browser variants
-* This repo, [Nordstjernen Luna](https://github.com/nordstjernen-web/nordstjernen-luna-browser), is the Northstar web browser, a minimalist, simple and good web browser. This is more about research about browser tech.
+* This repo, [Nordstjernen Luna](https://github.com/nordstjernen-web/nordstjernen-luna-browser), is a minimalist, simple and good web browser. This is more about research about browser tech.
 * [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) is the Nordstjernen web browser, the most complete, fully featured web browser.
   
 We are doing web browser innovation, research and development, and part of this is 
 making multiple web browser variants to test and compare 
 
-![Best viewed in Northstar](docs/best-viewed-in-northstar.gif)
+![Best viewed in Nordstjernen Luna](docs/best-viewed-in-northstar.gif)
 
 **Web standards:** Behaviour is measured against the specification text,
 section by section, not against another browser. The engine runs
@@ -47,7 +48,7 @@ small enough for one person to read and audit end-to-end. See
 
 ## What this edition is
 
-This edition strips Northstar down to a tab-less, single-process
+This edition strips Nordstjernen down to a tab-less, single-process
 desktop browser, based on the
 [Nordstjernen project](https://github.com/nordstjernen-web/nordstjernen-sol-browser).
 It deliberately omits tabs, per-tab renderer processes, WebGL, WebGPU,
@@ -185,7 +186,7 @@ a pin is moved.
 
 `meson install` puts `internet-browser` beside `northstar` in the binary
 directory, a symbolic link to it, so `internet-browser https://example.com`
-starts Northstar. Nordstjernen and Southstar install the same name, so the
+starts Nordstjernen Luna. Nordstjernen Sol and Southstar install the same name, so the
 command opens whichever of the browsers is installed. The `.deb` and `.rpm`
 packages register it with `update-alternatives` instead of shipping the
 link, so the browsers install side by side and
@@ -196,7 +197,7 @@ MSIX package declares it as an app execution alias.
 
 ## Dependencies
 
-Northstar's engine is written from scratch — it contains no forked
+Nordstjernen Luna's engine is written from scratch — it contains no forked
 browser engine (no Gecko, WebKit, or Blink). It is the GPL edition of the
 [Nordstjernen project](https://github.com/nordstjernen-web/nordstjernen-sol-browser).
 
@@ -242,7 +243,7 @@ images), opusfile / vorbisfile (in-process Ogg audio), Enchant
 
 ## License
 
-Northstar is free software, licensed under the **GNU General Public
+Nordstjernen Luna is free software, licensed under the **GNU General Public
 License, version 3 or later** — see [LICENSE](LICENSE).
 
 Project home: <https://nordstjernen.org/northstar-browser/> · Copyright 2026 Andreas Røsdal.

@@ -1,4 +1,4 @@
-/* Northstar — WebAssembly JS API implemented over the vendored WAMR interpreter.
+/* Nordstjernen Luna — WebAssembly JS API implemented over the vendored WAMR interpreter.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

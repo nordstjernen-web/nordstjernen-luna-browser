@@ -1,4 +1,4 @@
-/* Northstar — HTML parser API (lexbor).
+/* Nordstjernen Luna — HTML parser API (lexbor).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Northstar — TextDecoder and TextEncoder from the Encoding Standard (QuickJS).
+/* Nordstjernen Luna — TextDecoder and TextEncoder from the Encoding Standard (QuickJS).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Northstar — SVG rendering onto Cairo, sharing the CSS cascade with HTML.
+/* Nordstjernen Luna — SVG rendering onto Cairo, sharing the CSS cascade with HTML.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

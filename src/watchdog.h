@@ -1,4 +1,4 @@
-/* Northstar — supervisor that restarts the browser on crash or hang.
+/* Nordstjernen Luna — supervisor that restarts the browser on crash or hang.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

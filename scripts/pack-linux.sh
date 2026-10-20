@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a redistributable Northstar Linux x86_64 release: the stripped,
+# Build a redistributable Nordstjernen Luna Linux x86_64 release: the stripped,
 # LTO-optimised northstar binary plus the data files it needs at runtime,
 # zipped under dist/.
 set -euo pipefail
@@ -69,7 +69,7 @@ cp "$ROOT/THIRD-PARTY-LICENSES.md" "$STAGE/"
 cp "$ROOT/LICENSE" "$STAGE/"
 
 cat > "$STAGE/INSTALL.md" <<EOF
-# Northstar ${VERSION} — Linux ${ARCH} binary
+# Nordstjernen Luna ${VERSION} — Linux ${ARCH} binary
 
 Stripped, LTO-optimised build. The browser engine itself (lexbor for
 HTML, quickjs for JavaScript, wuffs for image decoding, wamr for

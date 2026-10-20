@@ -1,13 +1,13 @@
 # Third-party software notices
 
-Northstar links to (and in some cases statically includes) the
+Nordstjernen Luna links to (and in some cases statically includes) the
 following open-source libraries. Their copyright notices and license
 texts are reproduced below. For libraries shipped dynamically in the
 release bundles, you are entitled by the LGPL terms to replace them
 with modified versions; the binary will continue to function with any
 ABI-compatible replacement.
 
-The Northstar source code itself is licensed under the GNU General
+The Nordstjernen Luna source code itself is licensed under the GNU General
 Public License, version 3 or later; see `LICENSE`.
 
 ---
@@ -53,7 +53,7 @@ your option) any later version. The full license text is available at:
   <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>
 
 Because ns-pango is linked statically rather than dynamically, LGPL
-section 6 is satisfied through source availability: Northstar's own
+section 6 is satisfied through source availability: Nordstjernen Luna's own
 source is GPL-3.0-or-later and complete, the fork's source is public at
 the URL above, and the pinned revision is recorded in
 `subprojects/ns-pango.wrap`, so a recipient can modify the library and
@@ -258,8 +258,8 @@ license text is available at:
 
   <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>
 
-Per LGPL section 6, since Northstar links to these libraries
-dynamically, you are entitled to modify them and re-link Northstar
+Per LGPL section 6, since Nordstjernen Luna links to these libraries
+dynamically, you are entitled to modify them and re-link Nordstjernen Luna
 against the modified copies. On the Windows bundle the libraries are
 shipped alongside the executable as ordinary DLLs that you can replace;
 on Linux distributions they are loaded from the system package manager.
@@ -306,12 +306,12 @@ are met. See:
 ### Optional dynamic dependencies
 
 These are linked only when present on the build host, or reached
-transitively through a library Northstar does link. When a build bundles
+transitively through a library Nordstjernen Luna does link. When a build bundles
 them, their notices apply:
 
 - **libepoxy** — MIT License, © 2013-2014 Intel Corporation. OpenGL
   function-pointer management, pulled in transitively by GTK's GL
-  renderer; Northstar links nothing against it directly.
+  renderer; Nordstjernen Luna links nothing against it directly.
 - **Fontconfig** — MIT-style license, © Keith Packard and contributors.
 - **FreeType** — FreeType License (BSD-style with credit clause) or GNU
   GPL 2.0, at your option, © The FreeType Project.
@@ -348,7 +348,7 @@ in this section.
 
 ## Modifications to upstream sources
 
-Where Northstar changes a third-party source, the change is carried as a
+Where Nordstjernen Luna changes a third-party source, the change is carried as a
 patch rather than as an edited copy, so what was modified stays legible
 and separable:
 
@@ -368,5 +368,5 @@ build, so `subprojects/packagefiles/quickjs/meson.build` is also laid over
 its checkout (`patch_directory` in `subprojects/quickjs.wrap`). A system lexbor or quickjs-ng, which
 the build prefers when it finds one, does not carry them. pl_mpeg carries its local change in
 the vendored copy directly. ns-pango is a public fork whose full history
-is at the URL in its section above. Northstar's own source is
+is at the URL in its section above. Nordstjernen Luna's own source is
 GPL-3.0-or-later.

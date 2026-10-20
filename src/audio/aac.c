@@ -1,4 +1,4 @@
-/* Northstar — AAC-LC audio decoder for raw MP4 access units, written from ISO/IEC 14496-3.
+/* Nordstjernen Luna — AAC-LC audio decoder for raw MP4 access units, written from ISO/IEC 14496-3.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

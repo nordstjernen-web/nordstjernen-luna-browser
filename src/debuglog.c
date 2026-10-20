@@ -1,4 +1,4 @@
-/* Northstar — in-process debug event log shared with the JS console.
+/* Nordstjernen Luna — in-process debug event log shared with the JS console.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

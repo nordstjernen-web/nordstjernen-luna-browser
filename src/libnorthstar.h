@@ -1,4 +1,4 @@
-/* Northstar — internal page-engine interface for the GTK shell and headless driver.
+/* Nordstjernen Luna — internal page-engine interface for the GTK shell and headless driver.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

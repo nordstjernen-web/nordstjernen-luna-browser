@@ -1,4 +1,4 @@
-/* Northstar — registered custom property <syntax> grammar and matching. */
+/* Nordstjernen Luna — registered custom property <syntax> grammar and matching. */
 
 #include "css_prop_syntax.h"
 

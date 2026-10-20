@@ -1,4 +1,4 @@
-/* Northstar — WHATWG Encoding Standard: labels, decoders and encoders.
+/* Nordstjernen Luna — WHATWG Encoding Standard: labels, decoders and encoders.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

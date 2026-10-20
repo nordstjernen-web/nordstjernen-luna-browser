@@ -1,4 +1,4 @@
-/* Northstar — 4x4 transform matrices for CSS 3D rendering.
+/* Nordstjernen Luna — 4x4 transform matrices for CSS 3D rendering.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

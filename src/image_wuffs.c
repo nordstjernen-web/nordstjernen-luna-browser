@@ -1,4 +1,4 @@
-/* Northstar — memory-safe PNG/APNG/GIF/BMP/JPEG/WebP decode via Wuffs.
+/* Nordstjernen Luna — memory-safe PNG/APNG/GIF/BMP/JPEG/WebP decode via Wuffs.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

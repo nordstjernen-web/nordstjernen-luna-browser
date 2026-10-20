@@ -67,7 +67,7 @@ An empty or truncated headless run usually means a stale or half-written binary,
 
 Confirm the expected binary exists, run a built-in headless page, run deterministic smoke fixtures, and then launch the GUI for material changes. Terminate only the process started for the smoke check. Treat new warnings, empty headless output, baseline drift, or an early GUI exit as failures.
 
-## Northstar commands
+## Nordstjernen Luna commands
 
 Use `scripts/dev.sh build`, then run the platform binary with `--headless --dump=text about:start` and run `scripts/dev.sh smoke`, which renders the `data/fixtures/` set and diffs each against its baseline in `data/baseline/`. It is the fastest honest regression gate in the repository; run it before every commit. Refresh baselines with `scripts/dev.sh baseline <target>` only after an intended change.
 

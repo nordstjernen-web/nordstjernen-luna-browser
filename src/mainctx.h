@@ -1,4 +1,4 @@
-/* Northstar — the GLib main context the page engine runs on.
+/* Nordstjernen Luna — the GLib main context the page engine runs on.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

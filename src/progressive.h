@@ -1,4 +1,4 @@
-/* Northstar — progressive download of MP4 and WebM files for <video src>, fed through the Media Source buffers.
+/* Nordstjernen Luna — progressive download of MP4 and WebM files for <video src>, fed through the Media Source buffers.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

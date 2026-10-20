@@ -1,4 +1,4 @@
-/* Northstar — the one table canPlayType, mediaCapabilities and MSE answer from.
+/* Nordstjernen Luna — the one table canPlayType, mediaCapabilities and MSE answer from.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

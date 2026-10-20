@@ -1,4 +1,4 @@
-/* Northstar — a playing video's picture, presented apart from page painting.
+/* Nordstjernen Luna — a playing video's picture, presented apart from page painting.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

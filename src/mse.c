@@ -1,4 +1,4 @@
-/* Northstar — Media Source Extensions: source buffers holding demuxed coded frames.
+/* Nordstjernen Luna — Media Source Extensions: source buffers holding demuxed coded frames.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

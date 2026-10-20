@@ -1,4 +1,4 @@
-/* Northstar — internal JS engine declarations shared between
+/* Nordstjernen Luna — internal JS engine declarations shared between
  * js.c and js_canvas.c. Not a public API.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later

@@ -32,7 +32,7 @@ Aggregate pass and fail totals hide compensating movement: a change can gain sub
 
 Build the baseline from the published head with your change alone applied. Comparing against a working tree that carries unrelated edits attributes their wins and losses to you; when a suite moves in an area your change cannot influence, rebuild the head plus only your diff before drawing any conclusion.
 
-## Northstar routing
+## Nordstjernen Luna routing
 
 - Parsing and encoding: `src/html.c`, `src/html_lexbor.c`, `src/xml.c`
 - DOM state and mutation: `src/dom.c`, `src/dom.h`

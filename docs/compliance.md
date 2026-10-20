@@ -1,10 +1,10 @@
 # HTML and CSS compliance
 
-Where Northstar's hand-written engine stands against the HTML and CSS
+Where Nordstjernen Luna's hand-written engine stands against the HTML and CSS
 specifications, how the numbers here were produced, and which gaps are
 known.
 
-Northstar carries no upstream browser engine. Every behaviour on this
+Nordstjernen Luna carries no upstream browser engine. Every behaviour on this
 page is implemented in `src/` — the parser glue in `src/html_lexbor.c`,
 the cascade and value parsing in `src/css.c`, layout in `src/layout.c`,
 paint in `src/paint.c`, and the DOM/CSSOM bindings in `src/js.c`. That

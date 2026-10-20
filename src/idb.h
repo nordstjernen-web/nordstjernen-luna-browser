@@ -1,4 +1,4 @@
-/* Northstar — IndexedDB backend bridge.
+/* Nordstjernen Luna — IndexedDB backend bridge.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

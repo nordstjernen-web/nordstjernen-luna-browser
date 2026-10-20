@@ -1,4 +1,4 @@
-/* Northstar — AAC-LC audio decoder interface for MP4 audio tracks.
+/* Nordstjernen Luna — AAC-LC audio decoder interface for MP4 audio tracks.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Northstar — VP9 video decoding over libvpx.
+/* Nordstjernen Luna — VP9 video decoding over libvpx.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

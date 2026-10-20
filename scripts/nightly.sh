@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Northstar nightly build orchestrator. Builds, from a single Linux host,
+# Nordstjernen Luna nightly build orchestrator. Builds, from a single Linux host,
 # a source tarball, per-distro Linux packages (debian/ubuntu/opensuse/alpine
 # via containers, in parallel), and Windows and macOS builds (by driving
 # the GitHub Actions runners, dispatched up front so
@@ -171,7 +171,7 @@ retry() {
 
 docker_pull() { retry "$NIGHTLY_DOCKER_PULL_RETRIES" "$DOCKER" pull "$1"; }
 
-log "Northstar nightly $DATE"
+log "Nordstjernen Luna nightly $DATE"
 printf 'ref=%s commit=%s version=%s\nroot=%s\n' \
     "$NIGHTLY_REF" "$COMMIT" "$NVERSION" "$OUTDIR"
 
@@ -449,7 +449,7 @@ status_keys()  { ls -1 "$STATUSDIR" 2>/dev/null | sort; }
 
 log "Manifest"
 {
-    echo "Northstar nightly build"
+    echo "Nordstjernen Luna nightly build"
     echo "date:    $DATE"
     echo "ref:     $NIGHTLY_REF"
     echo "commit:  $COMMIT"

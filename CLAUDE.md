@@ -1,10 +1,10 @@
-# Northstar — Claude operating guide
+# Nordstjernen Luna — Claude operating guide
 
-Northstar is a web browser written from scratch in **C**, using **GTK 4**
+Nordstjernen Luna is a web browser written from scratch in **C**, using **GTK 4**
 for the UI and **libcurl** for networking. Targets **Linux** (primary),
 **macOS** and **Windows**.
 
-See `README.md` for the product vision. Northstar is the GPL /
+See `README.md` for the product vision. Nordstjernen Luna is the GPL /
 open-source edition of the [Nordstjernen
 project](https://github.com/nordstjernen-web/nordstjernen). It carries
 **no upstream browser engine** — the HTML/CSS/JS/layout engine is
@@ -107,7 +107,7 @@ Windows; the CI workflows are `linux.yml` (Ubuntu/gcc), `musl.yml`
 - No `TODO`/`FIXME`/`XXX` markers — file a real task instead.
 - Bundled external projects are exempt. Don't reformat or strip
   comments from anything under `subprojects/` or the vendored
-  `src/wamr/` to satisfy Northstar style.
+  `src/wamr/` to satisfy Nordstjernen Luna style.
 
 ## Autonomous mode — read this every session
 
@@ -446,7 +446,7 @@ don't add `meson test` targets.
 
 - Don't introduce Mozilla/Gecko code, WebKit code, or any other
   upstream browser engine source. The hand-written engine stays
-  hand-written — Northstar is not a fork of a browser engine.
+  hand-written — Nordstjernen Luna is not a fork of a browser engine.
 - **Don't add site-specific hacks.** No per-site rendering shims, no
   hardcoded hostnames, no grepping a site's private JSON (e.g.
   `ytInitialPlayerResponse`, `mediaDefinitions`, `ytimg`, `movie_player`).

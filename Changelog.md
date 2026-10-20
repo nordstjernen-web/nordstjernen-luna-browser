@@ -28,6 +28,13 @@ Significant changes in each release:
   attribute value still in use; and a WebAssembly call with an
   `externref` argument followed by a numeric one whose `valueOf` made a
   nested call could free the externref's box before the call used it.
+* Northstar is renamed Nordstjernen Luna: the window title, About
+  dialog, `about:` pages, error and warning pages, desktop entry,
+  AppStream metadata, installer, packages and documentation use the new
+  name. The executable, application ID, settings and profile locations,
+  the `User-Agent` and client-hint brand, and the Windows registry keys
+  keep the Northstar identifiers, so existing installs, profiles and
+  default-browser settings carry over.
 * The repository moved to
   <https://github.com/nordstjernen-web/nordstjernen-luna-browser>; the
   README badges, AppStream metadata, Debian packaging and man page link

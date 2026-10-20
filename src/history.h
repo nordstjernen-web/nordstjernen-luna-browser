@@ -1,4 +1,4 @@
-/* Northstar — SQLite-backed browsing history API.
+/* Nordstjernen Luna — SQLite-backed browsing history API.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

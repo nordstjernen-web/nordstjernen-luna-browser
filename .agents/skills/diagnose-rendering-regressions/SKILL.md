@@ -37,7 +37,7 @@ Re-run the focused case with identical inputs, then check adjacent viewports and
 
 Measure your change against the published head with your change alone applied. A working tree carrying someone else's edits produces a before/after comparison that credits or blames you for their work; when a comparison shows movement in an area your change cannot reach, that is the likely cause, and the way to settle it is to rebuild the head plus only your diff.
 
-## Northstar routing
+## Nordstjernen Luna routing
 
 - Parse and DOM: `src/html_lexbor.c`, `src/html.c`, `src/dom.c`, `src/xml.c`
 - Style: `src/css_syntax.c`, `src/css.c`, `src/css_media.c`, `src/anim.c`

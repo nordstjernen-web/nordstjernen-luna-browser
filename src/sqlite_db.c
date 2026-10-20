@@ -1,4 +1,4 @@
-/* Northstar — opens the browser's SQLite databases hardened against hostile files.
+/* Nordstjernen Luna — opens the browser's SQLite databases hardened against hostile files.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

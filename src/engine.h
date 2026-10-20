@@ -1,4 +1,4 @@
-/* Northstar — synchronous fetch/cascade/layout/capture pipeline shared by drivers.
+/* Nordstjernen Luna — synchronous fetch/cascade/layout/capture pipeline shared by drivers.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Northstar — H.264 video decoding over OpenH264.
+/* Nordstjernen Luna — H.264 video decoding over OpenH264.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Northstar — startup security: refuse-root + landlock + seccomp sandbox.
+/* Nordstjernen Luna — startup security: refuse-root + landlock + seccomp sandbox.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

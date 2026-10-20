@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a source RPM (.src.rpm) of Northstar. The SRPM contains a
+# Build a source RPM (.src.rpm) of Nordstjernen Luna. The SRPM contains a
 # clean source tarball plus the meson wrap packagecache. lexbor,
 # quickjs-ng and ns-pango are git wraps, which the packagecache does not
 # hold, so `rpmbuild --rebuild` still needs network access to fetch them.
@@ -44,7 +44,7 @@ cat > "$SPEC" <<SPEC_EOF
 Name:           ${NAME}
 Version:        ${VERSION}
 Release:        1%{?dist}
-Summary:        Northstar web browser — minimalist GTK 4 browser, GPL edition
+Summary:        Nordstjernen Luna web browser — minimalist GTK 4 browser, GPL edition
 
 License:        GPL-3.0-or-later
 URL:            https://nordstjernen.org
@@ -71,7 +71,7 @@ Requires:       libcurl
 Requires:       uchardet
 
 %description
-Northstar is a small free-software web browser written from scratch in
+Nordstjernen Luna is a small free-software web browser written from scratch in
 C with GTK 4 and libcurl. The HTML parser, CSS engine, layout, paint
 and JavaScript glue contain no third-party browser engine. SVG images
 are rendered in-engine. Licensed GPL-3.0-or-later.
@@ -138,7 +138,7 @@ fi
 
 %changelog
 * $(LC_ALL=C date "+%a %b %d %Y") Andreas Røsdal <andreas.rosdal@gmail.com> - ${VERSION}-1
-- Source RPM release of Northstar ${VERSION}.
+- Source RPM release of Nordstjernen Luna ${VERSION}.
 SPEC_EOF
 
 rpmbuild --define "_topdir $RPMTOP" -bs "$SPEC"

@@ -1,4 +1,4 @@
-/* Northstar — incremental WebM (Matroska subset) demuxing for Media Source Extensions.
+/* Nordstjernen Luna — incremental WebM (Matroska subset) demuxing for Media Source Extensions.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

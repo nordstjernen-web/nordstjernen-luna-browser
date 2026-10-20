@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a Northstar AppImage. Uses linuxdeploy + its GTK plugin to
+# Build a Nordstjernen Luna AppImage. Uses linuxdeploy + its GTK plugin to
 # bundle the GTK 4 stack (libs, typelibs, pixbuf loaders, GIO modules)
 # so the AppImage runs on distros without modern GTK preinstalled.
 set -euo pipefail

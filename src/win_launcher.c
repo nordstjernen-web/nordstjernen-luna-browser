@@ -255,12 +255,12 @@ static void
 ns_report_extract_needed(bool console)
 {
     const wchar_t *text =
-        L"Northstar must be extracted before it can run.\n\n"
+        L"Nordstjernen Luna must be extracted before it can run.\n\n"
         L"In File Explorer, right-click the ZIP, choose Extract All, then run "
         L"northstar.exe from the extracted northstar-win64 folder.";
     ns_console_line(text);
     if (!console)
-        MessageBoxW(NULL, text, L"Northstar", MB_OK | MB_ICONERROR |
+        MessageBoxW(NULL, text, L"Nordstjernen Luna", MB_OK | MB_ICONERROR |
                     MB_SETFOREGROUND);
 }
 
@@ -269,12 +269,12 @@ ns_report_start_error(bool console, DWORD error)
 {
     wchar_t text[512];
     _snwprintf(text, 512,
-               L"Northstar could not start.\n\nWindows error: %lu",
+               L"Nordstjernen Luna could not start.\n\nWindows error: %lu",
                (unsigned long)error);
     text[511] = L'\0';
     ns_console_line(text);
     if (!console)
-        MessageBoxW(NULL, text, L"Northstar", MB_OK | MB_ICONERROR |
+        MessageBoxW(NULL, text, L"Nordstjernen Luna", MB_OK | MB_ICONERROR |
                     MB_SETFOREGROUND);
 }
 
@@ -282,12 +282,12 @@ static void
 ns_report_runtime_error(bool console)
 {
     const wchar_t *text =
-        L"Northstar could not find its bundled runtime files.\n\n"
+        L"Nordstjernen Luna could not find its bundled runtime files.\n\n"
         L"Extract the whole northstar-win64 folder and keep "
         L"northstar.exe and the app folder together.";
     ns_console_line(text);
     if (!console)
-        MessageBoxW(NULL, text, L"Northstar", MB_OK | MB_ICONERROR |
+        MessageBoxW(NULL, text, L"Nordstjernen Luna", MB_OK | MB_ICONERROR |
                     MB_SETFOREGROUND);
 }
 

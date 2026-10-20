@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render Northstar's SVG logo into a multi-resolution Windows .ico.
+"""Render Nordstjernen Luna's SVG logo into a multi-resolution Windows .ico.
 
 Regenerate after editing data/icons/hicolor/scalable/apps/northstar.svg:
 

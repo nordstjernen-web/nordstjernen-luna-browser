@@ -1,4 +1,4 @@
-/* Northstar — MPEG-1 video decoding for <video>, streamed over the vendored pl_mpeg.
+/* Nordstjernen Luna — MPEG-1 video decoding for <video>, streamed over the vendored pl_mpeg.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

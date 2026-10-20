@@ -1,4 +1,4 @@
-/* Northstar — writes a Chrome trace-event JSON array that Perfetto can open.
+/* Nordstjernen Luna — writes a Chrome trace-event JSON array that Perfetto can open.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Northstar — SubtleCrypto and CryptoKey of the Web Cryptography API (QuickJS).
+/* Nordstjernen Luna — SubtleCrypto and CryptoKey of the Web Cryptography API (QuickJS).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

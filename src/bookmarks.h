@@ -1,4 +1,4 @@
-/* Northstar — bookmarks storage API.
+/* Nordstjernen Luna — bookmarks storage API.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a portable Northstar RPM by repackaging the bundle that
+# Build a portable Nordstjernen Luna RPM by repackaging the bundle that
 # pack-linux.sh produces. The binary is already statically linked
 # against the in-tree engine (lexbor, quickjs, wuffs); the RPM only
 # needs to declare the dynamic GTK / curl system deps, and rpm's
@@ -49,7 +49,7 @@ cat > "$SPEC" <<SPEC_EOF
 Name:           northstar
 Version:        ${RPMVERSION}
 Release:        1%{?dist}
-Summary:        Northstar web browser — minimalist GTK 4 browser, GPL edition
+Summary:        Nordstjernen Luna web browser — minimalist GTK 4 browser, GPL edition
 
 License:        GPL-3.0-or-later
 URL:            https://nordstjernen.org
@@ -69,7 +69,7 @@ AutoReqProv:    yes
 %global __os_install_post %{nil}
 
 %description
-Northstar is a small free-software web browser written from scratch in
+Nordstjernen Luna is a small free-software web browser written from scratch in
 C with GTK 4 and libcurl. The HTML parser, CSS engine, layout, paint
 and JavaScript glue contain no third-party browser engine. SVG images
 are rendered in-engine. Licensed GPL-3.0-or-later.

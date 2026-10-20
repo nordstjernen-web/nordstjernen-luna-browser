@@ -1,4 +1,4 @@
-/* Northstar — H.264 video decoding over OpenH264, to BGRA textures.
+/* Nordstjernen Luna — H.264 video decoding over OpenH264, to BGRA textures.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

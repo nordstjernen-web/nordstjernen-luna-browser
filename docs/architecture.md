@@ -1,8 +1,8 @@
-# Northstar architecture
+# Nordstjernen Luna architecture
 
-![Northstar architecture diagram](architecture.svg)
+![Nordstjernen Luna architecture diagram](architecture.svg)
 
-This document maps the Northstar codebase: the process and thread model,
+This document maps the Nordstjernen Luna codebase: the process and thread model,
 the page-load pipeline, and which source file owns which job. It describes
 the **minimalist GPL edition**, which is single-process and hand-written
 (no forked browser engine). For the security posture of each layer see

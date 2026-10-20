@@ -1,4 +1,4 @@
-/* Northstar — opening and running SQL on the browser's SQLite databases.
+/* Nordstjernen Luna — opening and running SQL on the browser's SQLite databases.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

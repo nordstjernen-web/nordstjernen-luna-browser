@@ -1,4 +1,4 @@
-# Northstar — agent operating guide
+# Nordstjernen Luna — agent operating guide
 
 The operating guide for this repository is **[CLAUDE.md](CLAUDE.md)**,
 and it applies to every coding agent, not only to Claude Code. Read it
@@ -21,18 +21,18 @@ prompt.
 
 ## The editions
 
-Northstar shares its hand-written engine with these browsers:
+Nordstjernen Luna shares its hand-written engine with these browsers:
 
 | Edition | Purpose | License |
 |---|---|---|
-| **Northstar** (this tree, `nordstjernen-web/nordstjernen-luna-browser`) | The purist GPL browser: free software under copyleft, every line of it distributable under the GPL | GPL-3.0-or-later |
-| **Nordstjernen** (`nordstjernen-web/nordstjernen-sol-browser`) | The flagship: every feature and platform, developed with external contributors | NSL-1.0 OR GPL-3.0-or-later |
+| **Nordstjernen Luna** (this tree, `nordstjernen-web/nordstjernen-luna-browser`) | The purist GPL browser: free software under copyleft, every line of it distributable under the GPL | GPL-3.0-or-later |
+| **Nordstjernen Sol** (`nordstjernen-web/nordstjernen-sol-browser`) | The flagship: every feature and platform, developed with external contributors | NSL-1.0 OR GPL-3.0-or-later |
 | **Southstar** (`nordstjernen-web/southstar-browser`) | Nordstjernen's code base, being ported to Rust | NSL-1.0 OR GPL-3.0-or-later |
 
 ## Licensing and code provenance
 
 Everything in this tree must be distributable under GPL-3.0-or-later:
-the copyright holder's own work, contributions made to Northstar under
+the copyright holder's own work, contributions made to Nordstjernen Luna under
 the GPL, or third-party code under a GPL-compatible license listed in
 `THIRD-PARTY-LICENSES.md`. Purity is the point of this edition, so check
 where code comes from before porting it:
@@ -68,6 +68,6 @@ where code comes from before porting it:
   `git log --format=%B | sed -n 's/^Security-Fix: //p' | sort -u` in two
   trees and comparing the lists shows which fixes have not crossed yet.
 - **Outbound:** Nordstjernen may take only the copyright holder's own
-  Northstar commits; GPL contributions from others stay GPL.
+  Nordstjernen Luna commits; GPL contributions from others stay GPL.
 - **Dependencies** must be GPL-compatible. Nothing under NSL or a
   proprietary license is linked or vendored.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Speedometer 4.0-alpha (WebKit/Speedometer main) per-workload driver for
-# Northstar, adapted from scripts/speedometer-bench.sh for the v4 module
+# Nordstjernen Luna, adapted from scripts/speedometer-bench.sh for the v4 module
 # layout (default-tests.mjs / shared/translations.mjs / freezeSuites).
 set -euo pipefail
 export LC_NUMERIC=C

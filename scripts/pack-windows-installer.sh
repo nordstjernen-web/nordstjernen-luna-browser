@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build the Windows .exe installer for Northstar.
+# Build the Windows .exe installer for Nordstjernen Luna.
 #
 # Runs pack-windows.sh first to produce the redistributable bundle, then
 # wraps it with NSIS (Modern UI 2) into a single per-user installer.
-# Per-user means $LOCALAPPDATA\Programs\Northstar — no Administrator
+# Per-user means $LOCALAPPDATA\Programs\Nordstjernen Luna — no Administrator
 # rights are required, which matches the binary's refuse-to-run-elevated
 # policy (src/security.c::ns_security_refuse_root).
 set -euo pipefail

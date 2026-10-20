@@ -1,4 +1,4 @@
-/* Northstar — CSS Syntax token and component-value API. */
+/* Nordstjernen Luna — CSS Syntax token and component-value API. */
 
 #ifndef NS_CSS_SYNTAX_H
 #define NS_CSS_SYNTAX_H
