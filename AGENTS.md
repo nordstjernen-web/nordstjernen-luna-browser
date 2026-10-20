@@ -25,8 +25,8 @@ Northstar shares its hand-written engine with these browsers:
 
 | Edition | Purpose | License |
 |---|---|---|
-| **Northstar** (this tree) | The purist GPL browser: free software under copyleft, every line of it distributable under the GPL | GPL-3.0-or-later |
-| **Nordstjernen** (`nordstjernen-web/nordstjernen-browser`) | The flagship: every feature and platform, developed with external contributors | NSL-1.0 OR GPL-3.0-or-later |
+| **Northstar** (this tree, `nordstjernen-web/nordstjernen-luna-browser`) | The purist GPL browser: free software under copyleft, every line of it distributable under the GPL | GPL-3.0-or-later |
+| **Nordstjernen** (`nordstjernen-web/nordstjernen-sol-browser`) | The flagship: every feature and platform, developed with external contributors | NSL-1.0 OR GPL-3.0-or-later |
 | **Southstar** (`nordstjernen-web/southstar-browser`) | Nordstjernen's code base, being ported to Rust | NSL-1.0 OR GPL-3.0-or-later |
 
 ## Licensing and code provenance
@@ -60,7 +60,7 @@ where code comes from before porting it:
 
   ```
   Security-Fix: css-grid-auto-repeat-overread
-  Ported-From: nordstjernen-web/nordstjernen-browser@<full sha>
+  Ported-From: nordstjernen-web/nordstjernen-sol-browser@<full sha>
   Co-Authored-By: ...
   ```
 

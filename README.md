@@ -7,15 +7,18 @@ engine targets practical HTML5, modern CSS and JavaScript compatibility
 without embedding Gecko, WebKit, Blink or another browser engine. Linux
 is the primary platform; macOS and Windows are also supported.
 
-**See [Nordstjernen Web Browser](https://github.com/nordstjernen-web/nordstjernen-browser)  also, which is
+This repository is **Nordstjernen Luna**:
+<https://github.com/nordstjernen-web/nordstjernen-luna-browser>.
+
+**See [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) also, which is
 the most complete, fully featured web browser project we are making. Nordstjernen has builds for Windows, Linux, MacOs.**
 
 Northstar is licensed under the GNU General Public License, version 3 or
 later.
 
 ## Multiple browser variants
-* This repo is the Northstar web browser, a minimalist, simple and good web browser. This is more about research about browser tech.
-* [Nordstjernen Web Browser](https://github.com/nordstjernen-web/nordstjernen-browser) is the most complete, fully featured web browser.
+* This repo, [Nordstjernen Luna](https://github.com/nordstjernen-web/nordstjernen-luna-browser), is the Northstar web browser, a minimalist, simple and good web browser. This is more about research about browser tech.
+* [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) is the Nordstjernen web browser, the most complete, fully featured web browser.
   
 We are doing web browser innovation, research and development, and part of this is 
 making multiple web browser variants to test and compare 
@@ -46,7 +49,7 @@ small enough for one person to read and audit end-to-end. See
 
 This edition strips Northstar down to a tab-less, single-process
 desktop browser, based on the
-[Nordstjernen project](https://github.com/nordstjernen-web/nordstjernen-browser).
+[Nordstjernen project](https://github.com/nordstjernen-web/nordstjernen-sol-browser).
 It deliberately omits tabs, per-tab renderer processes, WebGL, WebGPU,
 an embedded PDF viewer and AI-style web APIs. It does not send telemetry
 or update pings.
@@ -195,7 +198,7 @@ MSIX package declares it as an app execution alias.
 
 Northstar's engine is written from scratch — it contains no forked
 browser engine (no Gecko, WebKit, or Blink). It is the GPL edition of the
-[Nordstjernen project](https://github.com/nordstjernen-web/nordstjernen-browser).
+[Nordstjernen project](https://github.com/nordstjernen-web/nordstjernen-sol-browser).
 
 **Pinned upstream meson subprojects** (`subprojects/*.wrap`), fetched by
 `meson setup`:
