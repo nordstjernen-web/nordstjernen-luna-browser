@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — HTML helper utilities shared across the lexbor frontend.
+/* Nordstjernen Web Browser — HTML helper utilities shared across the lexbor frontend.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

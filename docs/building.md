@@ -1,6 +1,6 @@
-# Building and running Nordstjernen Luna
+# Building and running Nordstjernen Web Browser
 
-Nordstjernen Luna builds with **meson + ninja** and a C compiler (GCC or Clang).
+Nordstjernen Web Browser builds with **meson + ninja** and a C compiler (GCC or Clang).
 The primary target is Linux; macOS and Windows are also supported. The
 project declares C++ as well, so meson wants a C++ compiler present even
 though no C++ source is built.
@@ -44,7 +44,7 @@ GTK must be ≥ 4.14 (≥ 4.22.1 on Windows; elsewhere the build warns below
 4.22, which it prefers for the newer GSK renderers) and libcurl ≥ 8.5.
 These are what Ubuntu 24.04 ships;
 Debian 13 and Fedora 40 meet them too. Older releases — Ubuntu 22.04 and
-20.04, Debian 12 — cannot build Nordstjernen Luna from their own packages: their
+20.04, Debian 12 — cannot build Nordstjernen Web Browser from their own packages: their
 GTK 4 is too old or absent, alongside the text-stack libraries.
 `meson setup` checks every floor before configuring ns-pango and lists
 each library that is missing or too old in a single error. ns-pango is
@@ -217,11 +217,11 @@ taken. A system lexbor or quickjs-ng does not get them.
 The vendored copies are updated by replacing the files. Wuffs
 (`subprojects/wuffs/wuffs-v0.4.c`) and minimp3 (`src/audio/minimp3.h`) are
 byte-identical to their upstream releases, so syncing either is a copy.
-pl_mpeg carries one Nordstjernen Luna change — a bounds fix for half-pel motion
+pl_mpeg carries one Nordstjernen Web Browser change — a bounds fix for half-pel motion
 compensation, which read a row past the plane — marked in place in the
 vendored header; keep it when syncing. WAMR (`src/wamr/`) is a subset of
 upstream: `core/` plus `ns_wamr.c`, the narrow accessors the WebAssembly
-JS API needs, which are Nordstjernen Luna's own.
+JS API needs, which are Nordstjernen Web Browser's own.
 [`../THIRD-PARTY-LICENSES.md`](../THIRD-PARTY-LICENSES.md) lists every
 component and every patch, and is the file to update when any of this
 moves.

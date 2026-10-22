@@ -1,8 +1,8 @@
-# Nordstjernen Luna architecture
+# Nordstjernen Web Browser architecture
 
-![Nordstjernen Luna architecture diagram](architecture.svg)
+![Nordstjernen Web Browser architecture diagram](architecture.svg)
 
-This document maps the Nordstjernen Luna codebase: the process and thread model,
+This document maps the Nordstjernen Web Browser codebase: the process and thread model,
 the page-load pipeline, and which source file owns which job. It describes
 the **minimalist GPL edition**, which is single-process and hand-written
 (no forked browser engine). For the security posture of each layer see

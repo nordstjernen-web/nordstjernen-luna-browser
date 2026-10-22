@@ -4,7 +4,7 @@
   <id>org.northstar.WebBrowser</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>Nordstjernen Luna</name>
+  <name>Nordstjernen Web Browser</name>
   <summary>A small, hand-written web browser</summary>
   <developer id="org.northstar">
     <name>Andreas Røsdal</name>
@@ -12,7 +12,7 @@
 
   <description>
     <p>
-      Nordstjernen Luna is a clean-room web browser written from scratch in C,
+      Nordstjernen Web Browser is a clean-room web browser written from scratch in C,
       with a GTK 4 user interface and a libcurl network stack. It is built
       to be small, secure, and readable by a single person end to end.
     </p>
@@ -28,13 +28,13 @@
   <launchable type="desktop-id">org.northstar.WebBrowser.desktop</launchable>
 
   <url type="homepage">https://nordstjernen.org</url>
-  <url type="bugtracker">https://github.com/nordstjernen-web/nordstjernen-luna-browser/issues</url>
-  <url type="vcs-browser">https://github.com/nordstjernen-web/nordstjernen-luna-browser</url>
+  <url type="bugtracker">https://github.com/nordstjernen-web/nordstjernen-web-browser/issues</url>
+  <url type="vcs-browser">https://github.com/nordstjernen-web/nordstjernen-web-browser</url>
 
   <screenshots>
     <screenshot type="default">
-      <caption>Nordstjernen Luna showing a Wikipedia article</caption>
-      <image>https://raw.githubusercontent.com/nordstjernen-web/nordstjernen-luna-browser/main/docs/screenshot.png</image>
+      <caption>Nordstjernen Web Browser showing a Wikipedia article</caption>
+      <image>https://raw.githubusercontent.com/nordstjernen-web/nordstjernen-web-browser/main/docs/screenshot.png</image>
     </screenshot>
   </screenshots>
 

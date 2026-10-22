@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — limits shared by the GTK shell and the page engine.
+/* Nordstjernen Web Browser — limits shared by the GTK shell and the page engine.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — Content-Security-Policy parser + check.
+/* Nordstjernen Web Browser — Content-Security-Policy parser + check.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

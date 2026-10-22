@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — Media Queries Level 4 parser, evaluator and serializer.
+/* Nordstjernen Web Browser — Media Queries Level 4 parser, evaluator and serializer.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

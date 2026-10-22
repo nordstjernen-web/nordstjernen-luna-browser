@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — which media types the compiled decoders can play.
+/* Nordstjernen Web Browser — which media types the compiled decoders can play.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

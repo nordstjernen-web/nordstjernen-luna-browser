@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — HTMLMediaElement: the load, play and pause state machine over the audio mixer and decoded video.
+/* Nordstjernen Web Browser — HTMLMediaElement: the load, play and pause state machine over the audio mixer and decoded video.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

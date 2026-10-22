@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nordstjernen Luna dev helper: smoke-tests a built-in list of local fixtures through
+# Nordstjernen Web Browser dev helper: smoke-tests a built-in list of local fixtures through
 # the headless engine.
 set -euo pipefail
 

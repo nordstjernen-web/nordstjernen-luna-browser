@@ -1,10 +1,10 @@
 # HTML and CSS compliance
 
-Where Nordstjernen Luna's hand-written engine stands against the HTML and CSS
+Where Nordstjernen Web Browser's hand-written engine stands against the HTML and CSS
 specifications, how the numbers here were produced, and which gaps are
 known.
 
-Nordstjernen Luna carries no upstream browser engine. Every behaviour on this
+Nordstjernen Web Browser carries no upstream browser engine. Every behaviour on this
 page is implemented in `src/` — the parser glue in `src/html_lexbor.c`,
 the cascade and value parsing in `src/css.c`, layout in `src/layout.c`,
 paint in `src/paint.c`, and the DOM/CSSOM bindings in `src/js.c`. That
@@ -35,7 +35,7 @@ git clone --depth 1 https://github.com/web-platform-tests/wpt.git ~/wpt
 cd ~/wpt && ./wpt make-hosts-file | sudo tee -a /etc/hosts
 cd ~/wpt && ./wpt serve &
 
-cd nordstjernen-luna-browser
+cd nordstjernen-web-browser
 scripts/dev.sh build
 scripts/wpt-run.sh --wpt-root=$HOME/wpt --no-serve dom/nodes css/cssom
 ```

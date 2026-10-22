@@ -33,9 +33,9 @@ Build-Depends:
  zlib1g-dev,
  python3,
 Standards-Version: 4.7.2
-Homepage: https://github.com/nordstjernen-web/nordstjernen-luna-browser
-Vcs-Browser: https://github.com/nordstjernen-web/nordstjernen-luna-browser
-Vcs-Git: https://github.com/nordstjernen-web/nordstjernen-luna-browser.git
+Homepage: https://github.com/nordstjernen-web/nordstjernen-web-browser
+Vcs-Browser: https://github.com/nordstjernen-web/nordstjernen-web-browser
+Vcs-Git: https://github.com/nordstjernen-web/nordstjernen-web-browser.git
 Rules-Requires-Root: no
 
 Package: northstar
@@ -47,7 +47,7 @@ Depends:
 Recommends:
  hunspell-en-us,
 Description: minimalist GTK 4 web browser with an original engine
- Nordstjernen Luna is a web browser written from scratch in C, with a GTK 4
+ Nordstjernen Web Browser is a web browser written from scratch in C, with a GTK 4
  user interface and a libcurl network stack. It is built to be small,
  secure, and readable by a single person end to end.
  .

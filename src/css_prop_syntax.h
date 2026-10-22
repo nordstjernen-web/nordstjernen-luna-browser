@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — registered custom property <syntax> grammar and matching. */
+/* Nordstjernen Web Browser — registered custom property <syntax> grammar and matching. */
 
 #ifndef NS_CSS_PROP_SYNTAX_H
 #define NS_CSS_PROP_SYNTAX_H

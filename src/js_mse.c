@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — native side of the MediaSource and SourceBuffer bindings.
+/* Nordstjernen Web Browser — native side of the MediaSource and SourceBuffer bindings.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

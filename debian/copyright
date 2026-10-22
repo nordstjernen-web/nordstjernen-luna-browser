@@ -1,9 +1,9 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: Nordstjernen Luna
+Upstream-Name: Nordstjernen Web Browser
 Upstream-Contact: Andreas Røsdal <andreas.rosdal@gmail.com>
-Source: https://github.com/nordstjernen-web/nordstjernen-luna-browser
+Source: https://github.com/nordstjernen-web/nordstjernen-web-browser
 Comment:
- Nordstjernen Luna is the open-source GPL edition of the Nordstjernen project.
+ Nordstjernen Web Browser is the open-source GPL edition of the Nordstjernen project.
  The browser engine is original C written from scratch — it is not a
  fork of Gecko, WebKit, or Blink.
  .

@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — offline Web Audio graph rendering (QuickJS).
+/* Nordstjernen Web Browser — offline Web Audio graph rendering (QuickJS).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

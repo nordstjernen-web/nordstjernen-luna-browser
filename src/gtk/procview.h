@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — GTK view over the page engine, driven on the engine thread.
+/* Nordstjernen Web Browser — GTK view over the page engine, driven on the engine thread.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

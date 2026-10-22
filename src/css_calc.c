@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — calc() tree simplification and specified-value serialization.
+/* Nordstjernen Web Browser — calc() tree simplification and specified-value serialization.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — the shell's own icons, drawn by the in-engine SVG renderer.
+/* Nordstjernen Web Browser — the shell's own icons, drawn by the in-engine SVG renderer.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

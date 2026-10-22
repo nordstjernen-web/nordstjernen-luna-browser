@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — internal page-engine host for the GTK shell and headless driver.
+/* Nordstjernen Web Browser — internal page-engine host for the GTK shell and headless driver.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

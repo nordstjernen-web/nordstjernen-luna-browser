@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — JavaScript bytecode cache.
+/* Nordstjernen Web Browser — JavaScript bytecode cache.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

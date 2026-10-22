@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — HTML form validation, serialization, and submission helpers.
+/* Nordstjernen Web Browser — HTML form validation, serialization, and submission helpers.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

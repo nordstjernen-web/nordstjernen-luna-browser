@@ -1,4 +1,4 @@
-; Nordstjernen Luna Windows installer (NSIS Modern UI).
+; Nordstjernen Web Browser Windows installer (NSIS Modern UI).
 ; Per-user install — no elevation required — to %LOCALAPPDATA%\Programs\Northstar.
 ; Invoked by scripts/pack-windows-installer.sh, which passes VERSION/SRCDIR/OUTFILE.
 
@@ -18,9 +18,10 @@ SetCompressor /SOLID lzma
   !define OUTFILE "..\..\dist\northstar-${VERSION}-win64-setup.exe"
 !endif
 
-!define APP_NAME "Nordstjernen Luna"
+!define APP_NAME "Nordstjernen Web Browser"
 !define APP_KEY "Northstar"
-!define APP_DISPLAY "Nordstjernen Luna Web Navigator"
+!define APP_OLDNAME "Nordstjernen Luna"
+!define APP_DISPLAY "Nordstjernen Web Browser"
 !define APP_PUBLISHER "Andreas Rosdal"
 !define APP_URL "https://nordstjernen.org"
 !define APP_REGKEY "Software\Northstar"
@@ -52,10 +53,10 @@ VIAddVersionKey "FileDescription" "${APP_DISPLAY} installer"
 !define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\northstar.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Run Nordstjernen Luna now"
+!define MUI_FINISHPAGE_RUN_TEXT "Run Nordstjernen Web Browser now"
 !define MUI_FINISHPAGE_SHOWREADME ""
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "Set Nordstjernen Luna as my default browser"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Set Nordstjernen Web Browser as my default browser"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION OpenDefaultAppsSettings
 !define MUI_FINISHPAGE_LINK "Visit nordstjernen.org"
 !define MUI_FINISHPAGE_LINK_LOCATION "${APP_URL}"
@@ -70,7 +71,7 @@ VIAddVersionKey "FileDescription" "${APP_DISPLAY} installer"
 
 !insertmacro MUI_LANGUAGE "English"
 
-Section "Nordstjernen Luna (required)" SecMain
+Section "Nordstjernen Web Browser (required)" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   File /r "${SRCDIR}\*"
@@ -79,6 +80,11 @@ Section "Nordstjernen Luna (required)" SecMain
   Delete "$SMPROGRAMS\${APP_KEY}\${APP_KEY}.lnk"
   Delete "$SMPROGRAMS\${APP_KEY}\Uninstall ${APP_KEY}.lnk"
   RMDir  "$SMPROGRAMS\${APP_KEY}"
+
+  Delete "$DESKTOP\${APP_OLDNAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_OLDNAME}\${APP_OLDNAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_OLDNAME}\Uninstall ${APP_OLDNAME}.lnk"
+  RMDir  "$SMPROGRAMS\${APP_OLDNAME}"
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" \
@@ -121,7 +127,7 @@ Section "Nordstjernen Luna (required)" SecMain
   WriteRegStr HKCU "${APP_SMIKEY}\Capabilities\URLAssociations"  "https" "${APP_PROGID}"
   WriteRegStr HKCU "${APP_SMIKEY}\Capabilities\StartMenu" "StartMenuInternet" "${APP_KEY}"
 
-  WriteRegStr HKCU "${APP_CLASSKEY}"                    "" "Nordstjernen Luna HTML Document"
+  WriteRegStr HKCU "${APP_CLASSKEY}"                    "" "Nordstjernen Web Browser HTML Document"
   WriteRegStr HKCU "${APP_CLASSKEY}\DefaultIcon"        "" "$INSTDIR\northstar.exe,0"
   WriteRegStr HKCU "${APP_CLASSKEY}\shell\open\command" "" '"$INSTDIR\northstar.exe" "%1"'
 

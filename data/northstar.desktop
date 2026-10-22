@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Nordstjernen Luna
+Name=Nordstjernen Web Browser
 GenericName=Web Browser
 Comment=A small, hand-written web browser
 Exec=northstar %U

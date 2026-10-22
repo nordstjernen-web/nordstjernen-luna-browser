@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — CSS Syntax tokenizer and component-value parser. */
+/* Nordstjernen Web Browser — CSS Syntax tokenizer and component-value parser. */
 
 #include "css_syntax.h"
 #include "dom.h"

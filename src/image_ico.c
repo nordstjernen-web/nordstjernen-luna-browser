@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — in-tree ICO/CUR decode (container parse, pixels via Wuffs).
+/* Nordstjernen Web Browser — in-tree ICO/CUR decode (container parse, pixels via Wuffs).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

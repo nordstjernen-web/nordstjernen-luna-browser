@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — native Temporal date/time API for the QuickJS engine.
+/* Nordstjernen Web Browser — native Temporal date/time API for the QuickJS engine.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

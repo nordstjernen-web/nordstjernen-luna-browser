@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — DOM data structure API.
+/* Nordstjernen Web Browser — DOM data structure API.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

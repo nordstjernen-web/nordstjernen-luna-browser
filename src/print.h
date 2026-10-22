@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — paginates a laid-out page onto sheets of paper.
+/* Nordstjernen Web Browser — paginates a laid-out page onto sheets of paper.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

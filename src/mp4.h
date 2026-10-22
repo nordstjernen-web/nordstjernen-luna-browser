@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — MP4 (ISO BMFF) demuxing: fragmented streams for Media Source Extensions, sample tables for whole files.
+/* Nordstjernen Web Browser — MP4 (ISO BMFF) demuxing: fragmented streams for Media Source Extensions, sample tables for whole files.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

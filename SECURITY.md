@@ -1,18 +1,18 @@
 # Security policy
 
-Nordstjernen Luna is a small independent web browser. Security fixes ship from
+Nordstjernen Web Browser is a small independent web browser. Security fixes ship from
 `main`; only the latest tagged release is supported.
 
 ## Reporting
 Report security issues by e-mail to:  andreas.rosdal@hotmail.com
 
-Please include the version (shown in the About Nordstjernen Luna dialog),
+Please include the version (shown in the About Nordstjernen Web Browser dialog),
 your OS, a minimal reproducer (URL or self-contained HTML), and your
 assessment of the impact.
 
 ## Threat model
 
-Nordstjernen Luna treats the Internet with the utmost suspicion. The attacker
+Nordstjernen Web Browser treats the Internet with the utmost suspicion. The attacker
 controls fetched HTML, CSS, JavaScript, images, fonts, WebAssembly and
 media. The user, the kernel, and the local filesystem outside the sandbox
 allow-list are trusted.
@@ -183,7 +183,7 @@ unconfined.
   filter of its own (the engine thread's executable-memory filter);
   stacked filters can only refuse more, never allow what this one
   refuses.
-- **Media / audio.** Nordstjernen Luna decodes audio **in-tree** in the browser
+- **Media / audio.** Nordstjernen Web Browser decodes audio **in-tree** in the browser
   process (`src/audio/audio.c`), not via an external player. The media
   controller (`src/js_media.c`) sends each `<audio>` element's commands
   straight to its page's audio context, which the page owns and destroys
@@ -224,7 +224,7 @@ operation.
 The macOS build applies a Seatbelt profile with `sandbox_init(3)`. It
 allows reads and system interaction by default but denies filesystem
 writes, then permits writes to the temporary directories, `/dev`, the
-runtime directory, Nordstjernen Luna's config/data/cache directories, Downloads,
+runtime directory, Nordstjernen Web Browser's config/data/cache directories, Downloads,
 and the output directory of a headless dump. This is write confinement,
 not the Linux profile's read allow-list or syscall filter; all engine and
 audio code still shares the browser process. Set `NS_NO_SANDBOX=1` only
@@ -597,5 +597,5 @@ The `document.cookie` setter:
   re-routed config paths) and are tracked as future work.
 - **The cookie jar is not locked between browser instances.** Within one
   process, script and network cookie writes are serialised; two
-  Nordstjernen Luna processes sharing a profile can still lose each other's
+  Nordstjernen Web Browser processes sharing a profile can still lose each other's
   writes.

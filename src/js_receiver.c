@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — WebIDL receiver checks for the members of node interfaces.
+/* Nordstjernen Web Browser — WebIDL receiver checks for the members of node interfaces.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

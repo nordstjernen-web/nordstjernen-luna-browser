@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — supervisor that restarts the browser on crash or hang.
+/* Nordstjernen Web Browser — supervisor that restarts the browser on crash or hang.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -178,7 +178,7 @@ ns_watchdog_report_failure(const char *detail)
 #ifdef G_OS_WIN32
     const char *log = ns_debug_log_file_path();
     char *body = g_strdup_printf(
-        "Nordstjernen Luna could not start.\n\n%s\n\n"
+        "Nordstjernen Web Browser could not start.\n\n%s\n\n"
         "A diagnostic log was written to:\n%s\n\n"
         "If this persists, try launching with the cairo renderer by setting "
         "the environment variable NS_GSK_RENDERER=cairo before starting.",
@@ -186,7 +186,7 @@ ns_watchdog_report_failure(const char *detail)
         log ? log : "(log file unavailable)");
     wchar_t *wbody = (wchar_t *)g_utf8_to_utf16(body, -1, NULL, NULL, NULL);
     if (wbody) {
-        MessageBoxW(NULL, wbody, L"Nordstjernen Luna",
+        MessageBoxW(NULL, wbody, L"Nordstjernen Web Browser",
                     MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
         g_free(wbody);
     }

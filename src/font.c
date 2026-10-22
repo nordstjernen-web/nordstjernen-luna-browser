@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — @font-face web font loader.
+/* Nordstjernen Web Browser — @font-face web font loader.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

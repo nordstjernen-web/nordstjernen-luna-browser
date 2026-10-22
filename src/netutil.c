@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — curl-free network helpers shared by the engine and the
+/* Nordstjernen Web Browser — curl-free network helpers shared by the engine and the
  * GTK shell: Accept-Language, search-URL building, proxy masking.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later

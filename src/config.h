@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — runtime config (flat key/value file).
+/* Nordstjernen Web Browser — runtime config (flat key/value file).
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

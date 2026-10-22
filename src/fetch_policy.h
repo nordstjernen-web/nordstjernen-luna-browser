@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — the one policy check every subresource request passes.
+/* Nordstjernen Web Browser — the one policy check every subresource request passes.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

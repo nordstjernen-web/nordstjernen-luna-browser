@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — native ECMA-402 (Intl) implementation for the QuickJS engine.
+/* Nordstjernen Web Browser — native ECMA-402 (Intl) implementation for the QuickJS engine.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

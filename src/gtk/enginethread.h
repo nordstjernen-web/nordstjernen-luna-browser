@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — the thread the page engine runs on, with its own main context.
+/* Nordstjernen Web Browser — the thread the page engine runs on, with its own main context.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

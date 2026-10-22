@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — per-process thread dump to stderr, incl. a SIGQUIT trigger.
+/* Nordstjernen Web Browser — per-process thread dump to stderr, incl. a SIGQUIT trigger.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

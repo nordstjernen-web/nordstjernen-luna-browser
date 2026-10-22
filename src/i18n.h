@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — UI string translation: OS-language lookup over the
+/* Nordstjernen Web Browser — UI string translation: OS-language lookup over the
  * data/i18n catalogue files.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later

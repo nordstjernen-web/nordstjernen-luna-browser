@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — civil-date math and HTML date/time string parsing.
+/* Nordstjernen Web Browser — civil-date math and HTML date/time string parsing.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — application entry point for GUI and headless modes.
+/* Nordstjernen Web Browser — application entry point for GUI and headless modes.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -497,7 +497,7 @@ main(int argc, char **argv)
 #endif
     for (int i = 1; i < argc; i++) {
         if (g_strcmp0(argv[i], "--version") == 0) {
-            g_print("Nordstjernen Luna %s\n", NS_VERSION);
+            g_print("Nordstjernen Web Browser %s\n", NS_VERSION);
             return 0;
         }
     }

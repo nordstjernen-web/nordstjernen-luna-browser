@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — a video decoder running on its own thread, a few frames ahead.
+/* Nordstjernen Web Browser — a video decoder running on its own thread, a few frames ahead.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

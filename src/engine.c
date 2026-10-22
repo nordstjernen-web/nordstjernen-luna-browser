@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — synchronous fetch/cascade/layout/capture pipeline.
+/* Nordstjernen Web Browser — synchronous fetch/cascade/layout/capture pipeline.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -1336,7 +1336,7 @@ static void
 pdf_set_metadata(cairo_surface_t *surf)
 {
     cairo_pdf_surface_set_metadata(surf, CAIRO_PDF_METADATA_CREATOR,
-                                   "Nordstjernen Luna");
+                                   "Nordstjernen Web Browser");
     time_t now = time(NULL);
     struct tm tm_utc;
 #if defined(_WIN32)

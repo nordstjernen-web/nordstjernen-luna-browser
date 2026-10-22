@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — browser-side shims that give quickjs-ng and the original QuickJS one API.
+/* Nordstjernen Web Browser — browser-side shims that give quickjs-ng and the original QuickJS one API.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

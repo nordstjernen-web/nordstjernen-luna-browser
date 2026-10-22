@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — AV1 video decoding over libdav1d, to BGRA textures.
+/* Nordstjernen Web Browser — AV1 video decoding over libdav1d, to BGRA textures.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

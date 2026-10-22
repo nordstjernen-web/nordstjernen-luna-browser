@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — AVIF decode via libavif.
+/* Nordstjernen Web Browser — AVIF decode via libavif.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

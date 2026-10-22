@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — the audio decoders behind Media Source Extensions, chosen by codec.
+/* Nordstjernen Web Browser — the audio decoders behind Media Source Extensions, chosen by codec.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

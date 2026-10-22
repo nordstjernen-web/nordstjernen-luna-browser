@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — maps changed elements and images to the page rectangles they repaint.
+/* Nordstjernen Web Browser — maps changed elements and images to the page rectangles they repaint.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — MPEG-1 video decoding for <video>.
+/* Nordstjernen Web Browser — MPEG-1 video decoding for <video>.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

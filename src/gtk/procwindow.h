@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — GTK single-page browser window around the page view.
+/* Nordstjernen Web Browser — GTK single-page browser window around the page view.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

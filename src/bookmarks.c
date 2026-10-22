@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — bookmarks storage.
+/* Nordstjernen Web Browser — bookmarks storage.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

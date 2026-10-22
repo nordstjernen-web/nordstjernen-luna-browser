@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — image cache API: decode, frames and animation timelines.
+/* Nordstjernen Web Browser — image cache API: decode, frames and animation timelines.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

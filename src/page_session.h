@@ -1,4 +1,4 @@
-/* Nordstjernen Luna — one page host session: the open page, its back/forward cache
+/* Nordstjernen Web Browser — one page host session: the open page, its back/forward cache
    and the last rendered frame.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
