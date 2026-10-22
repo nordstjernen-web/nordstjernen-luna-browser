@@ -38,10 +38,6 @@ root [README](../README.md).
 - **[../README.md](../README.md)** — product overview and feature list.
 - **[../SECURITY.md](../SECURITY.md)** — threat model, sandbox posture
   (per run mode), origin isolation, known gaps, and the reporting contact.
-- **[../CLAUDE.md](../CLAUDE.md)** — contributor operating guide, project
-  scope (what this minimalist edition deliberately omits), and the
-  comments/code-style policy. [../AGENTS.md](../AGENTS.md) points other
-  coding agents at it.
 - **[../Changelog.md](../Changelog.md)** — user-visible changes per
   release.
 - **[../THIRD-PARTY-LICENSES.md](../THIRD-PARTY-LICENSES.md)** — notices for
@@ -55,5 +51,5 @@ engine runs in the shell process, on its own thread), targets Linux
 (primary), macOS and Windows, and deliberately omits tabs, renderer
 processes, WebGL/WebGPU, the PDF viewer, local-AI features, and the
 embeddable-library API. `<video>` decodes MPEG-1 and nothing else, in the
-browser process. See [../CLAUDE.md](../CLAUDE.md) for the authoritative
-scope statement.
+browser process. See [../README.md](../README.md) for the project scope
+and the no-AI contribution policy.

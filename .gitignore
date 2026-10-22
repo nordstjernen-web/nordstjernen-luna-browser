@@ -72,14 +72,11 @@ wptreport.json
 /.tmp/
 /.ccache/
 
-# Local Claude settings (allow .claude/settings.json if you want shared)
-.claude/settings.local.json
-
-# Claude harness state
-/.claude/*
-!/.claude/settings.json
-!/.claude/skills/
-!/.claude/skills/**
+# AI coding-assistant files are not accepted (see README.md, "No AI policy")
+/.claude/
+/.agents/
+/CLAUDE.md
+/AGENTS.md
 perf.data
 
 # Python bytecode

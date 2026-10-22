@@ -1,4 +1,0 @@
-interface:
-  display_name: "Diagnose Browser Rendering"
-  short_description: "Trace browser rendering pipeline regressions"
-  default_prompt: "Use $diagnose-rendering-regressions to reproduce, localize, and fix this browser rendering defect."
