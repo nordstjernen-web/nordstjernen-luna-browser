@@ -1,0 +1,101 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build",
+            "type": "shell",
+            "command": "./scripts/dev.sh build",
+            "windows": {
+                "type": "process",
+                "command": "powershell.exe",
+                "args": [
+                    "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", "${workspaceFolder}\\scripts\\vs-build.ps1",
+                    "Build"
+                ]
+            },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/builddir"]
+            }
+        },
+        {
+            "label": "Build (debug)",
+            "type": "shell",
+            "command": "[ -f builddir-debug/build.ninja ] || meson setup builddir-debug -Dbuildtype=debug -Db_lto=false; meson compile -C builddir-debug",
+            "windows": {
+                "type": "process",
+                "command": "powershell.exe",
+                "args": [
+                    "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", "${workspaceFolder}\\scripts\\vs-build.ps1",
+                    "Build", "-BuildDir", "builddir-debug", "-BuildType", "debug"
+                ]
+            },
+            "group": "build",
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/builddir-debug"]
+            }
+        },
+        {
+            "label": "Clean",
+            "type": "shell",
+            "command": "[ ! -f builddir/build.ninja ] || ninja -C builddir -t clean",
+            "windows": {
+                "type": "process",
+                "command": "powershell.exe",
+                "args": [
+                    "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", "${workspaceFolder}\\scripts\\vs-build.ps1",
+                    "Clean"
+                ]
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run",
+            "type": "shell",
+            "command": "./builddir/src/gtk/northstar about:start",
+            "windows": {
+                "type": "process",
+                "command": "powershell.exe",
+                "args": [
+                    "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", "${workspaceFolder}\\scripts\\run-windows.ps1"
+                ]
+            },
+            "dependsOn": "Build",
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "Stop",
+            "type": "shell",
+            "command": "pkill -x northstar || true",
+            "windows": {
+                "type": "process",
+                "command": "taskkill.exe",
+                "args": ["/IM", "northstar.exe", "/F"]
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Smoke test",
+            "type": "shell",
+            "command": "./scripts/dev.sh smoke",
+            "windows": {
+                "type": "process",
+                "command": "powershell.exe",
+                "args": [
+                    "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", "${workspaceFolder}\\scripts\\smoke-windows.ps1"
+                ]
+            },
+            "dependsOn": "Build",
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        }
+    ]
+}

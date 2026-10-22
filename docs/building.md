@@ -130,6 +130,27 @@ per-user NSIS `setup.exe` (no Administrator rights; `makensis` from
 Microsoft Store MSIX; it needs `rsvg-convert` (`mingw-w64-ucrt-x86_64-librsvg`)
 and `makeappx.exe` from the Windows SDK, or `makemsix`.
 
+### Visual Studio
+
+Open `northstar.sln` in Visual Studio. The project is an NMake wrapper around
+the existing Meson/MSYS2 build, not an MSVC port: **Build**, **Rebuild** and
+**Clean** run the corresponding operations with MSYS2, and **Start** launches
+`builddir/src/gtk/northstar.exe` with `about:start`. The project expects MSYS2
+at `C:\msys64` and the Windows dependencies described above. Update
+`scripts/vs-build.ps1` if MSYS2 is installed elsewhere. The Visual Studio
+Debug and Release configurations both use the existing `builddir` Meson
+configuration; they do not select different compiler or optimization modes.
+
+The C files are listed for browsing in Solution Explorer. In particular,
+`src/appmain.c` contains the browser's `main()`; Visual Studio's MSVC debugger
+does not provide full source-level debugging support for this MinGW-built
+executable.
+
+## Visual Studio Code
+
+The repository's `.vscode/` workspace builds, runs and debugs the browser
+on all three platforms; [vscode.md](vscode.md) walks through the setup.
+
 ## Build
 
 ```sh

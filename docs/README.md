@@ -15,6 +15,9 @@ libcurl, carrying no upstream browser engine.
   meson/ninja build, meson options, the command line and headless mode,
   configuration and environment variables, and the smoke and render-test
   fixtures.
+- **[vscode.md](vscode.md)** — building, running and debugging in Visual
+  Studio Code with the workspace in `.vscode/`, on Linux, macOS and
+  Windows.
 - **[compliance.md](compliance.md)** — where the engine stands against the
   HTML and CSS specifications, how to reproduce the web-platform-tests
   scores, and the known structural gaps.

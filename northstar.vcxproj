@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{85E0042A-05DE-4B16-8C01-732CE8346241}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <RootNamespace>northstar</RootNamespace>
+    <ProjectName>northstar</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)scripts\vs-build.ps1" Build</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)scripts\vs-build.ps1" Rebuild</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)scripts\vs-build.ps1" Clean</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)builddir\src\gtk\northstar.exe</NMakeOutput>
+    <LocalDebuggerCommand>$(NMakeOutput)</LocalDebuggerCommand>
+    <LocalDebuggerWorkingDirectory>$(ProjectDir)builddir\src\gtk</LocalDebuggerWorkingDirectory>
+    <LocalDebuggerCommandArguments>about:start</LocalDebuggerCommandArguments>
+    <LocalDebuggerEnvironment>PATH=C:\msys64\ucrt64\bin;C:\msys64\mingw64\bin;%PATH%</LocalDebuggerEnvironment>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="src\appmain.c" />
+    <ClCompile Include="src\**\*.c" Exclude="src\appmain.c" />
+    <ClInclude Include="src\**\*.h" />
+    <None Include="meson.build" />
+    <None Include="src\meson.build" />
+    <None Include="src\gtk\meson.build" />
+    <None Include="scripts\_msys_build.sh" />
+    <None Include="scripts\_msys_env.sh" />
+    <None Include="scripts\run-windows.ps1" />
+    <None Include="scripts\vs-build.ps1" />
+    <None Include="docs\building.md" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

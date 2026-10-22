@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "ms-vscode.cpptools",
+        "mesonbuild.mesonbuild"
+    ],
+    "unwantedRecommendations": [
+        "ms-vscode.cmake-tools"
+    ]
+}

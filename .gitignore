@@ -24,6 +24,7 @@
 # Meson / Ninja
 /builddir/
 /builddir-release/
+/builddir-debug/
 /builddir-verify/
 /builddir-i386/
 /release-build/
@@ -57,7 +58,12 @@ Testing/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/c_cpp_properties.json
 *.sublime-*
 
 # Logs / scratch / tool output

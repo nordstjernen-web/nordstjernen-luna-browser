@@ -161,7 +161,8 @@ meson compile -C builddir
 ```
 
 For macOS (Homebrew or MacPorts), other Linux distributions and Windows,
-see [docs/building.md](docs/building.md).
+see [docs/building.md](docs/building.md). To build, run and debug from
+Visual Studio Code, see [docs/vscode.md](docs/vscode.md).
 
 The development helper configures the default build directory when
 needed and runs the same compile command:

@@ -1,0 +1,81 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Northstar",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "Build (debug)",
+            "program": "${workspaceFolder}/builddir-debug/src/gtk/northstar",
+            "args": ["about:start"],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                { "text": "-enable-pretty-printing", "ignoreFailures": true },
+                { "text": "handle SIGPIPE nostop noprint pass", "ignoreFailures": true }
+            ],
+            "osx": {
+                "MIMode": "lldb",
+                "setupCommands": []
+            },
+            "windows": {
+                "program": "${workspaceFolder}/builddir-debug/src/gtk/northstar.exe",
+                "cwd": "${workspaceFolder}/builddir-debug/src/gtk",
+                "miDebuggerPath": "${input:msys2Bin}/gdb.exe",
+                "environment": [
+                    { "name": "PATH", "value": "${input:msys2Bin};${env:PATH}" }
+                ],
+                "setupCommands": [
+                    { "text": "-enable-pretty-printing", "ignoreFailures": true }
+                ]
+            }
+        },
+        {
+            "name": "Debug Northstar (headless dump)",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "Build (debug)",
+            "program": "${workspaceFolder}/builddir-debug/src/gtk/northstar",
+            "args": ["--headless", "--dump=text", "${input:url}"],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                { "text": "-enable-pretty-printing", "ignoreFailures": true },
+                { "text": "handle SIGPIPE nostop noprint pass", "ignoreFailures": true }
+            ],
+            "osx": {
+                "MIMode": "lldb",
+                "setupCommands": []
+            },
+            "windows": {
+                "program": "${workspaceFolder}/builddir-debug/src/gtk/northstar.exe",
+                "miDebuggerPath": "${input:msys2Bin}/gdb.exe",
+                "environment": [
+                    { "name": "PATH", "value": "${input:msys2Bin};${env:PATH}" }
+                ],
+                "setupCommands": [
+                    { "text": "-enable-pretty-printing", "ignoreFailures": true }
+                ]
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "url",
+            "type": "promptString",
+            "description": "URL or file to load headless",
+            "default": "data/fixtures/basics.html"
+        },
+        {
+            "id": "msys2Bin",
+            "type": "pickString",
+            "description": "MSYS2 environment the browser was built in (the one with GTK 4 and gdb)",
+            "options": ["C:/msys64/ucrt64/bin", "C:/msys64/mingw64/bin"],
+            "default": "C:/msys64/ucrt64/bin"
+        }
+    ]
+}

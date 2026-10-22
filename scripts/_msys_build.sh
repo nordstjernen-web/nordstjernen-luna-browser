@@ -11,6 +11,6 @@ export CC="${CC:-clang}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 builddir="${BUILDDIR:-$repo/builddir}"
 if [ ! -f "$builddir/build.ninja" ]; then
-    meson setup "$builddir" "$repo"
+    meson setup "$builddir" "$repo" ${NS_MESON_SETUP_ARGS:-}
 fi
 meson compile -C "$builddir" "$@"
