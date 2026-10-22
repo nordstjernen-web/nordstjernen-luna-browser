@@ -1,4 +1,4 @@
-# Nordstjernen Web browser
+# Nordstjernen Web Browser
 
 ![Nordstjernen Luna showing a Wikipedia article](docs/screenshot.png)
 
