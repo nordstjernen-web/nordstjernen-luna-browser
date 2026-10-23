@@ -102,6 +102,7 @@ struct ns_browser {
     char           *refresh_url;
     gint64          refresh_due_us;
     char           *pending_post_body;
+    gboolean        safebrowsing_interstitial;
     gsize           pending_post_len;
     char           *pending_post_ct;
     gsize           caret_byte;
@@ -1194,6 +1195,12 @@ static gboolean
 browser_allows_navigation_url(ns_browser *b, const char *url)
 {
     if (!url) return TRUE;
+    /* The "continue anyway" link is only meaningful on the Safe Browsing
+     * warning page; from anywhere else it would be a way to navigate with
+     * no initiator (and so with chrome privileges). */
+    if (g_ascii_strncasecmp(url, NS_UNSAFE_CONTINUE_SCHEME,
+                            strlen(NS_UNSAFE_CONTINUE_SCHEME)) == 0)
+        return b && b->safebrowsing_interstitial;
     if (g_str_has_prefix(url, "about:"))
         return ns_about_url_is_public(url) ||
                (b && b->base_url && g_str_has_prefix(b->base_url, "about:"));
@@ -1543,10 +1550,9 @@ browser_open_common(const char *url, int viewport_width, double viewport_height,
     g_pending_user_activated = FALSE;
 
     if (g_str_has_prefix(url, NS_UNSAFE_CONTINUE_SCHEME)) {
-        const char *rest = url;
-        while (g_str_has_prefix(rest, NS_UNSAFE_CONTINUE_SCHEME))
-            rest += strlen(NS_UNSAFE_CONTINUE_SCHEME);
-        if (!*rest) return NULL;
+        const char *rest = url + strlen(NS_UNSAFE_CONTINUE_SCHEME);
+        /* Only ever continue to the web page that was blocked. */
+        if (body || !ns_url_is_http_or_https(rest)) return NULL;
         char *real = g_strdup(rest);
         char *host = ns_url_host_from(real);
         if (host) {
@@ -1567,10 +1573,11 @@ browser_open_common(const char *url, int viewport_width, double viewport_height,
             g_free(host);
             ns_node *doc = ns_html_parse(html, html ? (gssize)strlen(html) : 0);
             g_free(html);
-            return browser_build_from_doc(doc, g_strdup(url), viewport_width,
-                                          viewport_height, settle_ms, FALSE,
-                                          NULL, NULL, NULL, g_strdup("UTF-8"),
-                                          url, "text/html", NULL);
+            ns_browser *warning = browser_build_from_doc(doc, g_strdup(url),
+                viewport_width, viewport_height, settle_ms, FALSE,
+                NULL, NULL, NULL, g_strdup("UTF-8"), url, "text/html", NULL);
+            if (warning) warning->safebrowsing_interstitial = TRUE;
+            return warning;
         }
         g_free(host);
     }
