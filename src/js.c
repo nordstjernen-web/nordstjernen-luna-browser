@@ -55282,13 +55282,29 @@ ns_js_register_import_maps_rec(ns_js *js, ns_node *root, int depth)
         if (type && g_ascii_strcasecmp(type, "importmap") == 0 &&
             !ns_element_get_attr(root, NS_SCRIPT_ALREADY_STARTED)) {
             ns_element_set_attr(root, NS_SCRIPT_ALREADY_STARTED, "1");
-            char *base = ns_js_node_document_base_url(js, root);
-            for (const ns_node *c = root->first_child; c; c = c->next_sibling) {
+            /* The map is one table for the whole runtime and remaps every
+             * later import, so only the page's own document may set it --
+             * not a frame -- and only as an inline script its policy
+             * allows (nonce, hash or 'unsafe-inline'). */
+            if (ns_js_node_frame(root)) return;
+            GString *text = g_string_new(NULL);
+            for (const ns_node *c = root->first_child; c; c = c->next_sibling)
                 if (c->kind == NS_NODE_TEXT && c->text)
-                    ns_js_register_import_map_json(js, c->text,
-                                                   strlen(c->text), base);
+                    g_string_append(text, c->text);
+            const ns_csp *csp = ns_js_csp_for_node(js, root);
+            if (csp && !ns_csp_inline_script_allowed(
+                    csp, text->str, text->len,
+                    ns_element_get_attr(root, "nonce"))) {
+                if (js->log_cb)
+                    js->log_cb("CSP blocked: inline import map",
+                               js->log_user_data);
+                g_string_free(text, TRUE);
+                return;
             }
+            char *base = ns_js_node_document_base_url(js, root);
+            ns_js_register_import_map_json(js, text->str, text->len, base);
             g_free(base);
+            g_string_free(text, TRUE);
         }
         return;
     }
@@ -55576,10 +55592,17 @@ ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
     GError *err = NULL;
     const char *top_url = !js ? NULL
         : (js->worker_host ? js->worker_host->base_url : js->current_url);
+    /* A module admitted by its URL stays within script-src at every hop. */
+    ns_fetch_policy *module_policy =
+        !json_module && module_csp &&
+        ns_csp_allows(module_csp, NS_CSP_SCRIPT, module_name, top_url)
+            ? ns_fetch_policy_new_script_hops(ns_js_fetch_policy(js, NULL))
+            : ns_fetch_policy_ref(ns_js_fetch_policy(js, NULL));
     ns_response *resp = ns_js_fetch_resource(js, module_name, top_url,
         json_module ? NULL : ns_net_accept_headers_for(NS_FETCH_DEST_SCRIPT),
         json_module ? NS_FETCH_DEST_CONNECT : NS_FETCH_DEST_SCRIPT,
-        ns_js_fetch_policy(js, NULL), &err);
+        module_policy, &err);
+    ns_fetch_policy_unref(module_policy);
     if (!resp || resp->error || !resp->body || resp->body->len == 0 ||
         resp->body->len > NS_MAX_SCRIPT_BYTES) {
         const char *why = err ? err->message :
@@ -55956,6 +55979,24 @@ ns_js_run_script_element(ns_js *js, ns_node *n, const char *origin)
     if (src && !*src) {
         ns_queue_event_task(js, n, "error");
         return;
+    }
+    if (src && (g_ascii_strncasecmp(src, "data:", 5) == 0 ||
+                g_ascii_strncasecmp(src, "blob:", 5) == 0)) {
+        /* data: and blob: sources are run here, before the URL-based
+         * script-src check below; they need it all the same. */
+        const ns_csp *csp = ns_js_csp_for_node(js, n);
+        if (csp && !ns_csp_allows_with_nonce(
+                csp, NS_CSP_SCRIPT, src, origin, nonce,
+                !(n->flags & NS_NODE_NOT_PARSER_INSERTED))) {
+            if (js->log_cb) {
+                char *line = g_strdup_printf("CSP blocked: script %.*s",
+                                             40, src);
+                js->log_cb(line, js->log_user_data);
+                g_free(line);
+            }
+            ns_js_dispatch_resource_event(js, n, "error");
+            return;
+        }
     }
     if (src) {
         if (g_str_has_prefix(src, "data:")) {
@@ -57467,9 +57508,18 @@ ns_js_run_iframe_scripts(ns_js *js, ns_node *content_root,
             }
             if (abs_url) {
                 GError *err = NULL;
+                /* As for the page's own scripts: one admitted by its URL
+                 * stays within script-src at every redirect hop. */
+                ns_fetch_policy *script_policy =
+                    frame_csp && ns_csp_allows(frame_csp, NS_CSP_SCRIPT,
+                                               abs_url, origin)
+                        ? ns_fetch_policy_new_script_hops(
+                              ns_js_fetch_policy(js, n))
+                        : ns_fetch_policy_ref(ns_js_fetch_policy(js, n));
                 ns_response *r = ns_js_fetch_resource(
                     js, abs_url, origin, NULL, NS_FETCH_DEST_SCRIPT,
-                    ns_js_fetch_policy(js, n), &err);
+                    script_policy, &err);
+                ns_fetch_policy_unref(script_policy);
                 gboolean nosniff_blocked = r &&
                     ns_net_header_is_nosniff(r->x_content_type_options) &&
                     !content_type_is_javascript(r->content_type);
@@ -58285,26 +58335,43 @@ ns_js_lifecycle_has_blockers(ns_js *js)
 }
 
 
-/* Content scripts come as a function expression that receives the
- * extension helpers as its argument (see ns_ext_content_scripts_for_url). */
+/* Content scripts come as an array of [extension id, function] pairs;
+ * each function receives that extension's helpers as its argument (see
+ * ns_ext_content_scripts_for_url).  The array is ours, made by this
+ * eval, so reading it runs no page code. */
 static void
 ns_js_run_content_scripts(ns_js *js, const char *src)
 {
     if (!js || !src || js->halted || js->in_pump) return;
     js->eval_deadline_us = g_get_monotonic_time() + ns_js_eval_budget_us();
-    JSValue fn = JS_Eval(js->ctx, src, strlen(src), "content-script",
-                         JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsFunction(js->ctx, fn)) {
-        JSValue helpers = ns_ext_content_script_helpers(js->ctx);
-        JSValue r = JS_Call(js->ctx, fn, JS_UNDEFINED, 1,
-                            (JSValueConst *)&helpers);
-        if (JS_IsException(r)) JS_FreeValue(js->ctx, JS_GetException(js->ctx));
-        JS_FreeValue(js->ctx, r);
-        JS_FreeValue(js->ctx, helpers);
-    } else if (JS_IsException(fn)) {
+    JSValue list = JS_Eval(js->ctx, src, strlen(src), "content-script",
+                           JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(list)) {
         JS_FreeValue(js->ctx, JS_GetException(js->ctx));
+    } else if (JS_IsArray(list)) {
+        uint32_t n = ns_js_array_length(js->ctx, list);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue pair = JS_GetPropertyUint32(js->ctx, list, i);
+            JSValue idv = JS_GetPropertyUint32(js->ctx, pair, 0);
+            JSValue fn = JS_GetPropertyUint32(js->ctx, pair, 1);
+            const char *id = JS_IsString(idv) ? JS_ToCString(js->ctx, idv)
+                                              : NULL;
+            if (JS_IsFunction(js->ctx, fn)) {
+                JSValue helpers = ns_ext_content_script_helpers(js->ctx, id);
+                JSValue r = JS_Call(js->ctx, fn, JS_UNDEFINED, 1,
+                                    (JSValueConst *)&helpers);
+                if (JS_IsException(r))
+                    JS_FreeValue(js->ctx, JS_GetException(js->ctx));
+                JS_FreeValue(js->ctx, r);
+                JS_FreeValue(js->ctx, helpers);
+            }
+            if (id) JS_FreeCString(js->ctx, id);
+            JS_FreeValue(js->ctx, fn);
+            JS_FreeValue(js->ctx, idv);
+            JS_FreeValue(js->ctx, pair);
+        }
     }
-    JS_FreeValue(js->ctx, fn);
+    JS_FreeValue(js->ctx, list);
     js->eval_deadline_us = 0;
     ns_drain_microtasks(js);
 }

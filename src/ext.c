@@ -976,6 +976,22 @@ ns_ext_parse_web_accessible(ns_ext *e, JSContext *ctx, JSValueConst manifest)
     JS_FreeValue(ctx, war);
 }
 
+/* A resource path as the globs are written: no "." or ".." segments, no
+ * empty segments, no backslashes or NULs (it is matched before it is
+ * resolved, and "*" would otherwise match "../"). */
+static gboolean
+ns_ext_relative_path_is_plain(const char *relative)
+{
+    if (strchr(relative, '\\')) return FALSE;
+    while (*relative == '/') relative++;
+    if (!*relative) return FALSE;
+    g_auto(GStrv) segs = g_strsplit(relative, "/", -1);
+    for (char **s = segs; *s; s++)
+        if (!**s || strcmp(*s, ".") == 0 || strcmp(*s, "..") == 0)
+            return FALSE;
+    return TRUE;
+}
+
 static gboolean
 ns_ext_is_web_accessible(const ns_ext *e, const char *relative)
 {
@@ -1109,27 +1125,51 @@ ns_ext_migrate_default_dir(void)
     g_mkdir_with_parents(dir, 0700);
 }
 
-JSValue
-ns_ext_content_script_helpers(JSContext *ctx)
+static const struct {
+    const char *name;
+    JSCFunction *fn;
+    int argc;
+    gboolean takes_id;
+} ns_ext_helpers[] = {
+    { "manifest", ns_ext_js_manifest, 1, TRUE },
+    { "url",      ns_ext_js_url,      2, TRUE },
+    { "sread",    ns_ext_js_sread,    2, TRUE },
+    { "swrite",   ns_ext_js_swrite,   3, TRUE },
+    { "platform", ns_ext_js_platform, 0, FALSE },
+    { "arch",     ns_ext_js_arch,     0, FALSE },
+    { "uilang",   ns_ext_js_uilang,   0, FALSE },
+};
+
+/* Calls ns_ext_helpers[magic] with its first argument replaced by the
+ * bound extension id. */
+static JSValue
+ns_ext_js_bound(JSContext *ctx, JSValueConst this_val, int argc,
+                JSValueConst *argv, int magic, JSValue *data)
 {
-    static const struct {
-        const char *name;
-        JSCFunction *fn;
-        int argc;
-    } helpers[] = {
-        { "manifest", ns_ext_js_manifest, 1 },
-        { "url",      ns_ext_js_url,      2 },
-        { "sread",    ns_ext_js_sread,    2 },
-        { "swrite",   ns_ext_js_swrite,   3 },
-        { "platform", ns_ext_js_platform, 0 },
-        { "arch",     ns_ext_js_arch,     0 },
-        { "uilang",   ns_ext_js_uilang,   0 },
-    };
+    int n = MAX(argc, ns_ext_helpers[magic].argc);
+    JSValueConst *args = g_new0(JSValueConst, n > 0 ? n : 1);
+    for (int i = 0; i < n; i++)
+        args[i] = i < argc ? argv[i] : JS_UNDEFINED;
+    args[0] = data[0];
+    JSValue r = ns_ext_helpers[magic].fn(ctx, this_val, n, args);
+    g_free(args);
+    return r;
+}
+
+JSValue
+ns_ext_content_script_helpers(JSContext *ctx, const char *ext_id)
+{
     JSValue h = JS_NewObjectProto(ctx, JS_NULL);
-    for (gsize i = 0; i < G_N_ELEMENTS(helpers); i++)
-        JS_DefinePropertyValueStr(ctx, h, helpers[i].name,
-            JS_NewCFunction(ctx, helpers[i].fn, helpers[i].name,
-                            helpers[i].argc), 0);
+    JSValue id = JS_NewString(ctx, ext_id ? ext_id : "");
+    for (gsize i = 0; i < G_N_ELEMENTS(ns_ext_helpers); i++) {
+        JSValue fn = ns_ext_helpers[i].takes_id
+            ? JS_NewCFunctionData(ctx, ns_ext_js_bound,
+                                  ns_ext_helpers[i].argc, (int)i, 1, &id)
+            : JS_NewCFunction(ctx, ns_ext_helpers[i].fn,
+                              ns_ext_helpers[i].name, ns_ext_helpers[i].argc);
+        JS_DefinePropertyValueStr(ctx, h, ns_ext_helpers[i].name, fn, 0);
+    }
+    JS_FreeValue(ctx, id);
     return h;
 }
 
@@ -1206,6 +1246,11 @@ ns_ext_content_scripts_for_url(const char *url, gboolean at_start)
 {
     ns_ext_init();
     if (!url || !*url || g_exts->len == 0) return NULL;
+    /* One shim per extension, each called with helpers bound to its own
+     * id, so one extension's content scripts cannot reach another's
+     * storage through the shared shim's locals. */
+    GString *out = g_string_new("[");
+    gboolean any = FALSE;
     GString *body = g_string_new(NULL);
     if (at_start) {
         g_autofree char *s = NULL, *h = NULL, *pth = NULL;
@@ -1221,6 +1266,15 @@ ns_ext_content_scripts_for_url(const char *url, gboolean at_start)
                 ";(document.head||document.documentElement||document)"
                 ".appendChild(__ndch);}catch(e){}})();\n");
         }
+    }
+    if (body->len) {
+        g_string_append(out, "[null,");
+        g_string_append(out, ns_ext_shim_prelude);
+        g_string_append(out, body->str);
+        g_string_append(out, ns_ext_shim_epilogue);
+        g_string_append(out, "],");
+        any = TRUE;
+        g_string_truncate(body, 0);
     }
     for (guint i = 0; i < g_exts->len; i++) {
         ns_ext *e = g_ptr_array_index(g_exts, i);
@@ -1255,13 +1309,21 @@ ns_ext_content_scripts_for_url(const char *url, gboolean at_start)
             }
             g_string_append(body, ");\n");
         }
+        if (body->len) {
+            g_string_append(out, "[\"");
+            ns_ext_append_id(out, e->id);
+            g_string_append(out, "\",");
+            g_string_append(out, ns_ext_shim_prelude);
+            g_string_append(out, body->str);
+            g_string_append(out, ns_ext_shim_epilogue);
+            g_string_append(out, "],");
+            any = TRUE;
+            g_string_truncate(body, 0);
+        }
     }
-    if (body->len == 0) { g_string_free(body, TRUE); return NULL; }
-
-    GString *out = g_string_new(ns_ext_shim_prelude);
-    g_string_append(out, body->str);
-    g_string_append(out, ns_ext_shim_epilogue);
     g_string_free(body, TRUE);
+    if (!any) { g_string_free(out, TRUE); return NULL; }
+    g_string_append(out, "]");
     return g_string_free(out, FALSE);
 }
 
@@ -1296,7 +1358,8 @@ ns_ext_resource_load(const char *url, GBytes **bytes,
     /* These URLs are only ever loaded by web content (the browser reads
      * content scripts from disk), so only the resources the extension
      * declares web-accessible are served. */
-    if (!relative || !ns_ext_is_web_accessible(e, relative)) {
+    if (!relative || !ns_ext_relative_path_is_plain(relative) ||
+        !ns_ext_is_web_accessible(e, relative)) {
         if (error) *error = g_strdup("extension resource is not web-accessible");
         return TRUE;
     }
