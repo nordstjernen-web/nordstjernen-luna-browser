@@ -30,7 +30,10 @@ ns_response *ns_engine_post_blocking(const char *url, const char *top_url,
 
 char *ns_engine_linked_css_text(const char *url);
 
+/* csp_header is the response's Content-Security-Policy (or NULL); the
+ * document's <meta http-equiv> policies are added to it. */
 void ns_engine_speculative_preload(ns_node *doc, const char *base_url,
+                                   const char *csp_header,
                                    gboolean include_images);
 
 GHashTable *ns_engine_compute_cascade(ns_node *doc, const char *base_url,
