@@ -235,6 +235,12 @@ ns_font_woff_to_sfnt(const guint8 *data, gsize len, gsize *out_len,
     for (FT_UInt i = 0; i < num; i++) {
         FT_ULong tag = 0, tlen = 0;
         if (FT_Sfnt_Table_Info(face, i, &tag, &tlen)) { bad = TRUE; break; }
+        /* Tables are copied back by tag, which always resolves to the
+         * first directory entry with that tag: a repeated tag would copy
+         * the first entry's (larger) length into a later, smaller slot. */
+        for (FT_UInt j = 0; j < i; j++)
+            if (tabs[j].tag == tag) bad = TRUE;
+        if (bad) break;
         tabs[i].tag = tag;
         tabs[i].len = tlen;
         if (tag == FT_MAKE_TAG('C', 'F', 'F', ' ')) cff = TRUE;
@@ -269,7 +275,12 @@ ns_font_woff_to_sfnt(const guint8 *data, gsize len, gsize *out_len,
             ns_put_be16(buf + 8, es);
             ns_put_be16(buf + 10, rs);
             for (FT_UInt i = 0; i < num; i++) {
-                FT_ULong tlen = tabs[i].len;
+                FT_ULong tlen = 0;
+                if (FT_Load_Sfnt_Table(face, tabs[i].tag, 0, NULL, &tlen) ||
+                    tlen != tabs[i].len) {
+                    g_clear_pointer(&buf, g_free);
+                    break;
+                }
                 if (FT_Load_Sfnt_Table(face, tabs[i].tag, 0,
                                        buf + tabs[i].off, &tlen)) {
                     g_clear_pointer(&buf, g_free);
