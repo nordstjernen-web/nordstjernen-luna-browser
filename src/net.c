@@ -986,7 +986,7 @@ ns_net_referer_for(const char *url, const char *top_url,
     return out;
 }
 
-static char *
+char *
 ns_url_site_from(const char *url)
 {
     if (!url || !*url) return NULL;

@@ -368,15 +368,25 @@ preload_collect(const ns_node *n, const char *base, gboolean include_images,
                         connect_out, connect_seen, depth + 1);
 }
 
+typedef struct {
+    ns_fetch_destination dest;
+    char *url;
+    char *top_url;
+} preload_request;
+
 static void
 on_preload_fetched(GObject *src, GAsyncResult *res, gpointer user_data)
 {
     (void)src;
     ns_response *resp = ns_net_fetch_finish(res, NULL);
-    if (resp && GPOINTER_TO_INT(user_data) == NS_FETCH_DEST_SCRIPT &&
+    preload_request *req = user_data;
+    if (resp && req->dest == NS_FETCH_DEST_SCRIPT &&
         resp->status == 200 && resp->body)
-        ns_bytecode_cache_precompile(resp->final_url, resp->body->data,
+        ns_bytecode_cache_precompile(req->top_url, req->url, resp->body->data,
                                      resp->body->len);
+    g_free(req->top_url);
+    g_free(req->url);
+    g_free(req);
     if (resp) ns_response_free(resp);
 }
 
@@ -408,10 +418,13 @@ ns_engine_speculative_preload(ns_node *doc, const char *base_url,
             ns_net_preload_expect(key);
             g_free(key);
         }
+        preload_request *req = g_new0(preload_request, 1);
+        req->dest = target->dest;
+        req->url = g_strdup(target->url);
+        req->top_url = g_strdup(base_url);
         ns_net_request_async(target->url, base_url, "GET", NULL, 0, NULL,
                              headers, target->dest, NULL, NULL,
-                             on_preload_fetched,
-                             GINT_TO_POINTER(target->dest));
+                             on_preload_fetched, req);
     }
     g_ptr_array_free(urls, TRUE);
     g_ptr_array_free(connects, TRUE);
