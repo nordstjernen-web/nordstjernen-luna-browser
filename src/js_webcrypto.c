@@ -319,7 +319,10 @@ ns_wc_is_buffer_source(JSContext *ctx, JSValueConst v)
 {
     const uint8_t *data = NULL;
     size_t len = 0;
-    return ns_js_buffer_source_bytes(ctx, v, &data, &len);
+    JSValue hold;
+    gboolean ok = ns_js_buffer_source_bytes(ctx, v, &data, &len, &hold);
+    JS_FreeValue(ctx, hold);
+    return ok;
 }
 
 static void
@@ -327,8 +330,10 @@ ns_wc_copy_buffer(JSContext *ctx, JSValueConst v, ns_wc_buf *out)
 {
     const uint8_t *data = NULL;
     size_t len = 0;
-    ns_js_buffer_source_bytes(ctx, v, &data, &len);
+    JSValue hold;
+    ns_js_buffer_source_bytes(ctx, v, &data, &len, &hold);
     ns_wc_buf_set(out, data, data ? len : 0);
+    JS_FreeValue(ctx, hold);
 }
 
 static void

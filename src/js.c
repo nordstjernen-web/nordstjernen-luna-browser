@@ -15808,8 +15808,11 @@ ns_window_getRandomValues(JSContext *ctx, JSValueConst this_val,
     if (JS_GetTypedArrayType(arr) < 0) {
         const uint8_t *view_data = NULL;
         size_t view_len = 0;
-        if (JS_IsObject(arr) && !JS_IsArrayBuffer(arr) &&
-            ns_js_buffer_source_bytes(ctx, arr, &view_data, &view_len))
+        JSValue hold = JS_UNDEFINED;
+        gboolean is_view = JS_IsObject(arr) && !JS_IsArrayBuffer(arr) &&
+            ns_js_buffer_source_bytes(ctx, arr, &view_data, &view_len, &hold);
+        JS_FreeValue(ctx, hold);
+        if (is_view)
             return ns_throw_dom_exception(ctx, "TypeMismatchError", 17,
                 "getRandomValues: integer typed array required");
         return JS_ThrowTypeError(ctx, "getRandomValues: integer typed array required");

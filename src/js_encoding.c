@@ -40,22 +40,6 @@ static JSClassDef ns_text_encoder_class = {
 };
 
 static gboolean
-ns_value_is_array_buffer_view(JSContext *ctx, JSValueConst v)
-{
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ab = JS_GetPropertyStr(ctx, global, "ArrayBuffer");
-    JSValue is_view = JS_GetPropertyStr(ctx, ab, "isView");
-    JSValue r = JS_IsFunction(ctx, is_view)
-        ? JS_Call(ctx, is_view, ab, 1, &v) : JS_FALSE;
-    gboolean yes = JS_ToBool(ctx, r) > 0;
-    JS_FreeValue(ctx, r);
-    JS_FreeValue(ctx, is_view);
-    JS_FreeValue(ctx, ab);
-    JS_FreeValue(ctx, global);
-    return yes;
-}
-
-static gboolean
 ns_view_bytes(JSContext *ctx, JSValueConst buffer, uint64_t offset,
               uint64_t length, const uint8_t **data, size_t *len)
 {
@@ -72,12 +56,17 @@ ns_view_bytes(JSContext *ctx, JSValueConst buffer, uint64_t offset,
     return TRUE;
 }
 
+/* Resolve a BufferSource to its bytes.  *hold receives a reference that
+ * keeps the backing ArrayBuffer alive; the caller frees it with
+ * JS_FreeValue once it no longer reads *data (JS_UNDEFINED when nothing
+ * extra needs holding). */
 gboolean
 ns_js_buffer_source_bytes(JSContext *ctx, JSValueConst v, const uint8_t **data,
-                          size_t *len)
+                          size_t *len, JSValue *hold)
 {
     *data = NULL;
     *len = 0;
+    *hold = JS_UNDEFINED;
     if (!JS_IsObject(v)) return FALSE;
     if (JS_GetTypedArrayType(v) >= 0) {
         size_t offset = 0, length = 0;
@@ -99,7 +88,12 @@ ns_js_buffer_source_bytes(JSContext *ctx, JSValueConst v, const uint8_t **data,
     }
     JS_FreeValue(ctx, JS_GetException(ctx));
     if (JS_IsArrayBuffer(v)) return TRUE;
-    if (!ns_value_is_array_buffer_view(ctx, v)) return FALSE;
+    /* DataView: only a genuine one, never an object that merely claims to
+     * be a view.  Its buffer/byteOffset/byteLength accessors can still be
+     * replaced by the page, so the buffer they return is held for the
+     * caller (it may be a fresh object nothing else references) and the
+     * range is checked against that buffer's real size. */
+    if (!JS_IsDataView(v)) return FALSE;
     JSValue buf = JS_GetPropertyStr(ctx, v, "buffer");
     JSValue off_v = JS_GetPropertyStr(ctx, v, "byteOffset");
     JSValue len_v = JS_GetPropertyStr(ctx, v, "byteLength");
@@ -111,7 +105,10 @@ ns_js_buffer_source_bytes(JSContext *ctx, JSValueConst v, const uint8_t **data,
         JS_FreeValue(ctx, JS_GetException(ctx));
     JS_FreeValue(ctx, len_v);
     JS_FreeValue(ctx, off_v);
-    JS_FreeValue(ctx, buf);
+    if (*data)
+        *hold = buf;
+    else
+        JS_FreeValue(ctx, buf);
     return TRUE;
 }
 
@@ -192,16 +189,22 @@ ns_text_decoder_decode(JSContext *ctx, JSValueConst this_val,
     gboolean has_input = argc >= 1 && !JS_IsUndefined(argv[0]);
     const uint8_t *data = NULL;
     size_t len = 0;
-    if (has_input && !ns_js_buffer_source_bytes(ctx, argv[0], &data, &len))
+    JSValue hold = JS_UNDEFINED;
+    if (has_input &&
+        !ns_js_buffer_source_bytes(ctx, argv[0], &data, &len, &hold))
         return JS_ThrowTypeError(ctx,
             "TextDecoder.decode: input must be an ArrayBuffer or ArrayBufferView");
+    JS_FreeValue(ctx, hold);
+    hold = JS_UNDEFINED;
+    data = NULL;
+    len = 0;
     JSValue bad = ns_check_dictionary(ctx, argc, argv, 1, "TextDecoder.decode");
     if (JS_IsException(bad)) return bad;
     gboolean stream = FALSE;
     if (ns_dictionary_bool(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, "stream",
                            &stream) < 0)
         return JS_EXCEPTION;
-    if (has_input) ns_js_buffer_source_bytes(ctx, argv[0], &data, &len);
+    if (has_input) ns_js_buffer_source_bytes(ctx, argv[0], &data, &len, &hold);
 
     if (!td->do_not_flush) {
         ns_decoder_reset(td->decoder);
@@ -209,7 +212,9 @@ ns_text_decoder_decode(JSContext *ctx, JSValueConst this_val,
     }
     td->do_not_flush = stream;
     GString *out = g_string_sized_new(len + 1);
-    if (!ns_decoder_decode(td->decoder, data, len, !stream, out)) {
+    gboolean decoded = ns_decoder_decode(td->decoder, data, len, !stream, out);
+    JS_FreeValue(ctx, hold);
+    if (!decoded) {
         g_string_free(out, TRUE);
         return JS_ThrowTypeError(ctx,
             "TextDecoder.decode: the encoded data was not valid");
