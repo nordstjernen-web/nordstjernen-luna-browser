@@ -102,6 +102,7 @@ struct ns_browser {
     char           *refresh_url;
     gint64          refresh_due_us;
     char           *pending_post_body;
+    char           *pending_nav_initiator;
     gboolean        safebrowsing_interstitial;
     gsize           pending_post_len;
     char           *pending_post_ct;
@@ -1239,6 +1240,7 @@ static void browser_js_navigate(const char *url, gboolean reload, gpointer ud)
     if (!b || !url || !*url) return;
     g_free(b->pending_nav);
     b->pending_nav = browser_resolve_navigation(b, url);
+    g_clear_pointer(&b->pending_nav_initiator, g_free);
 }
 
 static void browser_js_download(const char *url, const char *filename, gpointer ud)
@@ -3075,6 +3077,26 @@ browser_perform_form_navigation(ns_browser *b, const ns_node *form,
                                 const ns_node *clicked)
 {
     if (!b || !form || !b->doc) return;
+    /* Forms inside a frame are navigated by the top-level browser.  The
+     * request must still carry the frame's identity -- its URL as the
+     * base for the action and as the initiator (Origin, Sec-Fetch-Site,
+     * Lax cookies) -- not the embedder's, or a cross-origin frame could
+     * post to its embedder as if the embedder had. */
+    const char *form_base = b->base_url;
+    g_clear_pointer(&b->pending_nav_initiator, g_free);
+    for (const ns_node *p = form->parent; p; p = p->parent) {
+        if (!ns_node_is_element_named(p, "iframe") &&
+            !ns_node_is_element_named(p, "frame") &&
+            !ns_node_is_element_named(p, "object"))
+            continue;
+        const char *fu = ns_element_get_attr(p, "data-nd-frame-url");
+        gboolean opaque = ns_element_get_attr(p, "data-nd-frame-opaque") != NULL;
+        if (fu && *fu) form_base = fu;
+        if (opaque || !fu || !ns_url_same_origin(fu, b->base_url))
+            b->pending_nav_initiator =
+                g_strdup(opaque || !fu ? "about:blank" : fu);
+        break;
+    }
     gboolean from_text = clicked && ns_node_is_text_input(clicked);
 
     const char *method = ns_element_get_attr(form, "method");
@@ -3087,8 +3109,8 @@ browser_perform_form_navigation(ns_browser *b, const ns_node *form,
     const char *formaction = (clicked && !from_text)
                              ? ns_element_get_attr(clicked, "formaction") : NULL;
     if (formaction && *formaction) action = formaction;
-    char *abs_action = (action && *action) ? ns_url_resolve(b->base_url, action)
-                                           : g_strdup(b->base_url);
+    char *abs_action = (action && *action) ? ns_url_resolve(form_base, action)
+                                           : g_strdup(form_base);
     if (!abs_action) return;
     if (!browser_allows_navigation_url(b, abs_action)) {
         g_free(abs_action);
@@ -3896,6 +3918,15 @@ ns_browser_security(ns_browser *browser, const char **out_ip)
 }
 
 char *
+ns_browser_take_pending_initiator(ns_browser *browser)
+{
+    if (!browser || !browser->pending_nav_initiator) return NULL;
+    char *out = strdup(browser->pending_nav_initiator);
+    g_clear_pointer(&browser->pending_nav_initiator, g_free);
+    return out;
+}
+
+char *
 ns_browser_take_pending_nav(ns_browser *browser)
 {
     if (!browser || !browser->pending_nav) return NULL;
@@ -4023,6 +4054,7 @@ ns_browser_close(ns_browser *browser)
     g_free(browser->doc_charset);
     g_free(browser->doc_language);
     g_free(browser->pending_nav);
+    g_free(browser->pending_nav_initiator);
     g_free(browser->pending_download);
     g_free(browser->pending_clipboard);
     g_free(browser->refresh_url);

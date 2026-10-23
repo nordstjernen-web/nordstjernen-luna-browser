@@ -11938,6 +11938,30 @@ ns_js_caller_origin(ns_js *js, JSContext *ctx)
     return o ? o : g_strdup_printf("null:%p", (void *)js);
 }
 
+/* URL of the document whose script is calling: a frame's own URL when a
+ * frame realm calls the embedder's XMLHttpRequest/sendBeacon, so its
+ * requests carry the frame's identity (cookies, Origin, CORS) rather than
+ * the embedder's.  Opaque (sandboxed) frames get about:blank, which has
+ * no origin and no cookies. */
+static char *
+ns_js_caller_document_url(ns_js *js, JSContext *ctx)
+{
+    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    if (caller && caller != js->ctx && js->frame_contexts) {
+        GHashTableIter it;
+        gpointer iframe, fctx;
+        g_hash_table_iter_init(&it, js->frame_contexts);
+        while (g_hash_table_iter_next(&it, &iframe, &fctx)) {
+            if (fctx != caller) continue;
+            const char *u = ns_element_get_attr(iframe, "data-nd-frame-url");
+            if (ns_element_get_attr(iframe, "data-nd-frame-opaque") || !u)
+                return g_strdup("about:blank");
+            return g_strdup(u);
+        }
+    }
+    return g_strdup(js->current_url);
+}
+
 static JSValue
 ns_broadcast_post_message(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -13193,7 +13217,9 @@ ns_history_set_state_impl(JSContext *ctx, int argc, JSValueConst *argv,
         g_autofree char *curr_origin = ns_url_origin_from(js->current_url);
         gboolean same_origin = new_origin && *new_origin &&
                                curr_origin && *curr_origin &&
-                               strcmp(new_origin, curr_origin) == 0;
+                               strcmp(new_origin, curr_origin) == 0 &&
+                               (!js->document_origin ||
+                                strcmp(new_origin, js->document_origin) == 0);
         if (!same_origin) {
             g_free(new_url);
             JS_FreeValue(ctx, state);
@@ -16763,6 +16789,7 @@ typedef struct ns_xhr_state {
     JSValue    obj;
     char      *method;
     char      *url;
+    char      *doc_url;
     double     start_ms;
     GPtrArray *request_headers;
 } ns_xhr_state;
@@ -16961,6 +16988,7 @@ ns_xhr_state_free(ns_xhr_state *st)
     if (!st) return;
     if (st->ctx) JS_FreeValue(st->ctx, st->obj);
     g_free(st->method);
+    g_free(st->doc_url);
     g_free(st->url);
     if (st->request_headers) g_ptr_array_free(st->request_headers, TRUE);
     g_free(st);
@@ -17405,8 +17433,8 @@ ns_xhr_deliver(ns_xhr_state *st, ns_response *resp, GError *err)
     JSContext *ctx = st->ctx;
     gboolean response_allowed = FALSE;
     if (resp && !err) {
-        gboolean allow = cors_allows(js_from_ctx(ctx) ? js_from_ctx(ctx)->current_url : NULL,
-                                     resp->final_url, resp->cors_allow_origin);
+        gboolean allow = cors_allows(st->doc_url, resp->final_url,
+                                     resp->cors_allow_origin);
         response_allowed = allow;
         int code = allow ? (int)resp->status : 0;
         JS_SetPropertyStr(ctx, st->obj, "status", JS_NewInt32(ctx, code));
@@ -17415,9 +17443,8 @@ ns_xhr_deliver(ns_xhr_state *st, ns_response *resp, GError *err)
         JS_SetPropertyStr(ctx, st->obj, "responseURL",
                           JS_NewString(ctx,
                               allow && resp->final_url ? resp->final_url : ""));
-        gboolean same_origin = ns_url_same_origin(
-            js_from_ctx(ctx) ? js_from_ctx(ctx)->current_url : NULL,
-            resp->final_url);
+        gboolean same_origin = ns_url_same_origin(st->doc_url,
+                                                  resp->final_url);
         char *hdrs;
         if (!allow) {
             hdrs = g_strdup("");
@@ -17912,8 +17939,8 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     st->ctx = ctx;
     st->js  = _js;
     st->obj = JS_DupValue(ctx, this_val);
-    char *resolved = (_js && _js->current_url)
-        ? ns_url_resolve(_js->current_url, url) : NULL;
+    st->doc_url = _js ? ns_js_caller_document_url(_js, ctx) : NULL;
+    char *resolved = st->doc_url ? ns_url_resolve(st->doc_url, url) : NULL;
     st->url = resolved ? resolved : g_strdup(url);
     st->start_ms = ns_perf_now_ms(_js);
     if (method) st->method = g_strdup(method);
@@ -17938,7 +17965,7 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     }
     JS_FreeValue(ctx, headers_arr);
     if (!hdrs) hdrs = g_ptr_array_new_with_free_func(g_free);
-    if (_js && ns_url_same_origin(_js->current_url, st->url))
+    if (_js && ns_url_same_origin(st->doc_url, st->url))
         g_ptr_array_add(hdrs, g_strdup("X-Requested-With: XMLHttpRequest"));
     st->request_headers = hdrs;
 
@@ -17965,7 +17992,7 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     }
     ns_fetch_policy *policy = st->js ? ns_js_fetch_policy(st->js, NULL) : NULL;
     ns_fetch_verdict verdict = ns_fetch_policy_check(
-        policy, NS_FETCH_DEST_CONNECT, st->js ? st->js->current_url : NULL,
+        policy, NS_FETCH_DEST_CONNECT, st->doc_url,
         st->url, NULL);
     gboolean blocked = ns_fetch_verdict_blocks(verdict);
     if (blocked) {
@@ -18009,7 +18036,7 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     }
 
     ns_net_request_async(st->url,
-                         st->js ? st->js->current_url : NULL,
+                         st->doc_url,
                          st->method ? st->method : "GET",
                          body, body_len,
                          effective_ct,
@@ -18382,7 +18409,7 @@ ns_form_data_populate_from_form(JSContext *ctx, JSValueConst fd,
 {
     JSValue controls = JS_NewArray(ctx);
     uint32_t i = 0;
-    const ns_node *doc = ns_node_root(form);
+    const ns_node *doc = ns_node_document_root(form);
     ns_form_collect_controls(form, doc ? doc : form, doc ? doc : form,
                              ctx, controls, &i, 0, TRUE);
     uint32_t len = ns_js_array_length(ctx, controls);
@@ -18484,7 +18511,7 @@ ns_window_form_data_ctor(JSContext *ctx, JSValueConst this_val,
                     "FormData: the submitter must be a submit button");
             }
             ns_js *jx = js_from_ctx(ctx);
-            const ns_node *fdoc = ns_node_root(form);
+            const ns_node *fdoc = ns_node_document_root(form);
             if (ns_form_owner(submitter,
                               fdoc ? fdoc : (jx ? jx->current_doc : NULL)) != form) {
                 JS_FreeValue(ctx, obj);
@@ -33512,7 +33539,7 @@ ns_radio_group_required(const ns_node *radio)
     const char *name = ns_element_get_attr(radio, "name");
     if (!name || !*name) return FALSE;
     if (ns_element_get_attr(radio, "required")) return TRUE;
-    const ns_node *root = ns_node_root(radio);
+    const ns_node *root = ns_node_document_root(radio);
     return ns_radio_group_has_required(root, root, ns_form_owner(radio, root),
                                        name, 0);
 }
@@ -33568,7 +33595,7 @@ ns_js_compute_validity(const ns_node *n,
           (!needs_mutable ||
            (!ns_element_effectively_disabled(n) &&
             !ns_form_control_readonly_bars_validation(n)));
-    if (required && ns_form_control_value_missing(n, value, ns_node_root(n))) {
+    if (required && ns_form_control_value_missing(n, value, ns_node_document_root(n))) {
         *value_missing = TRUE;
         g_free(owned_value);
         return;
@@ -33734,7 +33761,7 @@ ns_element_check_validity(JSContext *ctx, JSValueConst this_val,
     (void)argc; (void)argv;
     const ns_node *n = ns_unwrap_element(this_val);
     if (ns_node_is_element_named(n, "form")) {
-        const ns_node *doc = ns_node_root(n);
+        const ns_node *doc = ns_node_document_root(n);
         GPtrArray *bad = g_ptr_array_new();
         ns_js_form_collect_invalid(n, doc ? doc : n, doc ? doc : n, 0, bad);
         ns_js *js = js_from_ctx(ctx);
@@ -33863,7 +33890,7 @@ ns_element_get_label_control(JSContext *ctx, JSValueConst this_val)
     const char *forv = ns_element_get_attr(label, "for");
     if (forv) {
         const ns_node *target =
-            ns_node_find_by_id(ns_node_root(label), forv);
+            ns_node_find_by_id(ns_node_document_root(label), forv);
         if (ns_js_node_is_labelable(target)) return ns_make_element(ctx, target);
         return JS_NULL;
     }
@@ -33877,7 +33904,7 @@ ns_label_associated_control(const ns_node *label)
     const char *forv = ns_element_get_attr(label, "for");
     if (forv) {
         const ns_node *target =
-            ns_node_find_by_id(ns_node_root(label), forv);
+            ns_node_find_by_id(ns_node_document_root(label), forv);
         return ns_js_node_is_labelable(target) ? target : NULL;
     }
     return ns_js_first_labelable_descendant(label, 0);
@@ -34403,6 +34430,14 @@ ns_element_get_ownerDocument(JSContext *ctx, JSValueConst this_val)
                 if (host && host->js_wrapper &&
                     (ns_node_is_element_named(host, "iframe") ||
                      ns_node_is_element_named(host, "object"))) {
+                    /* Only the frame's own realm may reach a cross-origin
+                     * frame's document through its nodes. */
+                    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+                    if (ns_iframe_is_cross_origin(js, host) &&
+                        (!caller || !js->frame_contexts ||
+                         g_hash_table_lookup(js->frame_contexts, host) !=
+                             caller))
+                        return JS_NULL;
                     JSValue realm = ns_iframe_lookup_realm_doc(js, host);
                     if (JS_IsObject(realm)) return realm;
                     JS_FreeValue(ctx, realm);
@@ -35278,7 +35313,7 @@ ns_element_getRootNode(JSContext *ctx, JSValueConst this_val,
             }
         }
     }
-    const ns_node *root = ns_node_root(n);
+    const ns_node *root = ns_node_document_root(n);
     return ns_make_element(ctx, (ns_node *)root);
 }
 
@@ -36525,7 +36560,7 @@ ns_live_build(JSContext *ctx, ns_live_back *b)
         break;
     case NS_LIVE_FORM_ELEMENTS:
         if (root->name && strcmp(root->name, "form") == 0) {
-            const ns_node *doc = ns_node_root(root);
+            const ns_node *doc = ns_node_document_root(root);
             ns_form_collect_controls(root, doc ? doc : root, doc ? doc : root,
                                      ctx, arr, &i, 0, FALSE);
         } else if (root->name && strcmp(root->name, "fieldset") == 0) {
@@ -36537,7 +36572,7 @@ ns_live_build(JSContext *ctx, ns_live_back *b)
         break;
     case NS_LIVE_RADIO_NODE_LIST: {
         const ns_node *form = root;
-        const ns_node *doc = ns_node_root(root);
+        const ns_node *doc = ns_node_document_root(root);
         ns_form_collect_radio_nodes(form, doc ? doc : root, doc ? doc : root,
                                     b->param ? b->param : "", ctx, arr, &i, 0);
         break;
@@ -36552,7 +36587,7 @@ ns_live_build(JSContext *ctx, ns_live_back *b)
             }
         break;
     case NS_LIVE_LABELS:
-        ns_collect_labels_for(ctx, ns_node_root(root), root, arr, &i, 0);
+        ns_collect_labels_for(ctx, ns_node_document_root(root), root, arr, &i, 0);
         break;
     }
     return arr;
@@ -38760,7 +38795,11 @@ ns_node_is_flat_inclusive_descendant_of(const ns_node *node,
 static const ns_node *
 ns_node_tree_root(const ns_node *n)
 {
-    while (n && n->parent && !ns_node_is_shadow_root(n)) n = n->parent;
+    /* Stop at shadow roots and at a frame's document (which hangs under
+     * its <iframe>): id lookups must not reach the embedding page. */
+    while (n && n->parent && !ns_node_is_shadow_root(n) &&
+           !(n->kind == NS_NODE_DOCUMENT && !(n->flags & NS_NODE_FRAGMENT)))
+        n = n->parent;
     return n;
 }
 
@@ -40430,7 +40469,7 @@ ns_js_form_validation_allows_submit(JSContext *ctx, const ns_node *form,
                                     const ns_node *submitter)
 {
     if (ns_form_submission_skips_validation(form, submitter)) return TRUE;
-    const ns_node *doc = ns_node_root(form);
+    const ns_node *doc = ns_node_document_root(form);
     const ns_node *bad = ns_js_form_first_invalid(form, doc ? doc : form,
                                                    doc ? doc : form, 0);
     if (!bad) return TRUE;
@@ -40517,7 +40556,7 @@ ns_js_reset_form(JSContext *ctx, ns_node *form)
         if (prevented) return JS_UNDEFINED;
     }
     const ns_node *doc = _j && _j->current_doc ? _j->current_doc
-                                                : ns_node_root(form);
+                                                : ns_node_document_root(form);
     ns_form_reset_owned_controls(form, (ns_node *)(doc ? doc : form),
                                  doc ? doc : form);
     ns_js_reset_owned_outputs(_j, form, (ns_node *)(doc ? doc : form),
@@ -40538,7 +40577,7 @@ static const ns_node *
 ns_js_form_owner_for(const ns_node *el, ns_js *js)
 {
     const ns_node *doc = js && js->current_doc ? js->current_doc
-                                                : ns_node_root(el);
+                                                : ns_node_document_root(el);
     return ns_form_owner(el, doc);
 }
 
@@ -40548,9 +40587,9 @@ ns_js_clear_radio_group(ns_js *js, const ns_node *radio)
     const char *group = ns_element_get_attr(radio, "name");
     if (!group) return NULL;
     const ns_node *doc = js && js->current_doc ? js->current_doc
-                                                : ns_node_root(radio);
+                                                : ns_node_document_root(radio);
     const ns_node *owner = ns_form_owner(radio, doc);
-    ns_node *root = (ns_node *)(doc ? doc : ns_node_root(radio));
+    ns_node *root = (ns_node *)(doc ? doc : ns_node_document_root(radio));
     if (!root) root = (ns_node *)radio;
     ns_node *checked = NULL;
     GQueue q = G_QUEUE_INIT;
@@ -47424,9 +47463,9 @@ ns_navigator_sendBeacon(JSContext *ctx, JSValueConst this_val,
     }
 
     ns_fetch_policy *policy = js ? ns_js_fetch_policy(js, NULL) : NULL;
+    g_autofree char *beacon_doc = js ? ns_js_caller_document_url(js, ctx) : NULL;
     ns_fetch_verdict verdict = ns_fetch_policy_check(
-        policy, NS_FETCH_DEST_CONNECT, js ? js->current_url : NULL, abs_url,
-        NULL);
+        policy, NS_FETCH_DEST_CONNECT, beacon_doc, abs_url, NULL);
     if (ns_fetch_verdict_blocks(verdict)) {
         char *message = ns_fetch_verdict_message(verdict, NS_FETCH_DEST_CONNECT,
                                                  abs_url);
@@ -47434,7 +47473,7 @@ ns_navigator_sendBeacon(JSContext *ctx, JSValueConst this_val,
         g_free(message);
     } else {
         ns_net_request_async(abs_url,
-                             js ? js->current_url : NULL,
+                             beacon_doc,
                              "POST", body, body_len,
                              content_type,
                              NULL, NS_FETCH_DEST_CONNECT, policy, NULL,
@@ -52335,6 +52374,18 @@ ns_install_element_shapes(JSContext *ctx)
     JS_FreeValue(ctx, r);
 }
 
+/* js->current_url is temporarily the frame's URL while a frame's scripts
+ * run (and parent-page jobs can run during that window).  State that
+ * belongs to the main document -- its cookie jar, its history -- must
+ * only be used while current_url is of the main document's origin. */
+static gboolean
+ns_js_current_url_is_main_origin(ns_js *js)
+{
+    if (!js->document_origin) return TRUE;
+    g_autofree char *cur = ns_url_origin_from(js->current_url);
+    return cur && strcmp(cur, js->document_origin) == 0;
+}
+
 static void
 ns_document_refresh_cookie(ns_js *js)
 {
@@ -52353,7 +52404,8 @@ static JSValue
 ns_document_get_cookie(JSContext *ctx, JSValueConst this_val)
 {
     ns_js *js = js_from_ctx(ctx);
-    if (!js || ns_document_is_other_document(js, this_val))
+    if (!js || ns_document_is_other_document(js, this_val) ||
+        !ns_js_current_url_is_main_origin(js))
         return JS_NewString(ctx, "");
     ns_document_refresh_cookie(js);
     return JS_NewString(ctx, js->cookie_value ? js->cookie_value : "");
@@ -52469,7 +52521,9 @@ static JSValue
 ns_document_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
     ns_js *js = js_from_ctx(ctx);
-    if (!js || ns_document_is_other_document(js, this_val)) return JS_UNDEFINED;
+    if (!js || ns_document_is_other_document(js, this_val) ||
+        !ns_js_current_url_is_main_origin(js))
+        return JS_UNDEFINED;
     const char *s = JS_ToCString(ctx, val);
     if (!s) return JS_UNDEFINED;
     if (strlen(s) > 4096) { JS_FreeCString(ctx, s); return JS_UNDEFINED; }

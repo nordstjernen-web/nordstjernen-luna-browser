@@ -5947,6 +5947,19 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
             cur_len = 0;
             cur_ct = NULL;
         }
+        /* A redirect to another origin needs its own preflight for a
+         * non-simple request (307/308 keep the method, body and headers). */
+        if (!ns_url_same_origin(cur_url, next)) {
+            ns_response *refusal = ns_cors_preflight(
+                next, top_url, cur_method, cur_ct, extra_headers, dest,
+                cancellable);
+            if (refusal) {
+                ns_response_free(resp);
+                resp = refusal;
+                g_free(next);
+                break;
+            }
+        }
         if (navigation & NS_NAV_TOP_LEVEL) {
             /* Keep the initiator, or blame the redirecting site when it
              * is cross-site to it, so a redirect cannot launder a

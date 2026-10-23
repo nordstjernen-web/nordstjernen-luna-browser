@@ -331,6 +331,13 @@ ns_page_session_open(ns_page_session *s, const char *url, int width,
     ns_browser *restored = (history && url) ? session_bfcache_take(s, url)
                                             : NULL;
     char *referrer = (!history && s->cur) ? ns_browser_url(s->cur) : NULL;
+    char *initiator = s->cur ? ns_browser_take_pending_initiator(s->cur) : NULL;
+    if (initiator && !history) {
+        free(referrer);
+        referrer = initiator;
+    } else {
+        free(initiator);
+    }
     if (s->cur) {
         ns_browser *previous = s->cur;
         s->cur = NULL;
