@@ -4,6 +4,7 @@
  */
 
 #include "quickjs_compat.h"
+#include "js_internal.h"
 #include "js_realm.h"
 
 #include <string.h>
@@ -126,6 +127,10 @@ ns_shadowrealm_evaluate(JSContext *ctx, JSValueConst this_val,
     if (!r) return JS_EXCEPTION;
     if (argc < 1 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "ShadowRealm.prototype.evaluate expects a string");
+    if (!ns_js_eval_allowed(ctx))
+        return JS_ThrowTypeError(ctx,
+            "ShadowRealm.prototype.evaluate: refused by Content-Security-Policy "
+            "(no 'unsafe-eval')");
     size_t len = 0;
     const char *src = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!src) return JS_EXCEPTION;

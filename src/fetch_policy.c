@@ -67,7 +67,10 @@ ns_fetch_destination_name(ns_fetch_destination dest)
 static ns_csp_kind
 destination_csp_kind(ns_fetch_destination dest)
 {
+    /* Scripts are left to the caller, which knows the element's nonce
+     * and re-checks the final URL after redirects. */
     switch (dest) {
+    case NS_FETCH_DEST_STYLE:   return NS_CSP_STYLE;
     case NS_FETCH_DEST_IMAGE:   return NS_CSP_IMG;
     case NS_FETCH_DEST_MEDIA:   return NS_CSP_MEDIA;
     case NS_FETCH_DEST_FONT:    return NS_CSP_FONT;
@@ -82,6 +85,7 @@ static const char *
 destination_csp_directive(ns_fetch_destination dest)
 {
     switch (dest) {
+    case NS_FETCH_DEST_STYLE:   return "style-src";
     case NS_FETCH_DEST_IMAGE:   return "img-src";
     case NS_FETCH_DEST_MEDIA:   return "media-src";
     case NS_FETCH_DEST_FONT:    return "font-src";

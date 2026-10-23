@@ -458,6 +458,8 @@ double ns_perf_relative_ms(gint64 now_us, gint64 origin_us);
 void ns_perf_entry_free(gpointer p);
 JSValue ns_perf_supported_entry_types(JSContext *ctx);
 void ns_encoding_install(JSContext *ctx, JSValueConst global);
+/* Whether the realm's Content-Security-Policy permits string evaluation. */
+gboolean ns_js_eval_allowed(JSContext *ctx);
 gboolean ns_js_buffer_source_bytes(JSContext *ctx, JSValueConst v,
                                    const uint8_t **data, size_t *len,
                                    JSValue *hold);
