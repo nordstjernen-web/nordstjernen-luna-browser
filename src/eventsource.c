@@ -155,6 +155,7 @@ typedef struct {
     gboolean    opened;
     gboolean    fatal;
     gboolean    is_event_stream;
+    gboolean    cors_allowed;    /* Access-Control-Allow-Origin admits us */
     char       *cur_url;
 } ns_es_parse;
 
@@ -273,6 +274,7 @@ ns_es_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
         }
         p->status = code;
         p->is_event_stream = FALSE;
+        p->cors_allowed = FALSE;
     } else if (p->status >= 300 && p->status < 400 && total > 9 &&
                !g_ascii_strncasecmp(buffer, "Location:", 9)) {
         /* curl follows the redirect after these headers; vet the target
@@ -291,13 +293,27 @@ ns_es_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
         }
         g_free(p->cur_url);
         p->cur_url = next;
+    } else if (total > 28 &&
+               !g_ascii_strncasecmp(buffer, "Access-Control-Allow-Origin:", 28)) {
+        g_autofree char *v = g_strndup(buffer + 28, total - 28);
+        g_strstrip(v);
+        p->cors_allowed = strcmp(v, "*") == 0 ||
+            (p->es->origin && g_ascii_strcasecmp(v, p->es->origin) == 0);
     } else if (total >= 13 &&
                !g_ascii_strncasecmp(buffer, "Content-Type:", 13)) {
         if (g_strstr_len(buffer, total, "text/event-stream"))
             p->is_event_stream = TRUE;
     } else if (total <= 2) {
         if (!p->opened) {
-            if (p->status == 200 && p->is_event_stream) {
+            /* A stream from another origin is only readable when it
+             * opts in with Access-Control-Allow-Origin. */
+            g_autofree char *stream_origin = ns_url_origin_from(p->cur_url);
+            gboolean same_origin = stream_origin && p->es->origin &&
+                g_ascii_strcasecmp(stream_origin, p->es->origin) == 0;
+            if (p->status == 200 && p->is_event_stream &&
+                !same_origin && !p->cors_allowed) {
+                p->fatal = TRUE;
+            } else if (p->status == 200 && p->is_event_stream) {
                 p->opened = TRUE;
                 ns_es_post(p->es, ns_es_invoke_open, NULL, NULL);
             } else if (p->status >= 200 &&

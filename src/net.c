@@ -4928,7 +4928,16 @@ static const char *
 ns_net_request_origin(const char *url, const char *top_url,
                       const char *top_origin, const char *method)
 {
-    if (!top_origin || !*top_origin) return "";
+    /* A document with an opaque origin (a sandboxed frame, about:blank,
+     * file:, data:) sends "Origin: null", not nothing, so a server can
+     * tell its cross-origin and unsafe requests from same-origin ones. */
+    if (!top_origin || !*top_origin) {
+        gboolean unsafe = method && *method &&
+            g_ascii_strcasecmp(method, "GET") != 0 &&
+            g_ascii_strcasecmp(method, "HEAD") != 0;
+        return top_url && *top_url &&
+               (unsafe || !ns_url_same_origin(top_url, url)) ? "null" : "";
+    }
     if (strpbrk(top_origin, "\r\n") || strlen(top_origin) >= 4096) return "";
     if (top_url && !ns_url_same_origin(top_url, url)) return top_origin;
     if (method && *method &&
@@ -5061,8 +5070,10 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
     g_autofree char *vary_agent =
         g_strdup_printf("User-Agent: %s", effective_ua);
     const char *request_origin = top_level_nav
-        ? (unsafe_method && initiator_origin &&
-           !strpbrk(initiator_origin, "\r\n") ? initiator_origin : "")
+        ? (!unsafe_method ? ""
+           : initiator_origin && *initiator_origin
+             ? (!strpbrk(initiator_origin, "\r\n") ? initiator_origin : "")
+             : (initiator && *initiator ? "null" : ""))
         : ns_net_request_origin(url, top_url, top_origin, method);
     g_autofree char *vary_origin =
         g_strdup_printf("Origin: %s", request_origin);
@@ -5083,6 +5094,13 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
         cookies_allowed = FALSE;
     if (!*partition_key)
         cookies_allowed = FALSE;
+    /* fetch()/XHR credentials mode, decided per hop by ns_fetch_sync(). */
+    for (guint i = 0; cookies_allowed && extra_headers &&
+                      i < extra_headers->len; i++) {
+        const char *h = g_ptr_array_index(extra_headers, i);
+        if (h && g_ascii_strncasecmp(h, "X-ND-Omit-Cookies:", 18) == 0)
+            cookies_allowed = FALSE;
+    }
     ns_cookie_partition *cookie_partition = cookies_allowed
         ? cookie_partition_get(partition_key) : NULL;
 
@@ -5757,11 +5775,37 @@ ns_cors_list_allows(const char *list, const char *token, gboolean wildcard_ok)
 /* Run the preflight a non-simple cross-origin fetch()/XMLHttpRequest
  * needs before the actual request may be sent.  Returns NULL when the
  * request may proceed, or an error response to hand back instead. */
+/* The credentials mode script asked for ("omit", "same-origin",
+ * "include"), or NULL for requests that are not fetch()/XHR. */
+static const char *
+ns_fetch_credentials_of(GPtrArray *extra_headers)
+{
+    for (guint i = 0; extra_headers && i < extra_headers->len; i++) {
+        const char *h = g_ptr_array_index(extra_headers, i);
+        if (h && g_ascii_strncasecmp(h, "X-ND-Credentials:", 17) == 0) {
+            h += 17;
+            while (*h == ' ') h++;
+            return h;
+        }
+    }
+    return NULL;
+}
+
+static gboolean
+ns_cors_credentials_allowed(const char *raw_headers)
+{
+    g_autofree char *v = ns_cors_raw_header(raw_headers,
+                                            "access-control-allow-credentials");
+    return v && strcmp(g_strstrip(v), "true") == 0;
+}
+
 static ns_response *
 ns_cors_preflight(const char *url, const char *top_url, const char *method,
                   const char *content_type, GPtrArray *extra_headers,
                   ns_fetch_destination dest, GCancellable *cancellable)
 {
+    const char *cred_mode = ns_fetch_credentials_of(extra_headers);
+    gboolean credentialed = cred_mode && strcmp(cred_mode, "include") == 0;
     if (dest != NS_FETCH_DEST_CONNECT || !top_url || !url ||
         !ns_url_is_http_or_https(url) || ns_url_same_origin(top_url, url))
         return NULL;
@@ -5803,14 +5847,18 @@ ns_cors_preflight(const char *url, const char *top_url, const char *method,
                   pre->status < 300 && pre->cors_allow_origin;
     if (ok) {
         char *allow = g_strstrip(g_strdup(pre->cors_allow_origin));
-        ok = strcmp(allow, "*") == 0 ||
+        /* A credentialed request needs the exact origin, never "*", and
+         * the server's explicit consent to credentials. */
+        ok = (!credentialed && strcmp(allow, "*") == 0) ||
              (origin && g_ascii_strcasecmp(allow, origin) == 0);
         g_free(allow);
+        if (ok && credentialed)
+            ok = ns_cors_credentials_allowed(pre->raw_headers);
     }
     if (ok && !ns_cors_method_is_simple(method)) {
         char *methods = ns_cors_raw_header(pre->raw_headers,
                                            "access-control-allow-methods");
-        ok = ns_cors_list_allows(methods, method, TRUE);
+        ok = ns_cors_list_allows(methods, method, !credentialed);
         g_free(methods);
     }
     if (ok && unsafe->len > 0) {
@@ -5819,7 +5867,7 @@ ns_cors_preflight(const char *url, const char *top_url, const char *method,
         for (guint i = 0; ok && i < unsafe->len; i++) {
             const char *h = g_ptr_array_index(unsafe, i);
             /* "*" does not cover Authorization (Fetch Standard). */
-            ok = ns_cors_list_allows(allowed, h,
+            ok = ns_cors_list_allows(allowed, h, !credentialed &&
                                      strcmp(h, "authorization") != 0);
         }
         g_free(allowed);
@@ -5883,6 +5931,8 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
     if (max_redirs < 0)                       max_redirs = 0;
     if (max_redirs > (long)NS_MAX_REDIRECTS)  max_redirs = (long)NS_MAX_REDIRECTS;
 
+    const char *cred_mode = extra_headers
+        ? ns_fetch_credentials_of(extra_headers) : NULL;
     char *cur_url = g_strdup(url);
     char *cur_top = g_strdup(top_url);
     char *cur_method = g_strdup(method && *method ? method : "GET");
@@ -5901,10 +5951,21 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
             break;
         }
         char *location = NULL;
+        /* Script requests carry cookies only as their credentials mode
+         * allows: never for "omit", only to the requesting document's own
+         * origin for the default "same-origin". */
+        gboolean omit_cookies = cred_mode &&
+            (strcmp(cred_mode, "omit") == 0 ||
+             (strcmp(cred_mode, "include") != 0 &&
+              !ns_url_same_origin(cur_url, top_url)));
+        if (omit_cookies)
+            g_ptr_array_add(extra_headers, g_strdup("X-ND-Omit-Cookies: 1"));
         resp = ns_fetch_sync_hop(cur_url, cur_top, cur_method,
                                  cur_body, cur_len, cur_ct,
                                  extra_headers, cancellable, error,
                                  FALSE, &location, navigation);
+        if (omit_cookies)
+            g_ptr_array_remove_index(extra_headers, extra_headers->len - 1);
         if (!resp) {
             g_free(location);
             break;
@@ -5993,6 +6054,18 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
         }
     }
     if (resp) resp->redirect_count = hops;
+    /* A credentialed cross-origin response is readable only with the exact
+     * origin in Access-Control-Allow-Origin and Allow-Credentials: true. */
+    if (resp && resp->cors_allow_origin && cred_mode &&
+        strcmp(cred_mode, "include") == 0 &&
+        !ns_url_same_origin(resp->final_url ? resp->final_url : cur_url,
+                            top_url)) {
+        g_autofree char *origin = ns_url_origin_from(top_url);
+        g_autofree char *allow = g_strstrip(g_strdup(resp->cors_allow_origin));
+        if (!origin || g_ascii_strcasecmp(allow, origin) != 0 ||
+            !ns_cors_credentials_allowed(resp->raw_headers))
+            g_clear_pointer(&resp->cors_allow_origin, g_free);
+    }
     g_free(cur_url);
     g_free(cur_top);
     g_free(cur_method);

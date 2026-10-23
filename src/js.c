@@ -8416,6 +8416,16 @@ ns_fetch_on_signal_abort(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* fetch()'s credentials mode, normalised; the network layer reads it from
+ * the X-ND-Credentials request header. */
+static const char *
+ns_fetch_credentials_mode(const char *mode)
+{
+    if (mode && (strcmp(mode, "omit") == 0 || strcmp(mode, "include") == 0))
+        return mode;
+    return "same-origin";
+}
+
 static gboolean
 cors_allows(const char *doc_url, const char *resp_url, const char *cors_header)
 {
@@ -9088,14 +9098,23 @@ ns_js_fetch_for(JSContext *ctx, JSValueConst frame_url, int argc,
         JS_FreeValue(ctx, h);
     }
     gboolean no_cors = FALSE;
+    g_autofree char *credentials = NULL;
     if (JS_IsObject(argv[0]) && !JS_IsString(argv[0])) {
         g_autofree char *md = ns_js_get_string_prop(ctx, argv[0], "mode");
         if (md) no_cors = strcmp(md, "no-cors") == 0;
+        credentials = ns_js_get_string_prop(ctx, argv[0], "credentials");
     }
     if (argc >= 2 && JS_IsObject(argv[1])) {
         g_autofree char *md = ns_js_get_string_prop(ctx, argv[1], "mode");
         if (md) no_cors = strcmp(md, "no-cors") == 0;
+        char *cr = ns_js_get_string_prop(ctx, argv[1], "credentials");
+        if (cr) {
+            g_free(credentials);
+            credentials = cr;
+        }
     }
+    g_ptr_array_add(extras, g_strdup_printf("X-ND-Credentials: %s",
+                                            ns_fetch_credentials_mode(credentials)));
     if (method && (g_ascii_strcasecmp(method, "CONNECT") == 0 ||
                    g_ascii_strcasecmp(method, "TRACE") == 0 ||
                    g_ascii_strcasecmp(method, "TRACK") == 0)) {
@@ -18073,6 +18092,13 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     if (!hdrs) hdrs = g_ptr_array_new_with_free_func(g_free);
     if (_js && ns_url_same_origin(st->doc_url, st->url))
         g_ptr_array_add(hdrs, g_strdup("X-Requested-With: XMLHttpRequest"));
+    {
+        JSValue wc = JS_GetPropertyStr(ctx, this_val, "withCredentials");
+        gboolean with_credentials = JS_ToBool(ctx, wc) > 0;
+        JS_FreeValue(ctx, wc);
+        g_ptr_array_add(hdrs, g_strdup(with_credentials
+            ? "X-ND-Credentials: include" : "X-ND-Credentials: same-origin"));
+    }
     st->request_headers = hdrs;
 
     if (st->js && st->js->pending_xhrs)
@@ -19876,7 +19902,14 @@ ns_window_request_ctor(JSContext *ctx, JSValueConst this_val,
     ns_body_apply_inferred_ct(ctx, obj);
     ns_def_ro(ctx, obj, "bodyUsed",       JS_FALSE);
     ns_def_ro(ctx, obj, "mode",           JS_NewString(ctx, "cors"));
-    ns_def_ro(ctx, obj, "credentials",    JS_NewString(ctx, "same-origin"));
+    {
+        g_autofree char *cr = argc >= 2 && JS_IsObject(argv[1])
+            ? ns_js_get_string_prop(ctx, argv[1], "credentials") : NULL;
+        if (!cr && JS_IsObject(argv[0]) && !JS_IsString(argv[0]))
+            cr = ns_js_get_string_prop(ctx, argv[0], "credentials");
+        ns_def_ro(ctx, obj, "credentials",
+                  JS_NewString(ctx, ns_fetch_credentials_mode(cr)));
+    }
     ns_def_ro(ctx, obj, "cache",          JS_NewString(ctx, "default"));
     ns_def_ro(ctx, obj, "redirect",       JS_NewString(ctx, "follow"));
     ns_def_ro(ctx, obj, "referrer",       JS_NewString(ctx, "about:client"));
