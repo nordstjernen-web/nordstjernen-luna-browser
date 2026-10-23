@@ -1128,6 +1128,7 @@ ns_js_attach_idle(ns_js *js, GSourceFunc func, gpointer data)
 }
 
 static void ns_storage_drain_deferred_events(ns_js *js);
+static const ns_csp *ns_js_realm_csp(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_origin(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_document_url(ns_js *js, JSContext *ctx);
 static JSContext *ns_js_handler_realm(ns_js *js, const ns_node *n);
@@ -8499,12 +8500,36 @@ ns_js_console_policy_refusal(ns_js *js, const char *message)
     if (js && js->log_cb && message) js->log_cb(message, js->log_user_data);
 }
 
-static char *
-ns_js_policy_refusal(ns_js *js, ns_fetch_destination dest, const char *url)
+/* The fetch policy (CSP, mixed content) of the document whose script is
+ * calling: a frame's own document when a frame realm calls, since frames
+ * call the embedder's constructors and C functions. */
+static ns_fetch_policy *
+ns_js_caller_fetch_policy(ns_js *js, JSContext *ctx)
 {
+    if (!js) return NULL;
+    JSContext *c = ctx ? JS_GetCallerRealmOrNull(ctx) : NULL;
+    if (!c) c = ctx;
+    JSContext *main_ctx = js->main_realm_ctx ? js->main_realm_ctx : js->ctx;
+    if (c && c != main_ctx && js->frame_contexts) {
+        GHashTableIter it;
+        gpointer iframe, fctx;
+        g_hash_table_iter_init(&it, js->frame_contexts);
+        while (g_hash_table_iter_next(&it, &iframe, &fctx))
+            if (fctx == c)
+                return ns_js_fetch_policy(js, ns_iframe_document_node(iframe));
+    }
+    return ns_js_fetch_policy(js, NULL);
+}
+
+static char *
+ns_js_policy_refusal(ns_js *js, JSContext *ctx, ns_fetch_destination dest,
+                     const char *url)
+{
+    ns_fetch_policy *policy = ns_js_caller_fetch_policy(js, ctx);
     ns_fetch_verdict verdict = ns_fetch_policy_check(
-        js ? ns_js_fetch_policy(js, NULL) : NULL, dest,
-        js ? js->current_url : NULL, url, NULL);
+        policy, dest,
+        policy ? ns_fetch_policy_document_url(policy)
+               : (js ? js->current_url : NULL), url, NULL);
     if (!ns_fetch_verdict_blocks(verdict)) return NULL;
     char *message = ns_fetch_verdict_message(verdict, dest, url);
     ns_js_console_policy_refusal(js, message);
@@ -8512,15 +8537,15 @@ ns_js_policy_refusal(ns_js *js, ns_fetch_destination dest, const char *url)
 }
 
 static char *
-ns_js_connect_refusal(ns_js *js, const char *url)
+ns_js_connect_refusal(ns_js *js, JSContext *ctx, const char *url)
 {
-    return ns_js_policy_refusal(js, NS_FETCH_DEST_CONNECT, url);
+    return ns_js_policy_refusal(js, ctx, NS_FETCH_DEST_CONNECT, url);
 }
 
 static char *
-ns_js_worker_refusal(ns_js *js, const char *url)
+ns_js_worker_refusal(ns_js *js, JSContext *ctx, const char *url)
 {
-    return ns_js_policy_refusal(js, NS_FETCH_DEST_WORKER, url);
+    return ns_js_policy_refusal(js, ctx, NS_FETCH_DEST_WORKER, url);
 }
 
 static void
@@ -9177,7 +9202,7 @@ ns_js_fetch_for(JSContext *ctx, JSValueConst frame_url, int argc,
     const char *send_url = abs_url ? abs_url : url;
     const char *use_method = method ? method : "GET";
 
-    ns_fetch_policy *policy = st->js ? ns_js_fetch_policy(st->js, NULL) : NULL;
+    ns_fetch_policy *policy = ns_js_caller_fetch_policy(st->js, ctx);
     ns_fetch_verdict verdict =
         g_str_has_prefix(send_url, "northstar-extension:") ? NS_FETCH_ALLOWED
         : ns_fetch_policy_check(policy, NS_FETCH_DEST_CONNECT, top, send_url,
@@ -18072,7 +18097,7 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
         else if (auto_content_type)        effective_ct = auto_content_type;
         else                               effective_ct = "application/x-www-form-urlencoded";
     }
-    ns_fetch_policy *policy = st->js ? ns_js_fetch_policy(st->js, NULL) : NULL;
+    ns_fetch_policy *policy = ns_js_caller_fetch_policy(st->js, st->ctx);
     ns_fetch_verdict verdict = ns_fetch_policy_check(
         policy, NS_FETCH_DEST_CONNECT, st->doc_url,
         st->url, NULL);
@@ -20469,7 +20494,7 @@ ns_window_websocket_ctor(JSContext *ctx, JSValueConst this_val,
         g_free(host);
     }
 
-    char *refusal = ns_js_connect_refusal(js, target);
+    char *refusal = ns_js_connect_refusal(js, ctx, target);
     if (refusal) {
         g_free(target);
         JSValue thrown = JS_ThrowTypeError(ctx, "WebSocket: %s", refusal);
@@ -20691,7 +20716,7 @@ ns_window_eventsource_ctor(JSContext *ctx, JSValueConst this_val,
         g_free(target);
         return JS_ThrowTypeError(ctx, "EventSource URL must use http: or https:");
     }
-    char *refusal = ns_js_connect_refusal(js, target);
+    char *refusal = ns_js_connect_refusal(js, ctx, target);
     if (refusal) {
         g_free(target);
         JSValue thrown = JS_ThrowTypeError(ctx, "EventSource: %s", refusal);
@@ -20735,7 +20760,7 @@ ns_window_eventsource_ctor(JSContext *ctx, JSValueConst this_val,
         .busy       = ns_js_es_busy,
     };
     s->es = ns_es_new(target, origin && *origin ? origin : "null", NULL,
-                      ns_js_fetch_policy(js, NULL), &cbs, s);
+                      ns_js_caller_fetch_policy(js, ctx), &cbs, s);
     g_free(origin);
     g_free(target);
 
@@ -22849,7 +22874,7 @@ ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
             return ret;
         }
     }
-    char *refusal = ns_js_worker_refusal(js, abs_url);
+    char *refusal = ns_js_worker_refusal(js, ctx, abs_url);
     if (refusal) {
         g_free(abs_url);
         g_free(inline_script);
@@ -22878,12 +22903,21 @@ ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     host->context = g_main_context_new();
     host->owner_context = g_main_context_ref(js->main_context);
     host->url = abs_url;
-    host->base_url = g_strdup(js->current_url ? js->current_url : abs_url);
+    /* The worker belongs to the document whose script created it: a
+     * frame's worker gets the frame's URL and policy, not the page's. */
+    {
+        char *creator = ns_js_caller_document_url(js, ctx);
+        host->base_url = creator && *creator ? creator : g_strdup(abs_url);
+        if (host->base_url != creator) g_free(creator);
+    }
     host->name = g_strdup(name ? name : "");
     host->inline_script = inline_script;
     host->inline_script_len = inline_script_len;
     host->is_module = is_module;
-    host->csp = ns_csp_copy(js->csp);
+    {
+        JSContext *rc = JS_GetCallerRealmOrNull(ctx);
+        host->csp = ns_csp_copy(ns_js_realm_csp(js, rc ? rc : ctx));
+    }
     host->origin = ns_url_origin_from(host->base_url);
     if (!host->origin) host->origin = g_strdup("");
     host->log_cb = js->log_cb;
@@ -23007,6 +23041,13 @@ ns_sw_unregister(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, scope_v);
     gboolean removed = FALSE;
     ns_js *js = js_from_ctx(ctx);
+    /* unregister.call({scope: ...}) must not reach another origin's
+     * registration. */
+    if (scope && js) {
+        g_autofree char *doc = ns_js_caller_document_url(js, ctx);
+        if (!ns_url_same_origin(scope, doc))
+            g_clear_pointer(&scope, g_free);
+    }
     if (js && js->workers && scope) {
         for (guint i = 0; i < js->workers->len; i++) {
             ns_worker_host *host = g_ptr_array_index(js->workers, i);
@@ -23307,7 +23348,7 @@ ns_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
         g_free(scope);
         return ret;
     }
-    char *refusal = ns_js_worker_refusal(js, abs_url);
+    char *refusal = ns_js_worker_refusal(js, ctx, abs_url);
     if (refusal) {
         g_free(abs_url);
         g_free(scope);
@@ -47662,7 +47703,7 @@ ns_navigator_sendBeacon(JSContext *ctx, JSValueConst this_val,
         }
     }
 
-    ns_fetch_policy *policy = js ? ns_js_fetch_policy(js, NULL) : NULL;
+    ns_fetch_policy *policy = js ? ns_js_caller_fetch_policy(js, ctx) : NULL;
     g_autofree char *beacon_doc = js ? ns_js_caller_document_url(js, ctx) : NULL;
     ns_fetch_verdict verdict = ns_fetch_policy_check(
         policy, NS_FETCH_DEST_CONNECT, beacon_doc, abs_url, NULL);
