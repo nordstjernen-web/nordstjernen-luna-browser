@@ -20,6 +20,8 @@ typedef struct ns_idb_db {
     sqlite3 *db;
     char    *path;
     guint64  last_used;
+    int      pins;      /* backend calls currently using this handle */
+    gboolean evicted;   /* dropped from the cache while pinned */
 } ns_idb_db;
 
 static JSValue ns_idb_throw(JSContext *ctx, const char *name, const char *message);
@@ -30,13 +32,56 @@ static JSValue ns_idb_throw(JSContext *ctx, const char *name, const char *messag
 static GHashTable *g_idb_handles;
 static guint64     g_idb_clock;
 
+/* Backend calls run page script (toString/valueOf, getters on index
+ * entries) while they hold a handle, and that script can re-enter the
+ * backend -- deleteDatabase(), or opening enough databases to trim the
+ * cache -- and drop the handle from the cache.  Handles are therefore
+ * pinned for the duration of the outermost backend call and only freed
+ * once unpinned.  The lock serialises the shared cache between the page
+ * and worker threads; it is recursive because of that re-entry. */
+static GRecMutex   g_idb_lock;
+static int         g_idb_depth;
+static GPtrArray  *g_idb_call_pins;
+
+static void
+ns_idb_db_destroy(ns_idb_db *h)
+{
+    if (h->db) sqlite3_close(h->db);
+    g_free(h->path);
+    g_free(h);
+}
+
 static void
 ns_idb_db_free(ns_idb_db *h)
 {
     if (!h) return;
-    if (h->db) sqlite3_close(h->db);
-    g_free(h->path);
-    g_free(h);
+    if (h->pins > 0) {
+        h->evicted = TRUE;
+        return;
+    }
+    ns_idb_db_destroy(h);
+}
+
+static ns_idb_db *
+ns_idb_pin(ns_idb_db *h)
+{
+    if (!h) return NULL;
+    if (!g_idb_call_pins) g_idb_call_pins = g_ptr_array_new();
+    h->pins++;
+    g_ptr_array_add(g_idb_call_pins, h);
+    return h;
+}
+
+static void
+ns_idb_release_pins(void)
+{
+    if (!g_idb_call_pins) return;
+    for (guint i = 0; i < g_idb_call_pins->len; i++) {
+        ns_idb_db *h = g_ptr_array_index(g_idb_call_pins, i);
+        if (--h->pins == 0 && h->evicted)
+            ns_idb_db_destroy(h);
+    }
+    g_ptr_array_set_size(g_idb_call_pins, 0);
 }
 
 static void
@@ -215,7 +260,7 @@ ns_idb_open_db(JSContext *ctx, const char *name)
         ns_idb_db *cached = g_hash_table_lookup(g_idb_handles, key);
         if (cached) {
             cached->last_used = ++g_idb_clock;
-            return cached;
+            return ns_idb_pin(cached);
         }
     }
     g_autofree char *path = ns_idb_path_for_name(ctx, name);
@@ -230,6 +275,7 @@ ns_idb_open_db(JSContext *ctx, const char *name)
     h->db = db;
     h->path = g_strdup(path);
     h->last_used = ++g_idb_clock;
+    ns_idb_pin(h);
     if (!g_idb_handles)
         g_idb_handles = g_hash_table_new_full(g_str_hash, g_str_equal,
                                               g_free, (GDestroyNotify)ns_idb_db_free);
@@ -1054,11 +1100,41 @@ ns_idb_backend_databases(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+static JSCFunction *const ns_idb_backend_fns[] = {
+    ns_idb_backend_open, ns_idb_backend_info, ns_idb_backend_set_version,
+    ns_idb_backend_create_store, ns_idb_backend_delete_store,
+    ns_idb_backend_create_index, ns_idb_backend_delete_index,
+    ns_idb_backend_next_key, ns_idb_backend_put, ns_idb_backend_get,
+    ns_idb_backend_records, ns_idb_backend_index_records,
+    ns_idb_backend_delete_record, ns_idb_backend_clear,
+    ns_idb_backend_delete_database, ns_idb_backend_databases,
+};
+
+static JSValue
+ns_idb_backend_call(JSContext *ctx, JSValueConst this_val, int argc,
+                    JSValueConst *argv, int magic)
+{
+    g_rec_mutex_lock(&g_idb_lock);
+    g_idb_depth++;
+    JSValue r = ns_idb_backend_fns[magic](ctx, this_val, argc, argv);
+    if (--g_idb_depth == 0)
+        ns_idb_release_pins();
+    g_rec_mutex_unlock(&g_idb_lock);
+    return r;
+}
+
 static void
 ns_idb_bind(JSContext *ctx, JSValueConst obj, const char *name,
             JSCFunction *fn, int argc)
 {
-    JS_SetPropertyStr(ctx, obj, name, JS_NewCFunction(ctx, fn, name, argc));
+    for (gsize i = 0; i < G_N_ELEMENTS(ns_idb_backend_fns); i++) {
+        if (ns_idb_backend_fns[i] != fn) continue;
+        JS_SetPropertyStr(ctx, obj, name,
+            JS_NewCFunctionMagic(ctx, ns_idb_backend_call, name, argc,
+                                 JS_CFUNC_generic_magic, (int)i));
+        return;
+    }
+    g_assert_not_reached();
 }
 
 void

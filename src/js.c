@@ -9124,8 +9124,8 @@ ns_js_fetch_for(JSContext *ctx, JSValueConst frame_url, int argc,
         JS_FreeValue(ctx, add_fn);
     }
     if (g_str_has_prefix(url, "blob:")) {
-        char *btype = NULL;
-        GBytes *b = ns_js_blob_url_lookup(st->js, url, &btype);
+        g_autofree char *btype = NULL;
+        g_autoptr(GBytes) b = ns_js_blob_url_lookup(st->js, url, &btype);
         ns_response *resp = g_new0(ns_response, 1);
         if (b) {
             gsize blen = 0;
@@ -18796,6 +18796,10 @@ ns_blob_entry_free(gpointer p)
     g_free(e);
 }
 
+/* Blob URL tables are written by the page and worker threads and read by
+ * the network threads through ns_js_net_blob_resolver(); g_blob_lock
+ * guards g_blob_js_registry and every instance's blob_urls table. */
+static GMutex g_blob_lock;
 static GPtrArray *g_blob_js_registry = NULL;
 
 static ns_blob_entry *
@@ -18822,36 +18826,56 @@ ns_js_net_blob_resolver(const char *url, char **out_type, gpointer user_data)
 {
     (void)user_data;
     if (out_type) *out_type = NULL;
-    if (!g_blob_js_registry || !url) return NULL;
-    for (guint i = 0; i < g_blob_js_registry->len; i++) {
+    if (!url) return NULL;
+    GBytes *found = NULL;
+    g_mutex_lock(&g_blob_lock);
+    for (guint i = 0; g_blob_js_registry && i < g_blob_js_registry->len; i++) {
         ns_js *js = g_ptr_array_index(g_blob_js_registry, i);
         if (!js || !js->blob_urls) continue;
         ns_blob_entry *e = g_hash_table_lookup(js->blob_urls, url);
         if (e) {
             if (out_type) *out_type = e->type ? g_strdup(e->type) : NULL;
-            return e->bytes ? g_bytes_ref(e->bytes) : NULL;
+            found = e->bytes ? g_bytes_ref(e->bytes) : NULL;
+            break;
         }
     }
-    return NULL;
+    g_mutex_unlock(&g_blob_lock);
+    return found;
 }
 
 static void
 ns_js_blob_registry_add(ns_js *js)
 {
     if (!js) return;
-    if (!g_blob_js_registry) {
+    g_mutex_lock(&g_blob_lock);
+    gboolean first = !g_blob_js_registry;
+    if (first)
         g_blob_js_registry = g_ptr_array_new();
-        ns_net_set_blob_resolver(ns_js_net_blob_resolver, NULL);
-    }
     if (!g_ptr_array_find(g_blob_js_registry, js, NULL))
         g_ptr_array_add(g_blob_js_registry, js);
+    g_mutex_unlock(&g_blob_lock);
+    if (first)
+        ns_net_set_blob_resolver(ns_js_net_blob_resolver, NULL);
 }
 
 static void
 ns_js_blob_registry_remove(ns_js *js)
 {
+    g_mutex_lock(&g_blob_lock);
     if (g_blob_js_registry && js)
         g_ptr_array_remove_fast(g_blob_js_registry, js);
+    g_mutex_unlock(&g_blob_lock);
+}
+
+static void
+ns_js_blob_store(ns_js *js, const char *url, ns_blob_entry *e)
+{
+    g_mutex_lock(&g_blob_lock);
+    if (!js->blob_urls)
+        js->blob_urls = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                              g_free, ns_blob_entry_free);
+    g_hash_table_replace(js->blob_urls, g_strdup(url), e);
+    g_mutex_unlock(&g_blob_lock);
 }
 
 static JSValue
@@ -18868,13 +18892,8 @@ ns_window_url_create_object(JSContext *ctx, JSValueConst this_val,
     g_free(origin);
     g_free(uuid);
 
-    if (js && argc >= 1 && JS_IsObject(argv[0])) {
-        if (!js->blob_urls)
-            js->blob_urls = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                                  g_free, ns_blob_entry_free);
-        g_hash_table_replace(js->blob_urls, g_strdup(url),
-                             ns_blob_entry_new_for_object(ctx, argv[0]));
-    }
+    if (js && argc >= 1 && JS_IsObject(argv[0]))
+        ns_js_blob_store(js, url, ns_blob_entry_new_for_object(ctx, argv[0]));
     JSValue ret = JS_NewString(ctx, url);
     g_free(url);
     return ret;
@@ -18894,11 +18913,7 @@ ns_window_url_update_object(JSContext *ctx, JSValueConst this_val,
         JS_FreeCString(ctx, url);
         return JS_FALSE;
     }
-    if (!js->blob_urls)
-        js->blob_urls = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                              g_free, ns_blob_entry_free);
-    g_hash_table_replace(js->blob_urls, g_strdup(url),
-                         ns_blob_entry_new_for_object(ctx, argv[1]));
+    ns_js_blob_store(js, url, ns_blob_entry_new_for_object(ctx, argv[1]));
     ns_media_blob_updated(js, url);
     ns_js_note_layout_unscoped(js, G_STRFUNC);
     JS_FreeCString(ctx, url);
@@ -18914,22 +18929,32 @@ ns_window_url_revoke_object(JSContext *ctx, JSValueConst this_val,
     if (js && js->blob_urls && argc >= 1) {
         const char *url = JS_ToCString(ctx, argv[0]);
         if (url) {
+            g_mutex_lock(&g_blob_lock);
             g_hash_table_remove(js->blob_urls, url);
+            g_mutex_unlock(&g_blob_lock);
             JS_FreeCString(ctx, url);
         }
     }
     return JS_UNDEFINED;
 }
 
+/* Returns a new reference (and a copy of the type) so the bytes survive a
+ * revokeObjectURL() made while the caller is still using them. */
 static GBytes *
 ns_js_blob_url_lookup(ns_js *js, const char *url, char **out_type)
 {
     if (out_type) *out_type = NULL;
-    if (!js || !js->blob_urls || !url) return NULL;
-    ns_blob_entry *e = g_hash_table_lookup(js->blob_urls, url);
-    if (!e) return NULL;
-    if (out_type) *out_type = e->type;
-    return e->bytes;
+    if (!js || !url) return NULL;
+    GBytes *bytes = NULL;
+    g_mutex_lock(&g_blob_lock);
+    ns_blob_entry *e = js->blob_urls
+        ? g_hash_table_lookup(js->blob_urls, url) : NULL;
+    if (e) {
+        if (out_type) *out_type = g_strdup(e->type);
+        bytes = e->bytes ? g_bytes_ref(e->bytes) : NULL;
+    }
+    g_mutex_unlock(&g_blob_lock);
+    return bytes;
 }
 
 typedef struct ns_filereader_idle {
@@ -22544,7 +22569,7 @@ ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     char *inline_script = NULL;
     gsize inline_script_len = 0;
     if (g_str_has_prefix(raw, "blob:")) {
-        GBytes *blob = ns_js_blob_url_lookup(js, raw, NULL);
+        g_autoptr(GBytes) blob = ns_js_blob_url_lookup(js, raw, NULL);
         if (!blob) {
             JS_FreeCString(ctx, raw);
             return JS_ThrowTypeError(ctx, "Worker: blob URL not found");
@@ -53973,7 +53998,10 @@ ns_js_free(ns_js *js)
     }
     if (js->console_counts) g_hash_table_destroy(js->console_counts);
     if (js->console_timers) g_hash_table_destroy(js->console_timers);
+    g_mutex_lock(&g_blob_lock);
     if (js->blob_urls) g_hash_table_destroy(js->blob_urls);
+    js->blob_urls = NULL;
+    g_mutex_unlock(&g_blob_lock);
     if (js->timers) g_hash_table_destroy(js->timers);
     if (js->raf_pending) {
         for (guint i = 0; i < js->raf_pending->len; i++) {
@@ -54902,7 +54930,7 @@ ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
         return m;
     }
     if (g_str_has_prefix(module_name, "blob:")) {
-        GBytes *blob = ns_js_blob_url_lookup(js, module_name, NULL);
+        g_autoptr(GBytes) blob = ns_js_blob_url_lookup(js, module_name, NULL);
         if (!blob) {
             JS_ThrowReferenceError(ctx, "module blob URL not found: %s",
                                    module_name);
@@ -55324,7 +55352,7 @@ ns_js_run_script_element(ns_js *js, ns_node *n, const char *origin)
             return;
         }
         if (g_str_has_prefix(src, "blob:")) {
-            GBytes *b = ns_js_blob_url_lookup(js, src, NULL);
+            g_autoptr(GBytes) b = ns_js_blob_url_lookup(js, src, NULL);
             if (b) {
                 gsize blen = 0;
                 const char *data = g_bytes_get_data(b, &blen);

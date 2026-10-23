@@ -6448,13 +6448,28 @@ ns_net_resolve_blob(const char *url, char **out_type)
     return g_blob_resolver(url, out_type, g_blob_resolver_ud);
 }
 
+/* blob: URLs embed the origin that created them ("blob:<origin>/<uuid>");
+ * only documents of that origin may read them. */
 static gboolean
-ns_net_complete_blob(const char *url, GCancellable *cancellable,
+ns_net_blob_origin_allowed(const char *url, const char *top_url)
+{
+    if (!top_url || !*top_url) return TRUE;
+    g_autofree char *blob_origin = ns_url_origin_from(url);
+    g_autofree char *top_origin = ns_url_origin_from(top_url);
+    /* Neither is a web origin (e.g. a file: page and its own blobs). */
+    if (!blob_origin && !top_origin) return TRUE;
+    return blob_origin && top_origin && strcmp(blob_origin, top_origin) == 0;
+}
+
+static gboolean
+ns_net_complete_blob(const char *url, const char *top_url,
+                     GCancellable *cancellable,
                      GAsyncReadyCallback callback, gpointer user_data)
 {
     if (!g_blob_resolver || !g_str_has_prefix(url, "blob:")) return FALSE;
     char *type = NULL;
-    GBytes *bytes = ns_net_resolve_blob(url, &type);
+    GBytes *bytes = ns_net_blob_origin_allowed(url, top_url)
+        ? ns_net_resolve_blob(url, &type) : NULL;
     GTask *task = g_task_new(NULL, cancellable, callback, user_data);
     g_task_set_source_tag(task, ns_net_fetch_async);
     ns_response *resp = g_new0(ns_response, 1);
@@ -6545,7 +6560,8 @@ ns_net_request_async(const char         *url,
         if (upgraded) url = upgraded;
     }
 
-    if (ns_net_complete_blob(url, cancellable, callback, user_data)) return;
+    if (ns_net_complete_blob(url, top_url, cancellable, callback, user_data))
+        return;
 
     char *key = (!cancellable && !body)
         ? ns_net_request_key(url, top_url, method, extra_headers) : NULL;
