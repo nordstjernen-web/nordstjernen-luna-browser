@@ -2,8 +2,12 @@
 set -e
 
 if [ "$1" = configure ]; then
-    update-alternatives --install /usr/bin/open-internet-browser open-internet-browser \
-        /usr/bin/northstar 50
+    # Up to 1.0.16 the upstream .deb registered a generic
+    # open-internet-browser alternative; drop it on upgrade.
+    update-alternatives --remove open-internet-browser /usr/bin/northstar \
+        >/dev/null 2>&1 || true
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser \
+        /usr/bin/northstar 40
 fi
 
 #DEBHELPER#
