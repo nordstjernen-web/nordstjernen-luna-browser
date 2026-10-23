@@ -114,6 +114,11 @@ fi
 
 cd "$ROOT/dist"
 rm -f "${NAME}-${VERSION}-${ARCH}.AppImage" "Northstar"*.AppImage
+# --appimage-extract-and-run unpacks the tools under $TMPDIR; give them a
+# private directory rather than the shared /tmp.
+PACK_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$PACK_TMPDIR"' EXIT
+export TMPDIR="$PACK_TMPDIR"
 DEPLOY_GTK_VERSION=4 \
 "$LINUXDEPLOY" --appimage-extract-and-run \
     --appdir "$APPDIR" \
