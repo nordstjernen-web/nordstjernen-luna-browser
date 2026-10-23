@@ -413,6 +413,7 @@ ns_add_trace_writable_dirs(int argc, char **argv)
 static int
 ns_run_headless(ns_headless_opts *hopts)
 {
+    ns_security_set_tool_mode(TRUE);
     ns_net_init();
     ns_net_set_allow_file_urls(TRUE);
     if (hopts->debug_levels & (1u << NS_DLOG_NET))

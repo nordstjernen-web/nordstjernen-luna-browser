@@ -360,7 +360,9 @@ Others the browser reads:
 | `NS_EXTENSIONS_DIR` | WebExtensions directory (default `~/.local/share/northstar-extensions`). |
 | `NS_I18N_DIR` | Directory of the `.lang` UI catalogues. |
 | `NS_LOG_FILE`, `NS_NO_LOG_FILE` | Mirror the debug event log to a file (on by default only on Windows). |
-| `NS_CAMERA_ALLOW` | Grant every camera request without asking. For testing. |
+| `NS_CAMERA_ALLOW` | Grant every camera request without asking. Headless/test runs only; ignored by the interactive browser. |
+| `NS_EARLY_JS_FILE` | Script file evaluated before each page's own scripts. Headless/test runs only; ignored by the interactive browser. |
+| `NS_FRAME_DUMP` | Directory to write every 30th rendered frame to as PNG (debugging). |
 | `NS_FORCE_HTTP3` | Use HTTP/3 directly instead of waiting for Alt-Svc. |
 | `NS_PANGO_SHAPE_CACHE` | `0` turns the ns-pango caches off; `verify` checks every cached shape against a fresh one. |
 | `NS_HEADLESS_LEGACY` | Send every headless run through the direct engine path. |
@@ -369,7 +371,9 @@ Running as `root` is refused for safety; `NS_ALLOW_ROOT=1` overrides it,
 and only belongs in a throwaway container — though `scripts/dev.sh` and
 the WPT runners set it by default so they work in one. `NS_NO_SANDBOX`
 disables the whole sandbox and `NS_NO_SECCOMP` only the syscall filter;
-both take effect when set to anything, and are for debugging only.
+they are for debugging only. Boolean switches like these and the
+`NS_NO_*` feature switches count as unset when empty or `0`, `false`,
+`no` or `off`.
 
 ## Smoke and render-test fixtures
 

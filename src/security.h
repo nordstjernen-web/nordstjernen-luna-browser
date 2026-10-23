@@ -12,6 +12,16 @@ G_BEGIN_DECLS
 
 const char *ns_security_downloads_dir(void);
 
+/* A boolean environment switch: set to anything other than "", "0",
+ * "false", "no" or "off" (so NS_NO_SANDBOX=0 keeps the sandbox on). */
+gboolean ns_env_flag(const char *name);
+
+/* Headless/tooling runs (WPT, --dump, ...) may honour test-only hooks such
+ * as NS_CAMERA_ALLOW and NS_EARLY_JS_FILE; the interactive browser never
+ * does. */
+void     ns_security_set_tool_mode(gboolean on);
+gboolean ns_security_tool_mode(void);
+
 gboolean ns_security_refuse_root(void);
 
 void ns_security_sandbox_init(const char *self_exe);

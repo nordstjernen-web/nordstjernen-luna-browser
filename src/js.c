@@ -57826,7 +57826,10 @@ ns_js_run_scripts_in_doc(ns_js *js, ns_node *doc,
     if (js->platform_globals) g_hash_table_destroy(js->platform_globals);
     js->platform_globals = ns_js_snapshot_globals(js);
     {
-        const char *early = g_getenv("NS_EARLY_JS_FILE");
+        /* Test harness hook: never honoured by the interactive browser,
+         * where it would inject script into every page. */
+        const char *early = ns_security_tool_mode()
+            ? g_getenv("NS_EARLY_JS_FILE") : NULL;
         char *early_src = NULL;
         if (early && *early &&
             g_file_get_contents(early, &early_src, NULL, NULL)) {

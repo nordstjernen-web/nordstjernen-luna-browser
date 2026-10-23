@@ -4,6 +4,7 @@
  */
 
 #include "camera.h"
+#include "security.h"
 
 #include <string.h>
 
@@ -77,8 +78,7 @@ ns_camera_permission(ns_js *js)
         return -1;
     }
 
-    const char *allow_env = g_getenv("NS_CAMERA_ALLOW");
-    if (allow_env && allow_env[0] == '1') {
+    if (ns_security_tool_mode() && ns_env_flag("NS_CAMERA_ALLOW")) {
         ns_camera_record_decision(origin, TRUE);
         g_free(origin);
         return 1;

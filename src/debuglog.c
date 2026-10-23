@@ -4,6 +4,7 @@
  */
 
 #include "debuglog.h"
+#include "security.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -32,7 +33,7 @@ static gboolean
 ns_dlog_file_enabled(void)
 {
 #ifdef G_OS_WIN32
-    return !g_getenv("NS_NO_LOG_FILE");
+    return !ns_env_flag("NS_NO_LOG_FILE");
 #else
     return g_getenv("NS_LOG_FILE") != NULL;
 #endif

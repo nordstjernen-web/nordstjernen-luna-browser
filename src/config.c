@@ -4,6 +4,7 @@
  */
 
 #include "config.h"
+#include "security.h"
 
 #include <glib/gstdio.h>
 #include <errno.h>
@@ -262,12 +263,12 @@ static void
 apply_env(ns_config *c)
 {
     for (gsize i = 0; i < G_N_ELEMENTS(env_disable); i++)
-        if (g_getenv(env_disable[i].env)) apply_pair(c, env_disable[i].key, "false");
+        if (ns_env_flag(env_disable[i].env)) apply_pair(c, env_disable[i].key, "false");
     for (gsize i = 0; i < G_N_ELEMENTS(env_value); i++) {
         const char *v = g_getenv(env_value[i].env);
         if (v && *v) apply_pair(c, env_value[i].key, v);
     }
-    if (g_getenv("NS_PRIVATE")) c->private_mode = TRUE;
+    if (ns_env_flag("NS_PRIVATE")) c->private_mode = TRUE;
 }
 
 void
