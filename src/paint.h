@@ -8,7 +8,7 @@
 
 #include <cairo.h>
 #include <glib.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 
 #include "js.h"
 #include "layout.h"

@@ -6,7 +6,7 @@
 #include "font.h"
 
 #include <gio/gio.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -17,7 +17,6 @@
 #include <fontconfig/fontconfig.h>
 #include <fontconfig/fcfreetype.h>
 #endif
-#include <ns-pango/pangofc-fontmap.h>
 #ifdef NS_HAVE_FREETYPE
 #include <ft2build.h>
 #include FT_FREETYPE_H

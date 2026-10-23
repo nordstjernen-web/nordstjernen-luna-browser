@@ -187,9 +187,9 @@ binaries carry Cisco's H.264 patent licence, so `-Dh264=disabled` drops
 it where that matters. `-Djs_engine=quickjs` builds on
 Fabrice Bellard's original QuickJS instead of the default quickjs-ng.
 
-WAMR, Wuffs, pl_mpeg and minimp3 are vendored in-tree. ns-pango, lexbor
-and quickjs-ng are pinned upstream subprojects (see `subprojects/*.wrap`)
-that `meson setup` fetches; see
+WAMR, Wuffs, pl_mpeg, minimp3 and web-text-lib are vendored in-tree.
+lexbor and quickjs-ng are pinned upstream subprojects (see
+`subprojects/*.wrap`) that `meson setup` fetches; see
 [docs/building.md](docs/building.md#updating-a-pinned-dependency) for how
 a pin is moved.
 
@@ -221,12 +221,9 @@ browser engine (no Gecko, WebKit, or Blink). It is the GPL edition of the
 | [lexbor](https://github.com/lexbor/lexbor) v3.0.1 | HTML5 → DOM parser and the WHATWG URL module |
 | [quickjs-ng](https://github.com/quickjs-ng/quickjs) 0.17.0+ (master `9b06171`) | JavaScript engine — no JIT |
 | [QuickJS](https://github.com/bellard/quickjs) 2026-06-04 | The original JavaScript engine, used instead of quickjs-ng with `-Djs_engine=quickjs` |
-| [ns-pango](https://github.com/nordstjernen-web/ns-pango) | Text itemization, shaping and line breaking — a Pango fork with a cross-layout shaping cache |
 
 lexbor (3.0 or newer) and quickjs-ng take a system copy instead when the
-build finds one; ns-pango is always the subproject, since the fork's
-renamed symbols are what let it coexist with the system Pango that GTK
-loads.
+build finds one.
 
 **Vendored in-tree** (built from the main tree, no submodules):
 
@@ -236,15 +233,16 @@ loads.
 | [Wuffs](https://github.com/google/wuffs) v0.4 | Memory-safe image decoding — PNG/APNG, GIF, BMP, JPEG, WebP |
 | [pl_mpeg](https://github.com/phoboslab/pl_mpeg) (MIT) | In-process MPEG-1 video and MP2 audio decode |
 | [minimp3](https://github.com/lieff/minimp3) (CC0) | In-process MP3 audio decode |
+| web-text-lib (`src/web-text-lib/`, LGPL 2.1+) | Text itemization, shaping and line breaking — Nordstjernen's Pango fork with a cross-layout shaping cache, shared with Nordstjernen Sol |
 
 **Required system libraries:** GTK 4 (≥ 4.14; ≥ 4.22.1 on Windows),
 GLib (≥ 2.80), Cairo (≥ 1.18), HarfBuzz (≥ 8.3), FriBidi (≥ 1.0.6), fontconfig
 (≥ 2.15), FreeType, libcurl (≥ 8.5), OpenSSL (libcrypto), uchardet,
 libpsl, SQLite and zlib — Ubuntu 24.04, Debian 13 and Fedora 40 meet
 every floor; Ubuntu 22.04 and older cannot build it. The engine lays
-text out through ns-pango rather than the system Pango; GTK still links
-the system Pango for its own widgets, and the two coexist because every
-symbol in the fork is renamed. Linux builds also require libseccomp.
+text out through web-text-lib rather than the system Pango; GTK still
+links the system Pango for its own widgets, and the two coexist because
+every symbol in the fork is renamed. Linux builds also require libseccomp.
 SDL2 provides audio output: it is picked up when present and required
 with `-Daudio=enabled`.
 

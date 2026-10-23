@@ -38,7 +38,7 @@ sudo zypper install gcc gcc-c++ git pkgconf meson ninja cmake gtk4-devel \
 `libseccomp` is required on Linux — `meson setup` fails without it. On
 macOS and Windows it is unused and the syscall filter is a no-op.
 
-The text stack has version floors set by ns-pango: GLib ≥ 2.80,
+The text stack has version floors set by web-text-lib: GLib ≥ 2.80,
 HarfBuzz ≥ 8.3, fontconfig ≥ 2.15, Cairo ≥ 1.18 and FriBidi ≥ 1.0.6.
 GTK must be ≥ 4.14 (≥ 4.22.1 on Windows; elsewhere the build warns below
 4.22, which it prefers for the newer GSK renderers) and libcurl ≥ 8.5.
@@ -46,9 +46,9 @@ These are what Ubuntu 24.04 ships;
 Debian 13 and Fedora 40 meet them too. Older releases — Ubuntu 22.04 and
 20.04, Debian 12 — cannot build Nordstjernen Web Browser from their own packages: their
 GTK 4 is too old or absent, alongside the text-stack libraries.
-`meson setup` checks every floor before configuring ns-pango and lists
-each library that is missing or too old in a single error. ns-pango is
-linked into the same process as GTK, so it cannot fall back to building
+`meson setup` checks every floor before configuring web-text-lib and
+lists each library that is missing or too old in a single error.
+web-text-lib is linked into the same process as GTK, so it cannot fall back to building
 GLib or Cairo from source; on an older release, build inside an Ubuntu
 24.04 (or newer) container instead.
 With a libcurl older than 8.11 the build warns that WebSocket is
@@ -159,28 +159,30 @@ meson compile -C builddir
 ./builddir/src/gtk/northstar
 ```
 
-`meson setup` resolves three upstream projects through
-`subprojects/*.wrap` — lexbor, the JavaScript engine (one of the two
-QuickJS rows below) and ns-pango — and exposes them as the `liblexbor` /
-`libquickjs` / `ns-pango` dependencies:
+`meson setup` resolves two upstream projects through
+`subprojects/*.wrap` — lexbor and the JavaScript engine (one of the two
+QuickJS rows below) — and exposes them as the `liblexbor` / `libquickjs`
+dependencies:
 
 | Dependency | Pinned to | Resolution |
 |------------|-----------|------------|
 | [lexbor](https://github.com/lexbor/lexbor) — HTML parser and WHATWG URL module | `v3.0.1` | A system lexbor ≥ 3.0.0 is used when `pkg-config` or CMake finds one; otherwise the wrap is cloned and its static library built through meson's CMake module. |
 | [quickjs-ng](https://github.com/quickjs-ng/quickjs) — JavaScript | master commit `9b06171` | A system quickjs-ng first, of any version; the wrap as fallback. |
 | [QuickJS](https://github.com/bellard/quickjs) — JavaScript, with `-Djs_engine=quickjs` | the `2026-06-04` release commit | Always the subproject, built by the meson file in `subprojects/packagefiles/quickjs/`; upstream ships none. See [quickjs.md](quickjs.md). |
-| [ns-pango](https://github.com/nordstjernen-web/ns-pango) — text itemization, shaping, line breaking | commit `a28a7de` | Always the subproject. There is no system copy to find: the fork renames every symbol precisely so it can coexist with the system Pango that GTK loads. |
 
 `-Djs_engine=quickjs` builds on Fabrice Bellard's original QuickJS instead
 of quickjs-ng; [quickjs.md](quickjs.md) covers how it is built, the adapter
 and the differences between the two.
 
-WAMR, Wuffs, pl_mpeg and minimp3 are vendored in-tree and need no network.
+WAMR, Wuffs, pl_mpeg, minimp3 and web-text-lib (`src/web-text-lib/`, the
+Pango fork the engine lays text out with, shared with Nordstjernen Sol)
+are vendored in-tree and need no network. web-text-lib is trimmed to what
+the engine calls; a new caller may need a function restored from upstream
+Pango, renamed with `src/web-text-lib/ns-rename.py`.
 No in-tree fork of any browser engine is carried.
 
-So the first build needs network access for whichever of those three it
-cannot satisfy locally — ns-pango always, the other two unless the system
-supplies them. A tarball that must build offline has to embed them;
+So the first build needs network access for whichever of those two it
+cannot satisfy locally, unless the system supplies them. A tarball that must build offline has to embed them;
 `debian/README.source` carries the recipe.
 
 When `qjs` and `qjsc` are on the `PATH`, the build also compiles
@@ -197,8 +199,8 @@ keeps the checkout it already has. Move the pin, then reset the checkout
 to it.
 
 ```sh
-$EDITOR subprojects/ns-pango.wrap        # revision = <new tag or commit>
-meson subprojects update --reset ns-pango
+$EDITOR subprojects/lexbor.wrap          # revision = <new tag or commit>
+meson subprojects update --reset lexbor
 meson compile -C builddir
 ```
 
@@ -364,7 +366,7 @@ Others the browser reads:
 | `NS_EARLY_JS_FILE` | Script file evaluated before each page's own scripts. Headless/test runs only; ignored by the interactive browser. |
 | `NS_FRAME_DUMP` | Directory to write every 30th rendered frame to as PNG (debugging; headless and tooling runs only). |
 | `NS_FORCE_HTTP3` | Use HTTP/3 directly instead of waiting for Alt-Svc. |
-| `NS_PANGO_SHAPE_CACHE` | `0` turns the ns-pango caches off; `verify` checks every cached shape against a fresh one. |
+| `NS_PANGO_SHAPE_CACHE` | `0` turns the web-text-lib caches off; `verify` checks every cached shape against a fresh one. |
 | `NS_HEADLESS_LEGACY` | Send every headless run through the direct engine path. |
 
 Running as `root` is refused for safety; `NS_ALLOW_ROOT=1` overrides it,

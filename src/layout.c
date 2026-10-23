@@ -7,7 +7,7 @@
 #include "media_types.h"
 
 #include <math.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 #include <stdlib.h>
 #include <string.h>
 

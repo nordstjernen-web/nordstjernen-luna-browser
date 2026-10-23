@@ -33,31 +33,31 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
 implied. See the License for the specific language governing permissions
 and limitations under the License.
 
-### ns-pango — GNU LGPL 2.1 or later
+### web-text-lib — GNU LGPL 2.1 or later
 
-> Text itemization, shaping and line breaking. A fork of Pango carrying a
-> process-wide glyph-string cache and a per-context metrics cache, with
-> every symbol renamed to `ns_pango_*` / `NsPango*` so it can coexist with
-> the system Pango that GTK loads into the same process. Fetched as a
-> pinned meson subproject (`subprojects/ns-pango.wrap`) and linked
+> Text itemization, shaping and line breaking. Nordstjernen's fork of
+> Pango, carrying a process-wide glyph-string cache and a per-context
+> metrics cache, trimmed to what the browser calls, with every symbol
+> renamed to `ns_pango_*` / `NsPango*` so it can coexist with the system
+> Pango that GTK loads into the same process. Vendored in
+> `src/web-text-lib/` (shared with Nordstjernen Sol) and linked
 > statically.
-> <https://github.com/nordstjernen-web/ns-pango>,
+> <https://github.com/nordstjernen-web/nordstjernen-sol-browser/tree/main/src/web-text-lib>,
 > <https://gitlab.gnome.org/GNOME/pango>
 >
-> Copyright the GNU Project, the Pango contributors, and the ns-pango
-> contributors.
+> Copyright the GNU Project, the Pango contributors, and the
+> Nordstjernen contributors. See `src/web-text-lib/COPYING`.
 
 Licensed under the GNU Lesser General Public License version 2.1, or (at
 your option) any later version. The full license text is available at:
 
   <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>
 
-Because ns-pango is linked statically rather than dynamically, LGPL
-section 6 is satisfied through source availability: Nordstjernen Web Browser's own
-source is GPL-3.0-or-later and complete, the fork's source is public at
-the URL above, and the pinned revision is recorded in
-`subprojects/ns-pango.wrap`, so a recipient can modify the library and
-rebuild the binary against it.
+Because web-text-lib is linked statically rather than dynamically, LGPL
+section 6 is satisfied through source availability: the library's
+complete source ships in `src/web-text-lib/` alongside Nordstjernen Web
+Browser's own GPL-3.0-or-later source, so a recipient can modify the
+library and rebuild the binary against it.
 
 ### Wuffs — Apache License 2.0
 
@@ -316,11 +316,11 @@ them, their notices apply:
 - **FreeType** — FreeType License (BSD-style with credit clause) or GNU
   GPL 2.0, at your option, © The FreeType Project.
 - **HarfBuzz** — MIT ("Old MIT") License, © the HarfBuzz contributors.
-  Text shaping, called by ns-pango.
+  Text shaping, called by web-text-lib.
 - **GNU FriBidi** — GNU LGPL 2.1 or later, © the FriBidi contributors.
-  Bidirectional text, called by ns-pango.
+  Bidirectional text, called by web-text-lib.
 - **libthai** — GNU LGPL 2.1 or later, © the libthai contributors.
-  Optional Thai word breaking in ns-pango, linked when present.
+  Optional Thai word breaking in web-text-lib, linked when present.
 - **Enchant** — GNU LGPL 2.1 or later, © the AbiSource / Enchant
   contributors. Optional on-screen spell-checking.
 - **opusfile / libopus / vorbisfile / libvorbis / libogg** — BSD 3-Clause,
@@ -367,6 +367,6 @@ files name them under `diff_files`. The original QuickJS ships no meson
 build, so `subprojects/packagefiles/quickjs/meson.build` is also laid over
 its checkout (`patch_directory` in `subprojects/quickjs.wrap`). A system lexbor or quickjs-ng, which
 the build prefers when it finds one, does not carry them. pl_mpeg carries its local change in
-the vendored copy directly. ns-pango is a public fork whose full history
-is at the URL in its section above. Nordstjernen Web Browser's own source is
+the vendored copy directly, as does web-text-lib, whose changes from
+upstream Pango are described in `src/web-text-lib/README.md`. Nordstjernen Web Browser's own source is
 GPL-3.0-or-later.

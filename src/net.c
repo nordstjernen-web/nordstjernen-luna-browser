@@ -30,7 +30,7 @@
 #include <libpsl.h>
 #include <sqlite3.h>
 #include <cairo.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 #include <openssl/crypto.h>
 #include <openssl/opensslv.h>
 

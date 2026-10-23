@@ -9,7 +9,7 @@
 
 #include <glib.h>
 #include <cairo.h>
-#include <ns-pango/pango.h>
+#include "ns_pango.h"
 #include "quickjs_compat.h"
 
 #include "js.h"
