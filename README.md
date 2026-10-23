@@ -7,18 +7,18 @@ engine targets practical HTML5, modern CSS and JavaScript compatibility
 without embedding Gecko, WebKit, Blink or another browser engine. Linux
 is the primary platform; macOS and Windows are also supported.
 
-Repository: <https://github.com/nordstjernen-web/nordstjernen-web-browser>.
+Repository: <https://github.com/nordstjernen-web/northstar-web-browser>.
 Nordstjernen Web Browser was previously named Nordstjernen Luna, and before
 that Northstar; the executable is still `northstar`.
 
 **See [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) also, which is
-the most complete, fully featured web browser project we are making. Nordstjernen has builds for Windows, Linux, MacOs.**
+the most complete, fully featured web browser project we are making. Nordstjernen has builds for Windows, Linux and macOS.**
 
 Nordstjernen Web Browser is licensed under the GNU General Public License, version 3 or
 later.
 
 ## Multiple browser variants
-* This repo, [Nordstjernen Web Browser](https://github.com/nordstjernen-web/nordstjernen-web-browser), is a minimalist, simple and good web browser. This is more about research about browser tech.
+* This repo, [Nordstjernen Web Browser](https://github.com/nordstjernen-web/northstar-web-browser), is a minimalist, simple and good web browser. This is more about research about browser tech.
 * [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) is the Nordstjernen web browser, the most complete, fully featured web browser.
   
 We are doing web browser innovation, research and development, and part of this is 
@@ -33,17 +33,22 @@ web-platform-tests through headless mode; see
 and the known structural gaps.
 
 **Security:** on Linux the browser runs behind a Landlock filesystem
-sandbox (plus `PR_SET_NO_NEW_PRIVS`), with a default-deny seccomp syscall
-filter in both GUI and headless/tooling modes · no JIT.
-See [SECURITY.md](SECURITY.md) for the exact per-mode posture.
+sandbox (plus `PR_SET_NO_NEW_PRIVS`) and a default-deny seccomp syscall
+filter, which also refuses executable memory, new namespaces and signals
+to other processes, in both GUI and headless/tooling modes. On macOS a
+sandbox profile confines writes, and on Windows the process runs with
+mitigation policies. There is no JIT. Frames, workers and extensions are
+held to their own origin and Content-Security-Policy. See
+[SECURITY.md](SECURITY.md) for the exact per-mode posture and the known
+gaps.
 
 **Minimalism:** one page per window, one process. The GTK shell runs on
 the main thread and the page engine on one dedicated thread with its own
 main loop, so a slow page never freezes the window; the shell posts
 requests to that thread and gets rendered frames back, all inside the
-same process. The engine is a compact body of C — about 188,000 lines of
-original C, excluding the vendored WAMR, Wuffs and audio decoders —
-small enough for one person to read and audit end-to-end. See
+same process. The engine is a compact body of C — about 207,000 lines of
+original C, excluding the vendored web-text-lib, WAMR, Wuffs and audio
+decoders — small enough for one person to read and audit end-to-end. See
 [docs/architecture.md](docs/architecture.md) for how it fits together.
 
 ## What this edition is
@@ -96,8 +101,9 @@ added.
   controlled-page fetch interception and offline pages served from the
   Cache API.
 - **WebExtensions** — installed local extensions with manifest content
-  scripts, safe packaged resources, `storage.local`, `i18n` and
-  declarativeNetRequest rule sets.
+  scripts, `storage.local` kept apart per extension, `i18n`,
+  declarativeNetRequest rule sets, and packaged resources that pages can
+  load only when the extension lists them in `web_accessible_resources`.
 - **Networking** over HTTP/2 with libcurl — HTTP/3 through Alt-Svc when
   the linked libcurl provides it — HTTPS-first navigation, HSTS,
   optional DNS-over-HTTPS, CSP, subresource-integrity (SRI) checks for
@@ -122,6 +128,9 @@ added.
   requests and plays through the same path. Decoded pictures are kept
   only a few frames ahead of the playhead, and `controls` draws a
   play/pause button, seek bar, time and mute button.
+- **Camera** — `getUserMedia` video capture through V4L2 on Linux, asked
+  for per site; a frame shares the page's permission only when it is
+  same-origin or delegated with `allow="camera"`.
 - **Printing** — `Ctrl+P` lays the page out for paper and hands the sheets
   to the operating system's own print dialog through `GtkPrintOperation`:
   CUPS on Linux, the Win32 dialog on Windows, the Cocoa panel on macOS.
@@ -218,7 +227,7 @@ browser engine (no Gecko, WebKit, or Blink). It is the GPL edition of the
 
 | Component | Role |
 |-----------|------|
-| [lexbor](https://github.com/lexbor/lexbor) v3.0.1 | HTML5 → DOM parser and the WHATWG URL module |
+| [lexbor](https://github.com/lexbor/lexbor) v3.0.1 (commit `7e278c0`) | HTML5 → DOM parser and the WHATWG URL module |
 | [quickjs-ng](https://github.com/quickjs-ng/quickjs) 0.17.0+ (master `9b06171`) | JavaScript engine — no JIT |
 | [QuickJS](https://github.com/bellard/quickjs) 2026-06-04 | The original JavaScript engine, used instead of quickjs-ng with `-Djs_engine=quickjs` |
 
@@ -259,8 +268,8 @@ License, version 3 or later** — see [LICENSE](LICENSE).
 Project home: <https://nordstjernen.org/northstar-browser/> · Copyright 2026 Andreas Røsdal.
 
 ## Builds
-[![linux](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/linux.yml)
-[![linux-i386](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/linux-i386.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/linux-i386.yml)
-[![musl](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/musl.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/musl.yml)
-[![macos](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/macos.yml)
-[![windows](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/nordstjernen-web-browser/actions/workflows/windows.yml)
+[![linux](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/linux.yml)
+[![linux-i386](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/linux-i386.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/linux-i386.yml)
+[![musl](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/musl.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/musl.yml)
+[![macos](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/macos.yml)
+[![windows](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/nordstjernen-web/northstar-web-browser/actions/workflows/windows.yml)
