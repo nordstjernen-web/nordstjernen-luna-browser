@@ -669,10 +669,15 @@ ns_idb_insert_index_entries(JSContext *ctx, sqlite3 *db,
     gboolean ok = TRUE;
     for (uint32_t i = 0; ok && i < len; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, entries, i);
-        JSValue nv = JS_GetPropertyStr(ctx, e, "name");
-        JSValue kv = JS_GetPropertyStr(ctx, e, "key");
-        const char *name = JS_ToCString(ctx, nv);
-        const char *key = JS_ToCString(ctx, kv);
+        /* Plain-copied data (see ns_idb_plain_copy): an object of two
+         * strings.  Anything else is refused rather than converted, which
+         * could reach String.prototype. */
+        JSValue nv = JS_IsObject(e) ? JS_GetPropertyStr(ctx, e, "name")
+                                    : JS_UNDEFINED;
+        JSValue kv = JS_IsObject(e) ? JS_GetPropertyStr(ctx, e, "key")
+                                    : JS_UNDEFINED;
+        const char *name = JS_IsString(nv) ? JS_ToCString(ctx, nv) : NULL;
+        const char *key = JS_IsString(kv) ? JS_ToCString(ctx, kv) : NULL;
         if (name && key) {
             sqlite3_reset(st);
             sqlite3_clear_bindings(st);
@@ -1132,6 +1137,9 @@ ns_idb_plain_copy(JSContext *ctx, JSValueConst v, int depth)
         if (n > NS_IDB_MAX_ARG_ITEMS)
             return JS_ThrowRangeError(ctx, "IndexedDB argument is too large");
         JSValue out = JS_NewArray(ctx);
+        /* No Array.prototype: converting or indexing the copy under the
+         * lock must not reach a page-planted toString/join or getter. */
+        JS_SetPrototype(ctx, out, JS_NULL);
         for (uint32_t i = 0; i < n; i++) {
             JSValue e = JS_GetPropertyUint32(ctx, v, i);
             JSValue c = JS_IsException(e) ? JS_EXCEPTION

@@ -105,6 +105,28 @@ ns_security_downloads_dir(void)
 #ifndef SHM_EXEC
 #define SHM_EXEC 0100000
 #endif
+#include <sched.h>
+#ifndef CLONE_NEWNS
+#define CLONE_NEWNS     0x00020000
+#endif
+#ifndef CLONE_NEWCGROUP
+#define CLONE_NEWCGROUP 0x02000000
+#endif
+#ifndef CLONE_NEWUTS
+#define CLONE_NEWUTS    0x04000000
+#endif
+#ifndef CLONE_NEWIPC
+#define CLONE_NEWIPC    0x08000000
+#endif
+#ifndef CLONE_NEWUSER
+#define CLONE_NEWUSER   0x10000000
+#endif
+#ifndef CLONE_NEWPID
+#define CLONE_NEWPID    0x20000000
+#endif
+#ifndef CLONE_NEWNET
+#define CLONE_NEWNET    0x40000000
+#endif
 #endif
 #endif
 
@@ -568,8 +590,24 @@ ns_security_sandbox_init(const char *self_exe)
         const char *dl_dir = ns_security_downloads_dir();
         if (dl_dir) {
             g_mkdir_with_parents(dl_dir, 0700);
-            if (g_file_test(dl_dir, G_FILE_TEST_IS_DIR))
-                add_path_rw(rfd, fs_rw, dl_dir);
+            /* Landlock grants what the path resolves to, so the fallback
+             * ~/Downloads must resolve, like the XDG directory, strictly
+             * below $HOME and outside hidden directories (a symlink to
+             * $HOME or ~/.ssh would otherwise widen the grant). */
+            char *dl_real = realpath(dl_dir, NULL);
+            char *home_real = realpath(home, NULL);
+            gsize hl = home_real ? strlen(home_real) : 0;
+            gboolean ok = dl_real && home_real &&
+                strncmp(dl_real, home_real, hl) == 0 &&
+                dl_real[hl] == '/' && dl_real[hl + 1] != '\0' &&
+                dl_real[hl + 1] != '.' && !strstr(dl_real + hl, "/.");
+            if (ok && g_file_test(dl_real, G_FILE_TEST_IS_DIR))
+                add_path_rw(rfd, fs_rw, dl_real);
+            else
+                g_info("sandbox: not granting the download directory %s",
+                       dl_dir);
+            free(dl_real);
+            free(home_real);
         }
     }
 
@@ -940,6 +978,40 @@ ns_security_seccomp_init(void)
         if (shmat_nr != __NR_SCMP_ERROR)
             (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EACCES), shmat_nr, 1,
                 SCMP_A2(SCMP_CMP_MASKED_EQ, SHM_EXEC, SHM_EXEC));
+        /* No new namespaces (a user namespace is a large kernel attack
+         * surface), and clone3, whose flags live in memory a filter
+         * cannot read: glibc falls back to clone on ENOSYS. */
+#if !defined(__s390__) && !defined(__s390x__)
+        int clone_nr = seccomp_syscall_resolve_name("clone");
+        static const unsigned long ns_flags[] = {
+            CLONE_NEWUSER, CLONE_NEWNS, CLONE_NEWNET, CLONE_NEWPID,
+            CLONE_NEWIPC, CLONE_NEWUTS, CLONE_NEWCGROUP,
+        };
+        for (gsize i = 0; clone_nr != __NR_SCMP_ERROR &&
+                          i < G_N_ELEMENTS(ns_flags); i++)
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EPERM), clone_nr, 1,
+                SCMP_A0(SCMP_CMP_MASKED_EQ, ns_flags[i], ns_flags[i]));
+#endif
+        int clone3_nr = seccomp_syscall_resolve_name("clone3");
+        if (clone3_nr != __NR_SCMP_ERROR)
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(ENOSYS), clone3_nr, 0);
+        static const char *const ns_unshare[] = { "unshare", "setns" };
+        for (gsize i = 0; i < G_N_ELEMENTS(ns_unshare); i++) {
+            int nr = seccomp_syscall_resolve_name(ns_unshare[i]);
+            if (nr != __NR_SCMP_ERROR)
+                (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EPERM), nr, 0);
+        }
+        /* Signals only to this process: kill(-1, SIGKILL) would take down
+         * every process the user owns. */
+        pid_t self = getpid();
+        int kill_nr = seccomp_syscall_resolve_name("kill");
+        if (kill_nr != __NR_SCMP_ERROR)
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EPERM), kill_nr, 1,
+                SCMP_A0(SCMP_CMP_NE, (scmp_datum_t)self));
+        int tgkill_nr = seccomp_syscall_resolve_name("tgkill");
+        if (tgkill_nr != __NR_SCMP_ERROR)
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EPERM), tgkill_nr, 1,
+                SCMP_A0(SCMP_CMP_NE, (scmp_datum_t)self));
         if (seccomp_load(deny) != 0)
             g_info("seccomp: argument filter not loaded");
         seccomp_release(deny);

@@ -237,8 +237,18 @@ ns_about_url_is_public(const char *url)
 gboolean
 ns_about_url_is_chrome(const char *url)
 {
-    return url && g_ascii_strncasecmp(url, "about:", 6) == 0 &&
-           !ns_about_url_is_public(url);
+    /* An explicit list: an about: URL nobody serves (about:blank/x, ...)
+     * must not count as privileged just for not being public. */
+    static const char *const chrome_pages[] = {
+        "about:settings", "about:config", "about:history", NULL,
+    };
+    if (!url || g_ascii_strncasecmp(url, "about:", 6) != 0) return FALSE;
+    gsize len = strcspn(url, "?#");
+    for (gsize i = 0; chrome_pages[i]; i++)
+        if (len == strlen(chrome_pages[i]) &&
+            g_ascii_strncasecmp(url, chrome_pages[i], len) == 0)
+            return TRUE;
+    return len > 15 && g_ascii_strncasecmp(url, "about:settings-", 15) == 0;
 }
 
 char *

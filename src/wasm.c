@@ -39,12 +39,6 @@ static JSClassID ns_wasm_global_class_id;
 static JSClassID ns_wasm_func_class_id;
 
 static GMutex ns_wasm_link_mutex;
-/* Linking writes import-global values into the shared wasm_module_t,
- * which wasm_runtime_instantiate() then reads; hold this from linking
- * until the instance exists so concurrent instantiations (other threads,
- * or a start function re-entering) cannot swap values in between.
- * Recursive because instantiation can call back into JS. */
-static GRecMutex ns_wasm_instantiate_lock;
 
 typedef struct {
     JSContext *ctx;
@@ -71,6 +65,14 @@ typedef struct {
     ns_wasm_linkage linkage;
     gboolean imports_linked;
     gboolean instantiating;
+    /* Linking writes import-global values into this module's
+     * wasm_module_t, which wasm_runtime_instantiate() then reads; held
+     * from linking until the instance exists so a re-entering start
+     * function cannot swap values in between.  Per module: instantiation
+     * runs page JS (import getters, the start function), and one global
+     * lock let any page or worker stall every other's instantiation.
+     * Recursive because instantiation can call back into JS. */
+    GRecMutex lock;
 } ns_wasm_module;
 
 typedef struct {
@@ -1113,6 +1115,7 @@ ns_wasm_module_finalizer(JSRuntime *rt, JSValue val)
         wasm_runtime_unload(m->module);
     ns_wasm_linkage_clear(rt, &m->linkage);
     g_free(m->load_bytes);
+    g_rec_mutex_clear(&m->lock);
     g_free(m);
 }
 
@@ -1762,6 +1765,7 @@ ns_wasm_module_from_bytes(JSContext *ctx, const guint8 *bytes, size_t len)
                                    "wasm module too large");
 
     ns_wasm_module *mod = g_new0(ns_wasm_module, 1);
+    g_rec_mutex_init(&mod->lock);
     ns_wasm_linkage_init(&mod->linkage);
     mod->load_bytes = ns_wasm_memdup_bytes(bytes, len);
     mod->len = len;
@@ -1898,11 +1902,11 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
     char error_buf[192] = "";
     wasm_module_t inst_module = mod->module;
     int32_t import_count = wasm_runtime_get_import_count(mod->module);
-    g_rec_mutex_lock(&ns_wasm_instantiate_lock);
+    g_rec_mutex_lock(&mod->lock);
     /* Import getters run JS while this module's globals are half linked;
      * instantiating the same module from there would overwrite them. */
     if (mod->instantiating) {
-        g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
+        g_rec_mutex_unlock(&mod->lock);
         ns_wasm_linkage_clear(rt, &linkage);
         return JS_ThrowTypeError(ctx,
             "WebAssembly.Instance: module is already being instantiated");
@@ -1912,13 +1916,13 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
         if (!ns_wasm_bind_imports(ctx, inst_module, &linkage,
                                   import_object)) {
             mod->instantiating = FALSE;
-            g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
+            g_rec_mutex_unlock(&mod->lock);
             ns_wasm_linkage_clear(rt, &linkage);
             return JS_EXCEPTION;
         }
         if (!ns_wasm_link_import_symbols(ctx, mod)) {
             mod->instantiating = FALSE;
-            g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
+            g_rec_mutex_unlock(&mod->lock);
             ns_wasm_linkage_clear(rt, &linkage);
             return JS_EXCEPTION;
         }
@@ -1927,7 +1931,7 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
     if (import_count == 0 &&
         !ns_wasm_bind_imports(ctx, inst_module, &linkage, import_object)) {
         mod->instantiating = FALSE;
-        g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
+        g_rec_mutex_unlock(&mod->lock);
         ns_wasm_linkage_clear(rt, &linkage);
         return JS_EXCEPTION;
     }
@@ -1945,7 +1949,7 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
         wasm_runtime_instantiate(inst_module, NS_WASM_STACK_SIZE, 0, error_buf,
                                  sizeof(error_buf));
     mod->instantiating = FALSE;
-    g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
+    g_rec_mutex_unlock(&mod->lock);
     g_private_set(&ns_wasm_instantiating, NULL);
     if (!inst) {
         JSValue exc = JS_UNDEFINED;
