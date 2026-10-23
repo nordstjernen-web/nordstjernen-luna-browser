@@ -1188,11 +1188,12 @@ ns_ctx_sync_styles(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
             for (uint32_t i = 0; i < n; i++) {
                 JSValue e = JS_GetPropertyUint32(ctx, v, i);
                 double d = 0; JS_ToFloat64(ctx, &d, e); JS_FreeValue(ctx, e);
-                if (d < 0) d = 0;
+                if (!isfinite(d) || d < 0) d = 0;
                 dashes[i] = d;
                 dash_sum += d;
             }
-            if (dash_sum > 0)
+            if (!isfinite(dash_offset)) dash_offset = 0;
+            if (dash_sum > 0 && isfinite(dash_sum))
                 cairo_set_dash(st->cr, dashes, (int)n, dash_offset);
             else
                 cairo_set_dash(st->cr, NULL, 0, 0);
@@ -2117,6 +2118,9 @@ ns_ctx_setLineDash(JSContext *ctx, JSValueConst this_val,
     JSValue stored = JS_NewArray(ctx);
     if (argc >= 1 && JS_IsArray(argv[0])) {
         uint32_t n = ns_js_array_length(ctx, argv[0]);
+        /* Only the first 64 entries are ever applied; bounding n also
+         * keeps the doubled-up index below from wrapping. */
+        if (n > 64) n = 64;
         uint32_t out = 0;
         gboolean dup = (n % 2 == 1);
         for (uint32_t pass = 0; pass < (dup ? 2u : 1u); pass++) {

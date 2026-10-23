@@ -39,6 +39,12 @@ static JSClassID ns_wasm_global_class_id;
 static JSClassID ns_wasm_func_class_id;
 
 static GMutex ns_wasm_link_mutex;
+/* Linking writes import-global values into the shared wasm_module_t,
+ * which wasm_runtime_instantiate() then reads; hold this from linking
+ * until the instance exists so concurrent instantiations (other threads,
+ * or a start function re-entering) cannot swap values in between.
+ * Recursive because instantiation can call back into JS. */
+static GRecMutex ns_wasm_instantiate_lock;
 
 typedef struct {
     JSContext *ctx;
@@ -1891,13 +1897,16 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
     char error_buf[192] = "";
     wasm_module_t inst_module = mod->module;
     int32_t import_count = wasm_runtime_get_import_count(mod->module);
+    g_rec_mutex_lock(&ns_wasm_instantiate_lock);
     if (import_count > 0) {
         if (!ns_wasm_bind_imports(ctx, inst_module, &linkage,
                                   import_object)) {
+            g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
             ns_wasm_linkage_clear(rt, &linkage);
             return JS_EXCEPTION;
         }
         if (!ns_wasm_link_import_symbols(ctx, mod)) {
+            g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
             ns_wasm_linkage_clear(rt, &linkage);
             return JS_EXCEPTION;
         }
@@ -1905,6 +1914,7 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
 
     if (import_count == 0 &&
         !ns_wasm_bind_imports(ctx, inst_module, &linkage, import_object)) {
+        g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
         ns_wasm_linkage_clear(rt, &linkage);
         return JS_EXCEPTION;
     }
@@ -1921,6 +1931,7 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
     wasm_module_inst_t inst =
         wasm_runtime_instantiate(inst_module, NS_WASM_STACK_SIZE, 0, error_buf,
                                  sizeof(error_buf));
+    g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
     g_private_set(&ns_wasm_instantiating, NULL);
     if (!inst) {
         JSValue exc = JS_UNDEFINED;
