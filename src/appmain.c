@@ -28,7 +28,7 @@
 #include <fontconfig/fontconfig.h>
 #endif
 
-#include <ns-pango/ns-pango-cache.h>
+#include <web-text-lib/ns-pango-cache.h>
 
 #include "audio/audio.h"
 #include "bytecode_cache.h"

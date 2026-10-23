@@ -16,7 +16,7 @@
 #include <curl/curl.h>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 
 #include "quickjs_compat.h"
 

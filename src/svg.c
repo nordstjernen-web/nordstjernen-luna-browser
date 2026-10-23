@@ -8,7 +8,7 @@
 #include <math.h>
 #include <string.h>
 
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 
 #include "css.h"
 #include "html.h"

@@ -189,13 +189,13 @@ for (n, d), w in zip(secs, widths):
     cx += w + 12
 
 group(20, 1130, 1160, 96, "Pinned subprojects (fetched by meson) and vendored code — no browser-engine fork", "g-ext")
-tp = [("lexbor — HTML + URL", 200), ("quickjs-ng — JS, no JIT", 200), ("ns-pango — shaping cache", 206),
+tp = [("lexbor — HTML + URL", 200), ("quickjs-ng — JS, no JIT", 200), ("web-text-lib — shaping cache", 206),
       ("Wuffs — images", 130), ("pl_mpeg — MPEG-1, MP2", 170), ("minimp3", 90), ("WAMR", 80)]
 cx = 36
 for name, w in tp:
     chip(cx, 1168, w, name)
     cx += w + 8
-text(36, 1218, "lexbor, quickjs-ng, ns-pango: subprojects/*.wrap · Wuffs, pl_mpeg: subprojects/ · minimp3: src/audio/ · WAMR: src/wamr/", "lbl")
+text(36, 1218, "lexbor, quickjs-ng: subprojects/*.wrap · Wuffs, pl_mpeg: subprojects/ · minimp3: src/audio/ · WAMR: src/wamr/ · web-text-lib: src/web-text-lib/", "lbl")
 
 group(20, 1238, 1160, 76, "System libraries", "g-ext")
 libs = ["GTK 4", "GLib", "Cairo", "HarfBuzz", "FriBidi", "fontconfig", "FreeType", "libcurl", "OpenSSL",

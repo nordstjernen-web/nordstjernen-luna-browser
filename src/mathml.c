@@ -6,7 +6,7 @@
 #include "mathml.h"
 
 #include <math.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 #include <string.h>
 
 #include "paint.h"

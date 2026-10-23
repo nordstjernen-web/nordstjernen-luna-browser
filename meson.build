@@ -119,8 +119,8 @@ message('northstar build profile: ' +
         (ns_is_release ? ns_release_profile
                        : 'development (debug symbols + frame pointer + hardened)'))
 
-# ns-pango enforces the text-stack floors from inside the subproject, where a
-# too-old library surfaces as a bare version mismatch and only the first of
+# web-text-lib enforces the text-stack floors from inside its own build, where
+# a too-old library surfaces as a bare version mismatch and only the first of
 # several is reported. Checking every floor here first names them all at once.
 gtk4_min = host_machine.system() == 'windows' ? '>=4.22.1' : '>=4.14'
 ns_dependency_floors = [
@@ -153,19 +153,6 @@ glib       = dependency('glib-2.0')
 gobject    = dependency('gobject-2.0')
 gio        = dependency('gio-2.0')
 cairo      = dependency('cairo')
-ns_pango_sp = subproject('ns-pango',
-  default_options: [
-    'default_library=static',
-    'fontconfig=enabled',
-    'freetype=enabled',
-    'introspection=disabled',
-    'sysprof=disabled',
-    'libthai=auto',
-    'warning_level=0',
-    'werror=false',
-  ])
-pango      = ns_pango_sp.get_variable('libpango_dep')
-pangocairo = ns_pango_sp.get_variable('libpangocairo_dep')
 
 gtk4 = dependency('gtk4', version: gtk4_min)
 if host_machine.system() == 'windows'
@@ -194,7 +181,6 @@ have_fontconfig = libfontconfig.found()
 if have_fontconfig
   add_project_arguments('-DNS_HAVE_FONTCONFIG=1', language: 'c')
 endif
-libpangoft2 = ns_pango_sp.get_variable('libpangoft2_dep')
 
 libfreetype = dependency('freetype2', required: false)
 have_freetype = libfreetype.found()
@@ -430,5 +416,14 @@ summary({'H.264 video (OpenH264)': have_h264}, section: 'Features')
 summary({'Opus in WebM (libopus)': libopus.found()}, section: 'Features')
 summary({'AVIF images (libavif)': have_avif}, section: 'Features')
 summary({'JavaScript engine': js_engine + ' ' + libquickjs.version()}, section: 'Features')
+
+# Text is shaped through web-text-lib (src/web-text-lib/), the in-tree Pango
+# fork that caches finished glyph strings across layouts; every symbol in it
+# is renamed, because GTK loads the system Pango into the same process. It
+# declares targets, so it comes after the last project argument.
+subdir('src/web-text-lib')
+pango       = web_text_dep
+pangocairo  = web_text_cairo_dep
+libpangoft2 = web_text_fc_dep
 
 subdir('src')

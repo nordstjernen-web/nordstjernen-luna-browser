@@ -4,6 +4,13 @@ Significant changes in each release:
 
 1.0.16:
 =======
+* Text layout moved from the ns-pango subproject to web-text-lib,
+  vendored in `src/web-text-lib/` from Nordstjernen Sol and built with
+  `subdir()`, so `meson setup` no longer fetches it and offline and
+  distro builds get it from the source tarball. The engine reaches it
+  through `src/ns_pango.h`. Three functions Sol had trimmed and Northstar
+  calls (word spacing, line spacing, log attributes) are restored from
+  upstream. CJK text now sits on the same baseline as the text around it.
 * about:start shows the animated N logo and the heading "Nordstjernen
   Browser" above the search box.
 * Nordstjernen Luna is renamed Nordstjernen Web Browser in every

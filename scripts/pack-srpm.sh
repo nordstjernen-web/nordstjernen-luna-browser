@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build a source RPM (.src.rpm) of Nordstjernen Web Browser. The SRPM contains a
-# clean source tarball plus the meson wrap packagecache. lexbor,
-# quickjs-ng and ns-pango are git wraps, which the packagecache does not
-# hold, so `rpmbuild --rebuild` still needs network access to fetch them.
+# clean source tarball plus the meson wrap packagecache. lexbor and
+# quickjs-ng are git wraps, which the packagecache does not hold, so
+# `rpmbuild --rebuild` still needs network access to fetch them.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

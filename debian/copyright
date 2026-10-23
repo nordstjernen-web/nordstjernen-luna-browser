@@ -8,7 +8,7 @@ Comment:
  fork of Gecko, WebKit, or Blink.
  .
  The upstream tarball must include the meson subprojects (lexbor,
- quickjs-ng, ns-pango, wuffs, plmpeg) so the package builds without
+ quickjs-ng, wuffs, plmpeg) so the package builds without
  network access; see debian/README.source.
 
 Files: *
@@ -25,8 +25,8 @@ Copyright: 2017-2026 Fabrice Bellard
            2023-2026 the quickjs-ng contributors
 License: Expat
 
-Files: subprojects/ns-pango/*
-Copyright: the Pango contributors and the ns-pango contributors
+Files: src/web-text-lib/*
+Copyright: the Pango contributors and the Nordstjernen contributors
 License: LGPL-2.1+
 
 Files: subprojects/wuffs/*

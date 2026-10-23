@@ -9,7 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include <glib.h>
-#include <ns-pango/pango.h>
+#include "ns_pango.h"
 #ifdef _WIN32
 #include <windows.h>
 #endif

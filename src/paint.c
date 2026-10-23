@@ -8,7 +8,7 @@
 static int g_dbg_paint_x = -2, g_dbg_paint_y = -2;
 
 #include <math.h>
-#include <ns-pango/pangocairo.h>
+#include "ns_pango.h"
 #include <stdlib.h>
 #include <string.h>
 
