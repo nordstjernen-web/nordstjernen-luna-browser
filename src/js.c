@@ -1132,6 +1132,7 @@ static const ns_csp *ns_js_realm_csp(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_origin(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_document_url(ns_js *js, JSContext *ctx);
 static JSContext *ns_js_handler_realm(ns_js *js, const ns_node *n);
+static ns_node *ns_js_node_frame(const ns_node *node);
 static void ns_js_report_pending_rejections(ns_js *js);
 static void ns_js_drop_pending_rejections(ns_js *js);
 
@@ -9706,7 +9707,32 @@ static JSValue
 ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
-    int d = ns_camera_permission(js_from_ctx(ctx));
+    ns_js *js = js_from_ctx(ctx);
+    /* The page's camera decision covers its own documents.  A frame only
+     * shares it when every frame between it and the page is same-origin
+     * with the page or delegates the camera (allow="camera"); sandboxed
+     * frames never do. */
+    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    const ns_node *frame = NULL;
+    if (js && caller && js->frame_contexts) {
+        GHashTableIter it;
+        gpointer iframe, fctx;
+        g_hash_table_iter_init(&it, js->frame_contexts);
+        while (g_hash_table_iter_next(&it, &iframe, &fctx))
+            if (fctx == caller) { frame = iframe; break; }
+    }
+    for (const ns_node *f = frame; f; f = ns_js_node_frame(f->parent)) {
+        if (ns_element_get_attr(f, "data-nd-frame-opaque"))
+            return JS_NewString(ctx, "denied");
+        const char *fu = ns_element_get_attr(f, "data-nd-frame-url");
+        g_autofree char *fo = fu ? ns_url_origin_from(fu) : NULL;
+        gboolean same = fo && js->document_origin &&
+                        g_ascii_strcasecmp(fo, js->document_origin) == 0;
+        const char *allow = ns_element_get_attr(f, "allow");
+        if (!same && !(allow && strstr(allow, "camera")))
+            return JS_NewString(ctx, "denied");
+    }
+    int d = ns_camera_permission(js);
     if (d == 1)
         return JS_NewString(ctx, "granted");
     if (d == 0)
@@ -34747,6 +34773,9 @@ ns_element_get_namespaceURI(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "http://www.w3.org/1999/xhtml");
 }
 
+/* There is no file picker, so a file input never has files.  (It used to
+ * read whatever path a data-nd-file-path attribute named, which nothing
+ * set but page script could have.) */
 static JSValue
 ns_input_get_files(JSContext *ctx, JSValueConst this_val)
 {
@@ -34754,72 +34783,12 @@ ns_input_get_files(JSContext *ctx, JSValueConst this_val)
     if (!ns_node_is_element_named(n, "input")) return JS_NULL;
     const char *type = ns_element_get_attr(n, "type");
     if (!type || g_ascii_strcasecmp(type, "file") != 0) return JS_NULL;
-    const char *path = ns_element_get_attr(n, "data-nd-file-path");
-
-    JSValue cached_path = JS_GetPropertyStr(ctx, this_val, "__nd_files_path");
-    const char *cp = JS_IsString(cached_path) ? JS_ToCString(ctx, cached_path) : NULL;
-    gboolean same = (!path && !cp) ||
-                    (path && cp && strcmp(path, cp) == 0);
-    if (cp) JS_FreeCString(ctx, cp);
-    JS_FreeValue(ctx, cached_path);
-    if (same) {
-        JSValue cached = JS_GetPropertyStr(ctx, this_val, "__nd_files_cache");
-        if (JS_IsArray(cached)) return cached;
-        JS_FreeValue(ctx, cached);
-    }
-
+    JSValue cached = JS_GetPropertyStr(ctx, this_val, "__nd_files_cache");
+    if (JS_IsArray(cached)) return cached;
+    JS_FreeValue(ctx, cached);
     JSValue arr = JS_NewArray(ctx);
-    if (path && *path) {
-        char *contents = NULL;
-        gsize len = 0;
-        GError *err = NULL;
-        if (g_file_get_contents(path, &contents, &len, &err)) {
-            const char *base = strrchr(path, '/');
-#ifdef G_OS_WIN32
-            const char *base_w = strrchr(path, '\\');
-            if (!base || (base_w && base_w > base)) base = base_w;
-#endif
-            const char *bname = base ? base + 1 : path;
-
-            g_autofree char *mime = g_content_type_guess(path,
-                (const guchar *)contents, len < 4096 ? len : 4096, NULL);
-            g_autofree char *mime_type = mime ? g_content_type_get_mime_type(mime) : NULL;
-
-            JSValue global = JS_GetGlobalObject(ctx);
-            JSValue file_ctor = JS_GetPropertyStr(ctx, global, "File");
-            JS_FreeValue(ctx, global);
-            if (JS_IsConstructor(ctx, file_ctor)) {
-                JSValue ab = JS_NewArrayBufferCopy(ctx,
-                    (const uint8_t *)contents, len);
-                JSValue parts = JS_NewArray(ctx);
-                JS_SetPropertyUint32(ctx, parts, 0, ab);
-                JSValue opts = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, opts, "type",
-                    JS_NewString(ctx, mime_type && *mime_type
-                                       ? mime_type : "application/octet-stream"));
-                JSValue name_str = JS_NewString(ctx, bname);
-                JSValueConst args[3] = { parts, name_str, opts };
-                JSValue file = JS_CallConstructor(ctx, file_ctor, 3, args);
-                if (!JS_IsException(file))
-                    JS_SetPropertyUint32(ctx, arr, 0, file);
-                else
-                    JS_FreeValue(ctx, JS_GetException(ctx));
-                JS_FreeValue(ctx, parts);
-                JS_FreeValue(ctx, name_str);
-                JS_FreeValue(ctx, opts);
-            }
-            JS_FreeValue(ctx, file_ctor);
-            g_free(contents);
-        } else if (err) {
-            g_error_free(err);
-        }
-    }
     JS_SetPropertyStr(ctx, arr, "item",
         JS_NewCFunction(ctx, ns_namedmap_item, "item", 1));
-
-    JS_DefinePropertyValueStr(ctx, this_val, "__nd_files_path",
-        JS_NewString(ctx, path ? path : ""),
-        JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
     JS_DefinePropertyValueStr(ctx, this_val, "__nd_files_cache",
         JS_DupValue(ctx, arr),
         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);

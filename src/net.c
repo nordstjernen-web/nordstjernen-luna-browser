@@ -2519,6 +2519,7 @@ typedef struct ns_header_ctx {
     char **xframe_options_out;
     char **x_content_type_options_out;
     char **cors_allow_origin_out;
+    gboolean in_set_cookie;      /* last header line was a Set-Cookie */
     char **refresh_out;
     char **content_language_out;
     char  *etag;
@@ -2593,10 +2594,16 @@ ns_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
 
     if (bytes >= 5 && g_ascii_strncasecmp(buffer, "HTTP/", 5) == 0) {
         if (hc->raw) g_string_set_size(hc->raw, 0);
+        hc->in_set_cookie = FALSE;
     } else if (bytes > 2) {
-        gboolean set_cookie =
+        /* An obs-fold continuation line (leading SP/HT) belongs to the
+         * header before it: keep a folded Set-Cookie out of the raw
+         * headers script can read, like its first line. */
+        gboolean folded = buffer[0] == ' ' || buffer[0] == '\t';
+        gboolean set_cookie = folded ? hc->in_set_cookie :
             (bytes >= 11 && g_ascii_strncasecmp(buffer, "Set-Cookie:", 11) == 0) ||
             (bytes >= 12 && g_ascii_strncasecmp(buffer, "Set-Cookie2:", 12) == 0);
+        hc->in_set_cookie = set_cookie;
         if (!set_cookie) {
             if (!hc->raw) hc->raw = g_string_new(NULL);
             if (hc->raw->len + bytes <= NS_NET_MAX_RAW_HEADER_BYTES)
@@ -5347,9 +5354,11 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
             }
         }
         if (!extra_has_ct) {
+            /* Callers sanitise it today; never let a CR/LF through. */
+            gboolean ct_ok = content_type && *content_type &&
+                             !strpbrk(content_type, "\r\n");
             char *ct_hdr = g_strdup_printf("Content-Type: %s",
-                content_type && *content_type ? content_type
-                                              : "application/x-www-form-urlencoded");
+                ct_ok ? content_type : "application/x-www-form-urlencoded");
             headers = curl_slist_append(headers, ct_hdr);
             g_free(ct_hdr);
         }

@@ -18,7 +18,10 @@ for wrap in "$ROOT"/subprojects/*.wrap; do
     rev=$(wrap_value "$wrap" revision)
     url=$(wrap_value "$wrap" url)
     if [ ! -e "$dir/.git" ]; then
+        # meson always fetches these as git checkouts; anything else (a
+        # copied or replaced tree) cannot be checked against its pin.
         echo "check-subprojects: $name: not a git checkout, cannot verify $rev" >&2
+        stale=1
         continue
     fi
     have=$(git -C "$dir" rev-parse HEAD)
