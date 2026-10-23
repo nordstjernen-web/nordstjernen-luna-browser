@@ -6,6 +6,7 @@
 #include "mainctx.h"
 #include "engine.h"
 
+#include <glib/gstdio.h>
 #include <cairo-pdf.h>
 #include <cairo.h>
 #include <math.h>
@@ -1326,6 +1327,52 @@ ns_engine_fetch_images(ns_box *root, const char *base_url,
     g_hash_table_destroy(wanted);
 }
 
+static GHashTable *g_preopened_outputs;  /* path -> FILE* */
+
+gboolean
+ns_engine_preopen_output(const char *path)
+{
+    if (!path || !*path) return FALSE;
+    if (!g_preopened_outputs)
+        g_preopened_outputs = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                                    g_free, NULL);
+    if (g_hash_table_contains(g_preopened_outputs, path)) return TRUE;
+    FILE *f = g_fopen(path, "wb");
+    if (!f) return FALSE;
+    g_hash_table_insert(g_preopened_outputs, g_strdup(path), f);
+    return TRUE;
+}
+
+/* The pre-opened file for path, handed over to the caller to close. */
+static FILE *
+engine_take_preopened(const char *path)
+{
+    if (!g_preopened_outputs || !path) return NULL;
+    gpointer key = NULL, f = NULL;
+    if (!g_hash_table_lookup_extended(g_preopened_outputs, path, &key, &f))
+        return NULL;
+    g_hash_table_steal(g_preopened_outputs, path);
+    g_free(key);
+    return f;
+}
+
+static cairo_status_t
+engine_write_to_file(void *closure, const unsigned char *data,
+                     unsigned int length)
+{
+    return fwrite(data, 1, length, closure) == length
+        ? CAIRO_STATUS_SUCCESS : CAIRO_STATUS_WRITE_ERROR;
+}
+
+static cairo_surface_t *
+engine_pdf_surface_create(const char *path, double w, double h, FILE **out)
+{
+    *out = engine_take_preopened(path);
+    return *out ? cairo_pdf_surface_create_for_stream(engine_write_to_file,
+                                                      *out, w, h)
+                : cairo_pdf_surface_create(path, w, h);
+}
+
 int
 ns_engine_write_png(const ns_box *root, const char *path)
 {
@@ -1356,7 +1403,12 @@ ns_engine_write_png(const ns_box *root, const char *path)
     cairo_t *cr = cairo_create(surf);
     ns_paint(cr, root, NULL);
     cairo_destroy(cr);
-    cairo_status_t st = cairo_surface_write_to_png(surf, path);
+    FILE *f = engine_take_preopened(path);
+    cairo_status_t st = f
+        ? cairo_surface_write_to_png_stream(surf, engine_write_to_file, f)
+        : cairo_surface_write_to_png(surf, path);
+    if (f && fclose(f) != 0 && st == CAIRO_STATUS_SUCCESS)
+        st = CAIRO_STATUS_WRITE_ERROR;
     cairo_surface_destroy(surf);
     if (st != CAIRO_STATUS_SUCCESS) {
         fprintf(stderr, "engine: PNG write failed: %s\n",
@@ -1392,9 +1444,11 @@ ns_engine_write_pdf(const ns_box *root, const char *path)
     if (!root || !path) return 2;
     double w = root->content_width > 0 ? root->content_width : 595.0;
     double h = root->content_height > 0 ? (root->content_height + 32) : 842.0;
-    cairo_surface_t *surf = cairo_pdf_surface_create(path, w, h);
+    FILE *f = NULL;
+    cairo_surface_t *surf = engine_pdf_surface_create(path, w, h, &f);
     if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
         cairo_surface_destroy(surf);
+        if (f) fclose(f);
         fprintf(stderr, "engine: failed to create PDF surface\n");
         return 2;
     }
@@ -1404,6 +1458,7 @@ ns_engine_write_pdf(const ns_box *root, const char *path)
     cairo_show_page(cr);
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
+    if (f) fclose(f);
     return 0;
 }
 
@@ -1416,11 +1471,13 @@ ns_engine_write_pdf_paged(const ns_box *root, const char *path,
     if (!root || !path || !setup) return 2;
     double page_h = setup->height - setup->margin_top - setup->margin_bottom;
     GArray *offsets = ns_print_page_offsets(root, page_h);
-    cairo_surface_t *surf = cairo_pdf_surface_create(
+    FILE *f = NULL;
+    cairo_surface_t *surf = engine_pdf_surface_create(
         path, setup->width * NS_PRINT_PT_PER_PX,
-        setup->height * NS_PRINT_PT_PER_PX);
+        setup->height * NS_PRINT_PT_PER_PX, &f);
     if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
         cairo_surface_destroy(surf);
+        if (f) fclose(f);
         g_array_free(offsets, TRUE);
         fprintf(stderr, "engine: failed to create PDF surface\n");
         return 2;
@@ -1435,6 +1492,7 @@ ns_engine_write_pdf_paged(const ns_box *root, const char *path,
     }
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
+    if (f) fclose(f);
     g_array_free(offsets, TRUE);
     return 0;
 }

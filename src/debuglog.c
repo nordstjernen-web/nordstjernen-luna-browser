@@ -35,7 +35,7 @@ ns_dlog_file_enabled(void)
 #ifdef G_OS_WIN32
     return !ns_env_flag("NS_NO_LOG_FILE");
 #else
-    return g_getenv("NS_LOG_FILE") != NULL;
+    return ns_env_flag("NS_LOG_FILE");
 #endif
 }
 

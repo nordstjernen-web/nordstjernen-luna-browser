@@ -92,6 +92,11 @@ ns_security_downloads_dir(void)
 #ifdef NS_HAVE_SECCOMP
 #include <linux/seccomp.h>
 #include <seccomp.h>
+#include <sys/ioctl.h>
+#include <sys/shm.h>
+#ifndef SHM_EXEC
+#define SHM_EXEC 0100000
+#endif
 #endif
 #endif
 
@@ -904,6 +909,32 @@ ns_security_seccomp_init(void)
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
         g_info("seccomp: PR_SET_NO_NEW_PRIVS failed: %s", g_strerror(errno));
         return;
+    }
+
+    /* A few calls the allowlist permits are refused for particular
+     * arguments.  Filters stack and the strictest verdict wins, so these
+     * go in a filter of their own, loaded before the allowlist:
+     * - TIOCSTI/TIOCLINUX would type commands into the terminal the
+     *   browser was started from;
+     * - shmat(..., SHM_EXEC) gives executable SysV shared memory that a
+     *   second, writable attach can fill, past the exec-memory filter. */
+    scmp_filter_ctx deny = seccomp_init(SCMP_ACT_ALLOW);
+    if (deny) {
+        (void)seccomp_attr_set(deny, SCMP_FLTATR_CTL_TSYNC, 1);
+        int ioctl_nr = seccomp_syscall_resolve_name("ioctl");
+        if (ioctl_nr != __NR_SCMP_ERROR) {
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EPERM), ioctl_nr, 1,
+                SCMP_A1(SCMP_CMP_MASKED_EQ, 0xffffffffu, TIOCSTI));
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EPERM), ioctl_nr, 1,
+                SCMP_A1(SCMP_CMP_MASKED_EQ, 0xffffffffu, TIOCLINUX));
+        }
+        int shmat_nr = seccomp_syscall_resolve_name("shmat");
+        if (shmat_nr != __NR_SCMP_ERROR)
+            (void)seccomp_rule_add(deny, SCMP_ACT_ERRNO(EACCES), shmat_nr, 1,
+                SCMP_A2(SCMP_CMP_MASKED_EQ, SHM_EXEC, SHM_EXEC));
+        if (seccomp_load(deny) != 0)
+            g_info("seccomp: argument filter not loaded");
+        seccomp_release(deny);
     }
 
     scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ERRNO(EPERM));

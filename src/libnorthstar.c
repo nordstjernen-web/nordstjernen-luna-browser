@@ -2406,8 +2406,12 @@ ns_browser_render_argb32_rects(ns_browser *browser, int scroll_x, int scroll_y,
     ns_paint_clear_device_viewport();
 
     cairo_surface_flush(surf);
-    const char *dump_dir = g_getenv("NS_FRAME_DUMP");
-    if (dump_dir) {
+    /* Frame dumps are a tooling aid: never in the interactive browser,
+     * where any process that can set the environment could make it write
+     * every page it shows to disk. */
+    const char *dump_dir = ns_security_tool_mode()
+        ? g_getenv("NS_FRAME_DUMP") : NULL;
+    if (dump_dir && *dump_dir) {
         static int frame_no;
         if (frame_no % 30 == 0) {
             char *path = g_strdup_printf("%s/frame-%05d.png",
