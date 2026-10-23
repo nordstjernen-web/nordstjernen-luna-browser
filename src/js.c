@@ -1128,9 +1128,12 @@ ns_js_attach_idle(ns_js *js, GSourceFunc func, gpointer data)
 }
 
 static void ns_storage_drain_deferred_events(ns_js *js);
+static JSContext *ns_js_window_realm(ns_js *js, JSValueConst window);
 static const ns_csp *ns_js_realm_csp(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_origin(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_document_url(ns_js *js, JSContext *ctx);
+static gboolean ns_js_caller_unknown(ns_js *js, JSContext *caller);
+static char *ns_js_realm_origin(ns_js *js, JSContext *realm);
 static JSContext *ns_js_handler_realm(ns_js *js, const ns_node *n);
 static ns_node *ns_js_node_frame(const ns_node *node);
 static void ns_js_report_pending_rejections(ns_js *js);
@@ -2982,6 +2985,38 @@ ns_storage_call_frame_handler(ns_js *js, JSValue fn, JSValueConst fwin,
     JS_FreeValue(js->ctx, r);
 }
 
+/* A copy of the page's storage event for a frame, built in the frame's
+ * realm from plain values; storageArea is the frame's own Storage. */
+static JSValue
+ns_storage_event_in_realm(ns_js *js, JSContext *fctx, JSValueConst ev,
+                          JSValueConst fwin)
+{
+    JSValue out = ns_make_event(fctx, "storage", NULL);
+    JS_SetPropertyStr(fctx, out, "bubbles", JS_FALSE);
+    JS_SetPropertyStr(fctx, out, "cancelable", JS_FALSE);
+    static const char *const fields[] = { "key", "oldValue", "newValue", "url" };
+    for (gsize i = 0; i < G_N_ELEMENTS(fields); i++) {
+        JSValue v = JS_GetPropertyStr(js->ctx, ev, fields[i]);
+        const char *s = JS_IsString(v) ? JS_ToCString(js->ctx, v) : NULL;
+        JS_SetPropertyStr(fctx, out, fields[i],
+                          s ? JS_NewString(fctx, s) : JS_NULL);
+        if (s) JS_FreeCString(js->ctx, s);
+        JS_FreeValue(js->ctx, v);
+    }
+    JSValue area = JS_GetPropertyStr(js->ctx, ev, "__ndStorageKind");
+    const char *kind = JS_IsString(area) ? JS_ToCString(js->ctx, area) : NULL;
+    JSValue own = kind ? JS_GetPropertyStr(fctx, fwin, kind) : JS_NULL;
+    if (JS_IsException(own)) {
+        JS_FreeValue(fctx, JS_GetException(fctx));
+        own = JS_NULL;
+    }
+    JS_SetPropertyStr(fctx, out, "storageArea", own);
+    if (kind) JS_FreeCString(js->ctx, kind);
+    JS_FreeValue(js->ctx, area);
+    JS_SetPropertyStr(fctx, out, "target", JS_DupValue(fctx, fwin));
+    return out;
+}
+
 static void
 ns_storage_fire_frame_on_prop(ns_js *js, JSValueConst fwin, JSValueConst ev)
 {
@@ -3051,12 +3086,17 @@ ns_storage_deliver_frames(ns_js *js, ns_node *n, JSValueConst ev,
             JS_VALUE_GET_PTR(fwin) == JS_VALUE_GET_PTR(source_win);
         if (!is_source) {
             ns_node *body = ns_node_find_first_element(n, "body");
-            if (JS_IsObject(fwin)) {
-                JS_SetPropertyStr(js->ctx, (JSValue)ev, "target",
-                                  JS_DupValue(js->ctx, fwin));
-                ns_storage_fire_frame_on_prop(js, fwin, ev);
+            JSContext *fctx = JS_IsObject(fwin) ? ns_js_window_realm(js, fwin)
+                                                : NULL;
+            if (JS_IsObject(fwin) && fctx) {
+                /* Each frame gets its own event, made in its own realm:
+                 * sharing the page's object would hand the frame the
+                 * page's Object.prototype. */
+                JSValue fev = ns_storage_event_in_realm(js, fctx, ev, fwin);
+                ns_storage_fire_frame_on_prop(js, fwin, fev);
                 if (body)
-                    ns_storage_fire_frame_body_handler(js, fwin, body, ev);
+                    ns_storage_fire_frame_body_handler(js, fwin, body, fev);
+                JS_FreeValue(fctx, fev);
             } else if (body) {
                 ns_fire_inline_on_handler(js, body, "storage", (JSValue)ev);
                 ns_fire_property_on_handler(js, body, "storage", (JSValue)ev);
@@ -3155,6 +3195,20 @@ ns_storage_fire_event(JSContext *ctx, JSValueConst storage_obj,
                                                           : "")));
     JS_SetPropertyStr(js->ctx, ev, "storageArea",
                       JS_DupValue(js->ctx, storage_obj));
+    /* Which Storage this is, for the copies frames get (their own). */
+    {
+        JSValue ls = JS_GetPropertyStr(ctx, src_global, "localStorage");
+        if (JS_IsException(ls)) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            ls = JS_UNDEFINED;
+        }
+        gboolean local = JS_IsObject(ls) &&
+            JS_VALUE_GET_PTR(ls) == JS_VALUE_GET_PTR(storage_obj);
+        JS_FreeValue(ctx, ls);
+        JS_DefinePropertyValueStr(js->ctx, ev, "__ndStorageKind",
+            JS_NewString(js->ctx, local ? "localStorage" : "sessionStorage"),
+            0);
+    }
     ns_pending_storage_event p = { ev, src_global, origin };
     if (!js->pending_storage_events)
         js->pending_storage_events =
@@ -9713,6 +9767,8 @@ ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
      * with the page or delegates the camera (allow="camera"); sandboxed
      * frames never do. */
     JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    if (js && ns_js_caller_unknown(js, caller))
+        return JS_NewString(ctx, "denied");
     const ns_node *frame = NULL;
     if (js && caller && js->frame_contexts) {
         GHashTableIter it;
@@ -12064,19 +12120,27 @@ ns_broadcast_find(ns_js *js, JSValueConst obj, guint *out_index)
 
 static gboolean ns_iframe_is_cross_origin(ns_js *js, const ns_node *iframe);
 
-/* Origin of the realm running the calling script: frames call the
- * embedder's constructor, so the function's own realm is not enough. */
-static char *
-ns_js_caller_origin(ns_js *js, JSContext *ctx)
+/* When no script function is on the stack (a native function called
+ * straight from a promise job or an event, e.g. p.then(xhr.send.bind(xhr))),
+ * the engine cannot say whose code asked.  On a page that runs frame
+ * realms that could be a frame's, so it must not be taken for the page. */
+static gboolean
+ns_js_caller_unknown(ns_js *js, JSContext *caller)
 {
-    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
-    if (!caller) caller = ctx;
+    return !caller && js->frame_ctxs && js->frame_ctxs->len > 0;
+}
+
+/* Origin of the given realm: a frame realm's recorded origin, otherwise
+ * the page's (or, while a frame's scripts run, that frame's) URL. */
+static char *
+ns_js_realm_origin(ns_js *js, JSContext *realm)
+{
     if (js->frame_contexts) {
         GHashTableIter it;
         gpointer iframe, fctx;
         g_hash_table_iter_init(&it, js->frame_contexts);
         while (g_hash_table_iter_next(&it, &iframe, &fctx)) {
-            if (fctx != caller) continue;
+            if (fctx != realm) continue;
             const char *u = ns_element_get_attr(iframe, "data-nd-frame-url");
             char *o = ns_element_get_attr(iframe, "data-nd-frame-opaque") ||
                       !u ? NULL : ns_url_origin_from(u);
@@ -12088,6 +12152,18 @@ ns_js_caller_origin(ns_js *js, JSContext *ctx)
     return o ? o : g_strdup_printf("null:%p", (void *)js);
 }
 
+/* Origin of the realm running the calling script: frames call the
+ * embedder's constructor, so the function's own realm is not enough.
+ * An unknown caller gets an opaque origin of its own. */
+static char *
+ns_js_caller_origin(ns_js *js, JSContext *ctx)
+{
+    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    if (ns_js_caller_unknown(js, caller))
+        return g_strdup_printf("null:unknown:%p", (void *)js);
+    return ns_js_realm_origin(js, caller ? caller : ctx);
+}
+
 /* URL of the document whose script is calling: a frame's own URL when a
  * frame realm calls the embedder's XMLHttpRequest/sendBeacon, so its
  * requests carry the frame's identity (cookies, Origin, CORS) rather than
@@ -12097,6 +12173,7 @@ static char *
 ns_js_caller_document_url(ns_js *js, JSContext *ctx)
 {
     JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    if (ns_js_caller_unknown(js, caller)) return g_strdup("about:blank");
     if (caller && caller != js->ctx && js->frame_contexts) {
         GHashTableIter it;
         gpointer iframe, fctx;
@@ -19171,7 +19248,10 @@ ns_js_blob_store(ns_js *js, const char *url, ns_blob_entry *e)
 static char *
 ns_js_caller_web_origin(ns_js *js, JSContext *ctx)
 {
-    char *o = ns_js_caller_origin(js, ctx ? ctx : js->ctx);
+    /* ctx NULL: no script is calling (a <script src=blob:>); the document
+     * being run is the requester. */
+    char *o = ctx ? ns_js_caller_origin(js, ctx)
+                  : ns_js_realm_origin(js, js->ctx);
     if (!o || g_str_has_prefix(o, "null:")) {
         g_free(o);
         return g_strdup("null");
@@ -19275,7 +19355,8 @@ ns_js_blob_url_lookup(ns_js *js, JSContext *ctx, const char *url,
     /* Opaque origins all label their blobs "null": tell them apart by the
      * realm that created the blob, unique to each opaque frame. */
     if (e && e->creator && g_str_has_prefix(e->creator, "null:")) {
-        g_autofree char *who = ns_js_caller_origin(js, ctx ? ctx : js->ctx);
+        g_autofree char *who = ctx ? ns_js_caller_origin(js, ctx)
+                                   : ns_js_realm_origin(js, js->ctx);
         if (g_strcmp0(who, e->creator) != 0) e = NULL;
     }
     if (e) {
@@ -23350,6 +23431,7 @@ ns_window_compile_handler(JSContext *ctx, JSValueConst this_val,
      * of the script that called it, or a frame could compile code into
      * its embedder's globals. */
     JSContext *rctx = JS_GetCallerRealmOrNull(ctx);
+    if (js && ns_js_caller_unknown(js, rctx)) return JS_NULL;
     if (!rctx) rctx = ctx;
     if (js && !ns_csp_inline_event_handler_allowed(ns_js_realm_csp(js, rctx)))
         return JS_NULL;
@@ -43483,6 +43565,13 @@ static const char ns_iframe_global_bootstrap[] =
     "      if (Object.prototype.hasOwnProperty.call(G, pk) && pk!=='performance') continue;"
     "      if (pk === '_listeners') continue;"
     "      if (crossOrigin && parentOnly[pk]) continue;"
+    /* The storage interfaces are the embedder's own implementations, bound
+     * to its storage partition: a cross-origin or opaque frame must not
+     * get them (new IDBFactory().open() would open the embedder's
+     * databases). */
+    "      if ((crossOrigin || ((sandbox & 1) && !(sandbox & 8))) &&"
+    "          (/^IDB/.test(pk) || pk === 'Storage' || pk === 'StorageManager' ||"
+    "           pk === 'CacheStorage' || pk === 'Cache' || pk === 'CookieStore')) continue;"
     "      if ((crossOrigin || platformNames) && (!platformNames ||"
     "          !Object.prototype.hasOwnProperty.call(platformNames, pk))) continue;"
     "      try {"
@@ -52292,7 +52381,8 @@ ns_document_cookie_caller_allowed(ns_js *js, JSContext *ctx,
         return FALSE;
     JSContext *main_ctx = js->main_realm_ctx ? js->main_realm_ctx : js->ctx;
     JSContext *caller = JS_GetCallerRealmOrNull(ctx);
-    if (!caller || caller == main_ctx) return TRUE;
+    if (!caller) return !ns_js_caller_unknown(js, caller);
+    if (caller == main_ctx) return TRUE;
     if (!js->document_origin) return FALSE;
     g_autofree char *co = ns_js_caller_origin(js, ctx);
     return co && g_ascii_strcasecmp(co, js->document_origin) == 0;
