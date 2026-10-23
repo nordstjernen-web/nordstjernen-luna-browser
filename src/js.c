@@ -53065,8 +53065,7 @@ ns_location_target_allowed(ns_js *js, const char *s)
     if (!colon || (slash && slash < colon)) return TRUE;
     if (g_ascii_strncasecmp(s, "about:", 6) == 0)
         return ns_about_url_is_public(s) ||
-               (js && js->current_url &&
-                g_str_has_prefix(js->current_url, "about:"));
+               (js && ns_about_url_is_chrome(js->current_url));
     static const char *const allowed[] = {
         "http:", "https:", "about:", "data:", "mailto:", NULL,
     };

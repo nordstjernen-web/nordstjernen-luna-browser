@@ -219,11 +219,26 @@ gboolean
 ns_about_url_is_public(const char *url)
 {
     static const char *const public_pages[] = {
-        "about:blank", "about:start", "about:home", "about:newtab", NULL,
+        "about:blank", "about:srcdoc", "about:start", "about:home",
+        "about:newtab", NULL,
     };
+    if (!url) return FALSE;
+    gsize len = strcspn(url, "?#");
     for (gsize i = 0; public_pages[i]; i++)
-        if (g_ascii_strcasecmp(url, public_pages[i]) == 0) return TRUE;
+        if (len == strlen(public_pages[i]) &&
+            g_ascii_strncasecmp(url, public_pages[i], len) == 0)
+            return TRUE;
     return FALSE;
+}
+
+/* A browser-chrome about: page (settings, history, ...), as opposed to
+ * the public ones that web content can open or script, like about:blank
+ * and about:srcdoc. */
+gboolean
+ns_about_url_is_chrome(const char *url)
+{
+    return url && g_ascii_strncasecmp(url, "about:", 6) == 0 &&
+           !ns_about_url_is_public(url);
 }
 
 char *

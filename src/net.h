@@ -221,6 +221,7 @@ void  ns_net_apply_curl_tls(void *curl_handle);
 gboolean ns_address_is_search(const char *s);
 char *ns_search_url_for(const char *query);
 gboolean ns_about_url_is_public(const char *url);
+gboolean ns_about_url_is_chrome(const char *url);
 char *ns_url_from_local_path(const char *path);
 
 char *ns_multipart_boundary(void);

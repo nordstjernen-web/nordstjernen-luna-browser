@@ -4445,7 +4445,7 @@ about_start_tagline(void)
 static gboolean
 about_request_from_chrome(const char *top_url, gboolean navigation)
 {
-    if (top_url && *top_url) return g_str_has_prefix(top_url, "about:");
+    if (top_url && *top_url) return ns_about_url_is_chrome(top_url);
     return navigation;
 }
 
@@ -4766,7 +4766,7 @@ synthesize_view_source_response(const char *url, const char *top_url,
     resp->final_url = g_strdup(url);
     gboolean from_chrome = !top_url || !*top_url ||
         g_str_has_prefix(top_url, prefix) ||
-        g_str_has_prefix(top_url, "about:");
+        ns_about_url_is_chrome(top_url);
     gboolean inner_allowed =
         g_str_has_prefix(inner, "http:") ||
         g_str_has_prefix(inner, "https:") ||

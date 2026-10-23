@@ -1203,7 +1203,7 @@ browser_allows_navigation_url(ns_browser *b, const char *url)
         return b && b->safebrowsing_interstitial;
     if (g_str_has_prefix(url, "about:"))
         return ns_about_url_is_public(url) ||
-               (b && b->base_url && g_str_has_prefix(b->base_url, "about:"));
+               (b && ns_about_url_is_chrome(b->base_url));
     if (!g_str_has_prefix(url, "file:")) return TRUE;
     return b && b->base_url && g_str_has_prefix(b->base_url, "file:");
 }
@@ -1233,9 +1233,12 @@ static void browser_js_download(const char *url, const char *filename, gpointer 
 {
     ns_browser *b = ud;
     if (!b || !url || !*url) return;
+    /* A URL the page may not navigate to (file:, chrome about: pages) must
+     * not be fetched as a download either. */
     char *abs = browser_resolve_navigation(b, url);
+    if (!abs) return;
     g_free(b->pending_download);
-    b->pending_download = g_strdup_printf("%s\t%s", abs ? abs : url,
+    b->pending_download = g_strdup_printf("%s\t%s", abs,
                                           filename ? filename : "");
     g_free(abs);
 }
