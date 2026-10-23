@@ -1132,7 +1132,6 @@ static const ns_csp *ns_js_realm_csp(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_origin(ns_js *js, JSContext *ctx);
 static char *ns_js_caller_document_url(ns_js *js, JSContext *ctx);
 static JSContext *ns_js_handler_realm(ns_js *js, const ns_node *n);
-static const ns_csp *ns_js_csp_for_node(ns_js *js, const ns_node *n);
 static void ns_js_report_pending_rejections(ns_js *js);
 static void ns_js_drop_pending_rejections(ns_js *js);
 
