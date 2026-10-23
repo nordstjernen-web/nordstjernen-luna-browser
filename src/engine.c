@@ -470,6 +470,13 @@ ns_engine_speculative_preload(ns_node *doc, const char *base_url,
                             ? NS_FETCH_DEST_CONNECT : target->dest,
                 base_url, target->url, NULL)))
             continue;
+        /* Scripts are judged by their element's nonce, which the scanner
+         * does not have: under a policy, preload only a script its URL
+         * admits, and keep it within script-src at every hop. */
+        gboolean script = target->dest == NS_FETCH_DEST_SCRIPT;
+        if (script && csp &&
+            !ns_csp_allows(csp, NS_CSP_SCRIPT, target->url, base_url))
+            continue;
         const char *const *headers = ns_net_accept_headers_for(target->dest);
         if (target->dest != NS_FETCH_DEST_DEFAULT) {
             char *key = ns_net_request_key(target->url, base_url, "GET", headers);
@@ -480,9 +487,13 @@ ns_engine_speculative_preload(ns_node *doc, const char *base_url,
         req->dest = target->dest;
         req->url = g_strdup(target->url);
         req->top_url = g_strdup(base_url);
+        ns_fetch_policy *req_policy = script && csp
+            ? ns_fetch_policy_new_script_hops(policy)
+            : ns_fetch_policy_ref(policy);
         ns_net_request_async(target->url, base_url, "GET", NULL, 0, NULL,
-                             headers, target->dest, policy, NULL,
+                             headers, target->dest, req_policy, NULL,
                              on_preload_fetched, req);
+        ns_fetch_policy_unref(req_policy);
     }
     ns_fetch_policy_unref(policy);
     if (csp) ns_csp_free(csp);

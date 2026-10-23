@@ -285,7 +285,12 @@ source_matches(const char *src, const char *resource_url, const char *doc_url)
     const char *res_scheme = res->protocol;
 
     if (strcmp(src, "*") == 0)      return is_network_scheme(res_scheme);
-    if (strcmp(src, "'self'") == 0) return ns_url_same_origin(resource_url, doc_url);
+    /* 'self' is the document's own network origin; blob:, data: and
+     * filesystem: URLs need their scheme listed (CSP3), even though a
+     * blob: URL carries its creator's origin. */
+    if (strcmp(src, "'self'") == 0)
+        return is_network_scheme(res_scheme) &&
+               ns_url_same_origin(resource_url, doc_url);
 
     gsize src_len = strlen(src);
     if (src[src_len - 1] == ':' && !strchr(src, '/') &&
