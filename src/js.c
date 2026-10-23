@@ -58138,6 +58138,31 @@ ns_js_lifecycle_has_blockers(ns_js *js)
         (js->load_delay_cb && js->load_delay_cb(js->load_delay_user_data));
 }
 
+
+/* Content scripts come as a function expression that receives the
+ * extension helpers as its argument (see ns_ext_content_scripts_for_url). */
+static void
+ns_js_run_content_scripts(ns_js *js, const char *src)
+{
+    if (!js || !src || js->halted || js->in_pump) return;
+    js->eval_deadline_us = g_get_monotonic_time() + ns_js_eval_budget_us();
+    JSValue fn = JS_Eval(js->ctx, src, strlen(src), "content-script",
+                         JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsFunction(js->ctx, fn)) {
+        JSValue helpers = ns_ext_content_script_helpers(js->ctx);
+        JSValue r = JS_Call(js->ctx, fn, JS_UNDEFINED, 1,
+                            (JSValueConst *)&helpers);
+        if (JS_IsException(r)) JS_FreeValue(js->ctx, JS_GetException(js->ctx));
+        JS_FreeValue(js->ctx, r);
+        JS_FreeValue(js->ctx, helpers);
+    } else if (JS_IsException(fn)) {
+        JS_FreeValue(js->ctx, JS_GetException(js->ctx));
+    }
+    JS_FreeValue(js->ctx, fn);
+    js->eval_deadline_us = 0;
+    ns_drain_microtasks(js);
+}
+
 static gboolean
 ns_js_lifecycle_tick(gpointer data)
 {
@@ -58225,17 +58250,10 @@ ns_js_lifecycle_tick(gpointer data)
         &js->navigation_timing.load_event_end_ms, "loadEventEnd");
     ns_js_fire_page_transition(js, "pageshow", FALSE);
     ns_ce_upgrade_subtree_all(js, doc);
-    JSValue global = JS_GetGlobalObject(js->ctx);
     g_autofree char *content_script =
-        ns_ext_content_scripts_for_url(js->ctx, global,
-                                       js->lifecycle_origin, FALSE);
-    JS_FreeValue(js->ctx, global);
-    if (content_script) {
-        char *result = ns_js_eval_source(js, content_script,
-                                         "content-script");
-        g_free(result);
-        ns_ext_drop_helpers(js->ctx);
-    }
+        ns_ext_content_scripts_for_url(js->lifecycle_origin, FALSE);
+    if (content_script)
+        ns_js_run_content_scripts(js, content_script);
     if (ns_js_profile_enabled())
         g_printerr("[profile] js lifecycle total=%.1fms\n",
                    (g_get_monotonic_time() - js->lifecycle_start_us) / 1000.0);
@@ -58281,17 +58299,11 @@ ns_js_run_scripts_in_doc(ns_js *js, ns_node *doc,
         g_free(r);
     }
     {
-        JSValue global = JS_GetGlobalObject(js->ctx);
         g_autofree char *cs =
-            ns_ext_content_scripts_for_url(js->ctx, global,
-                                           base_url && *base_url ? base_url : NULL,
+            ns_ext_content_scripts_for_url(base_url && *base_url ? base_url
+                                                                 : NULL,
                                            TRUE);
-        JS_FreeValue(js->ctx, global);
-        if (cs) {
-            char *r = ns_js_eval_source(js, cs, "content-script");
-            g_free(r);
-            ns_ext_drop_helpers(js->ctx);
-        }
+        if (cs) ns_js_run_content_scripts(js, cs);
     }
     ns_js_schedule_static_iframes(js, doc);
     gint64 t_install = profile ? g_get_monotonic_time() : 0;

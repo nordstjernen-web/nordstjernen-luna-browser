@@ -55,6 +55,7 @@ typedef struct {
     GPtrArray *content_scripts;
     GPtrArray *dnr_rules;
     GPtrArray *cosmetic_rules;
+    GPtrArray *web_accessible;   /* resource path globs */
 } ns_ext;
 
 static GPtrArray  *g_exts;
@@ -371,16 +372,14 @@ ns_ext_js_uilang(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
-/* The native helpers are parked on the page global only for the moment
- * the shim takes them; their names carry a per-injection random suffix
- * (@NDTOKEN@ below) so page script cannot plant accessors on them beforehand.
- * The intrinsics the storage shim relies on are captured up front. */
-static const char ns_ext_shim_prelude_tmpl[] =
-";(function(){"
-"var G=globalThis,T='@NDTOKEN@';"
-"function take(n){var k='__nd_ext_'+n+T,v=G[k];delete G[k];return v;}"
-"var M=take('manifest'),U=take('url'),SR=take('sread'),SW=take('swrite'),"
-"PL=take('platform'),AR=take('arch'),UL=take('uilang');"
+/* The shim is a function the browser calls with the native helpers as
+ * its argument, so they never pass through the page's global object
+ * (which page script that has already run could have replaced).  The
+ * intrinsics the storage shim relies on are captured up front. */
+static const char ns_ext_shim_prelude[] =
+"(function(H){"
+"var M=H.manifest,U=H.url,SR=H.sread,SW=H.swrite,"
+"PL=H.platform,AR=H.arch,UL=H.uilang;H=undefined;"
 "var JP=JSON.parse,JS=JSON.stringify,OK=Object.keys,AI=Array.isArray,"
 "P=Promise,PRES=Promise.resolve;"
 "function each(a,f){for(var i=0;i<a.length;i++)f(a[i]);}"
@@ -410,7 +409,7 @@ static const char ns_ext_shim_prelude_tmpl[] =
 "storage:{local:area(id,'local')}};"
 "}\n";
 
-static const char ns_ext_shim_epilogue[] = "})();\n";
+static const char ns_ext_shim_epilogue[] = "})\n";
 
 static char *
 ns_ext_js_string(JSContext *ctx, JSValueConst obj, const char *key)
@@ -858,7 +857,11 @@ ns_abp_parse_cosmetic(ns_ext *e, const char *line, const char *sep)
     while (*selector == ' ') selector++;
     /* The selector is pasted into "<selector> { display: none }", so a
      * brace would let a filter list inject arbitrary CSS rules. */
-    if (!*selector || strpbrk(selector, "{}")) return;
+    /* A selector, nothing else: no blocks, no at-rules (an @import as
+     * the first selector would load a stylesheet), no comments or
+     * statement breaks. */
+    if (!*selector || strpbrk(selector, "{};@") || strstr(selector, "/*"))
+        return;
     if (g_str_has_prefix(selector, "+js") || g_str_has_prefix(selector, "script:"))
         return;
 
@@ -939,7 +942,50 @@ ns_ext_free(gpointer data)
     if (e->content_scripts) g_ptr_array_free(e->content_scripts, TRUE);
     if (e->dnr_rules) g_ptr_array_free(e->dnr_rules, TRUE);
     if (e->cosmetic_rules) g_ptr_array_free(e->cosmetic_rules, TRUE);
+    if (e->web_accessible) g_ptr_array_free(e->web_accessible, TRUE);
     g_free(e);
+}
+
+/* web_accessible_resources: an array of path globs (MV2), or of objects
+ * whose "resources" holds them (MV3).  The MV3 "matches" restriction is
+ * not applied: the resources are open to every page. */
+static void
+ns_ext_parse_web_accessible(ns_ext *e, JSContext *ctx, JSValueConst manifest)
+{
+    e->web_accessible = g_ptr_array_new_with_free_func(g_free);
+    JSValue war = JS_GetPropertyStr(ctx, manifest, "web_accessible_resources");
+    if (JS_IsArray(war)) {
+        JSValue lenv = JS_GetPropertyStr(ctx, war, "length");
+        uint32_t n = 0;
+        JS_ToUint32(ctx, &n, lenv);
+        JS_FreeValue(ctx, lenv);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue item = JS_GetPropertyUint32(ctx, war, i);
+            if (JS_IsString(item)) {
+                const char *s = JS_ToCString(ctx, item);
+                if (s) g_ptr_array_add(e->web_accessible, g_strdup(s));
+                JS_FreeCString(ctx, s);
+            } else if (JS_IsObject(item)) {
+                JSValue res = JS_GetPropertyStr(ctx, item, "resources");
+                ns_ext_collect_strings(ctx, res, e->web_accessible);
+                JS_FreeValue(ctx, res);
+            }
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, war);
+}
+
+static gboolean
+ns_ext_is_web_accessible(const ns_ext *e, const char *relative)
+{
+    while (*relative == '/') relative++;
+    for (guint i = 0; e->web_accessible && i < e->web_accessible->len; i++) {
+        const char *g = g_ptr_array_index(e->web_accessible, i);
+        while (*g == '/') g++;
+        if (ns_ext_wildcard(g, relative)) return TRUE;
+    }
+    return FALSE;
 }
 
 static void
@@ -982,6 +1028,7 @@ ns_ext_load_one(const char *dir, JSContext *ctx)
     e->dnr_rules = g_ptr_array_new_with_free_func(ns_dnr_rule_free);
     e->cosmetic_rules = g_ptr_array_new_with_free_func(ns_cosmetic_rule_free);
     ns_ext_parse_content_scripts(e, ctx, obj);
+    ns_ext_parse_web_accessible(e, ctx, obj);
     ns_ext_parse_dnr(e, ctx, obj);
     ns_ext_parse_filter_lists(e, ctx, obj);
     JS_FreeValue(ctx, obj);
@@ -1062,26 +1109,28 @@ ns_ext_migrate_default_dir(void)
     g_mkdir_with_parents(dir, 0700);
 }
 
-void
-ns_ext_drop_helpers(JSContext *ctx)
+JSValue
+ns_ext_content_script_helpers(JSContext *ctx)
 {
-    /* The content-script shim removes the native helpers itself; if the
-     * script failed to parse or was cut short they would stay on the
-     * page's global object. */
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSPropertyEnum *props = NULL;
-    uint32_t n = 0;
-    if (JS_GetOwnPropertyNames(ctx, &props, &n, global,
-                               JS_GPN_STRING_MASK) == 0) {
-        for (uint32_t i = 0; i < n; i++) {
-            const char *name = JS_AtomToCString(ctx, props[i].atom);
-            if (name && g_str_has_prefix(name, "__nd_ext_"))
-                JS_DeleteProperty(ctx, global, props[i].atom, 0);
-            if (name) JS_FreeCString(ctx, name);
-        }
-        JS_FreePropertyEnum(ctx, props, n);
-    }
-    JS_FreeValue(ctx, global);
+    static const struct {
+        const char *name;
+        JSCFunction *fn;
+        int argc;
+    } helpers[] = {
+        { "manifest", ns_ext_js_manifest, 1 },
+        { "url",      ns_ext_js_url,      2 },
+        { "sread",    ns_ext_js_sread,    2 },
+        { "swrite",   ns_ext_js_swrite,   3 },
+        { "platform", ns_ext_js_platform, 0 },
+        { "arch",     ns_ext_js_arch,     0 },
+        { "uilang",   ns_ext_js_uilang,   0 },
+    };
+    JSValue h = JS_NewObjectProto(ctx, JS_NULL);
+    for (gsize i = 0; i < G_N_ELEMENTS(helpers); i++)
+        JS_DefinePropertyValueStr(ctx, h, helpers[i].name,
+            JS_NewCFunction(ctx, helpers[i].fn, helpers[i].name,
+                            helpers[i].argc), 0);
+    return h;
 }
 
 static void
@@ -1153,8 +1202,7 @@ ns_ext_content_script_matches(const ns_ext_cs *cs, const char *url)
 }
 
 char *
-ns_ext_content_scripts_for_url(JSContext *ctx, JSValueConst global,
-                               const char *url, gboolean at_start)
+ns_ext_content_scripts_for_url(const char *url, gboolean at_start)
 {
     ns_ext_init();
     if (!url || !*url || g_exts->len == 0) return NULL;
@@ -1210,38 +1258,7 @@ ns_ext_content_scripts_for_url(JSContext *ctx, JSValueConst global,
     }
     if (body->len == 0) { g_string_free(body, TRUE); return NULL; }
 
-    char *uuid = g_uuid_string_random();
-    GString *token = g_string_new("_");
-    for (const char *p = uuid; *p; p++)
-        if (*p != '-') g_string_append_c(token, *p);
-    g_free(uuid);
-    static const struct {
-        const char *name;
-        JSCFunction *fn;
-        int argc;
-    } helpers[] = {
-        { "manifest", ns_ext_js_manifest, 1 },
-        { "url",      ns_ext_js_url,      2 },
-        { "sread",    ns_ext_js_sread,    2 },
-        { "swrite",   ns_ext_js_swrite,   3 },
-        { "platform", ns_ext_js_platform, 0 },
-        { "arch",     ns_ext_js_arch,     0 },
-        { "uilang",   ns_ext_js_uilang,   0 },
-    };
-    for (gsize i = 0; i < G_N_ELEMENTS(helpers); i++) {
-        g_autofree char *key = g_strdup_printf("__nd_ext_%s%s",
-                                               helpers[i].name, token->str);
-        JS_DefinePropertyValueStr(ctx, global, key,
-            JS_NewCFunction(ctx, helpers[i].fn, helpers[i].name,
-                            helpers[i].argc),
-            JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
-    }
-
-    g_auto(GStrv) prelude_parts = g_strsplit(ns_ext_shim_prelude_tmpl,
-                                             "@NDTOKEN@", -1);
-    g_autofree char *prelude = g_strjoinv(token->str, prelude_parts);
-    g_string_free(token, TRUE);
-    GString *out = g_string_new(prelude);
+    GString *out = g_string_new(ns_ext_shim_prelude);
     g_string_append(out, body->str);
     g_string_append(out, ns_ext_shim_epilogue);
     g_string_free(body, TRUE);
@@ -1276,6 +1293,13 @@ ns_ext_resource_load(const char *url, GBytes **bytes,
     if (!path_end) path_end = url + strlen(url);
     g_autofree char *escaped = g_strndup(slash + 1, path_end - slash - 1);
     g_autofree char *relative = g_uri_unescape_string(escaped, NULL);
+    /* These URLs are only ever loaded by web content (the browser reads
+     * content scripts from disk), so only the resources the extension
+     * declares web-accessible are served. */
+    if (!relative || !ns_ext_is_web_accessible(e, relative)) {
+        if (error) *error = g_strdup("extension resource is not web-accessible");
+        return TRUE;
+    }
     g_autofree char *path = ns_ext_safe_path(e->base_dir, relative);
     char *data = NULL;
     gsize len = 0;
