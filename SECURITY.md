@@ -160,8 +160,10 @@ unconfined.
     mode, the GPU device
     nodes `/dev/dri` and `/dev/nvidia*` in GUI mode (GTK's OpenGL and
     Vulkan drivers open them to draw the window), `/dev/snd` and any
-    `/dev/video0`–`/dev/video63` node that exists, and the output
-    directory of a `--dump=png:`, `pdf:` or `print:` run.
+    `/dev/video0`–`/dev/video63` node that exists. Output files named on
+    the command line (`--dump=png:`, `pdf:`, `print:`, `--screenshot=`,
+    `--trace=`) are opened before the sandbox starts and written through
+    the open file, so no directory is granted for them.
 
   Landlock governs opening paths, not connecting to UNIX sockets that
   already exist, so the session bus and other per-user sockets in the
@@ -189,11 +191,15 @@ unconfined.
   another interpreter or binary even if Landlock would have allowed
   reading it. `ptrace`, `bpf`, `keyctl`, `mount`, `unshare`,
   `userfaultfd`, the `io_uring_*` family, `perf_event_open`, `kexec_load`,
-  and the module syscalls are likewise absent. The filter matches syscall
-  numbers only, not their arguments: `clone`/`clone3`, `ioctl`, `prctl`,
-  `socket`, `mmap` and `mprotect` are allowed with any flags. TSYNC
-  propagates the filter to every thread. The one argument rule allows
-  `seccomp` only with `SECCOMP_SET_MODE_FILTER`, so a thread can add a
+  and the module syscalls are likewise absent. The allow-list matches
+  syscall numbers only, not their arguments: `clone`/`clone3`, `ioctl`,
+  `prctl`, `socket`, `mmap` and `mprotect` are allowed with any flags. A
+  small filter loaded before it refuses a few argument combinations:
+  `ioctl` `TIOCSTI` and `TIOCLINUX` (which could type into the terminal
+  the browser was started from) and `shmat` with `SHM_EXEC`. TSYNC
+  propagates the filters to every thread. The allow-list's one argument
+  rule allows `seccomp` only with `SECCOMP_SET_MODE_FILTER`, so a thread
+  can add a
   filter of its own (the engine thread's executable-memory filter);
   stacked filters can only refuse more, never allow what this one
   refuses.
@@ -335,15 +341,24 @@ snapshot of its Content-Security-Policy. The check applies, in order:
   `https:` (with no fallback if the upgrade fails), and a loopback host
   (`localhost`, `127.0.0.1`, `::1`) counts as secure.
 - **CSP by destination.** `img-src`, `media-src`, `font-src`,
-  `connect-src`, `worker-src` and `frame-src`, each with its CSP
-  fallback chain, are checked against the (possibly upgraded) URL.
-  Scripts and stylesheets are checked where the element is, because a
-  nonce, a hash or `'strict-dynamic'` decides them.
+  `connect-src`, `worker-src`, `frame-src` and `object-src`, each with
+  its CSP fallback chain, are checked against the (possibly upgraded)
+  URL, as is `style-src` for stylesheets that script inserts. Scripts are
+  first checked where the element is, because a nonce, a hash or
+  `'strict-dynamic'` decides them; a script admitted by its URL is then
+  also held to `script-src` at every redirect hop.
 
 Requests that share an in-flight fetch or a preloaded response have the
 final URL checked against their own policy when the response arrives.
-WebSocket, EventSource, `sendBeacon`, worker scripts and the audio
-worker use the same check.
+Requests made by a frame's scripts carry the frame's own policy, not the
+embedding page's. WebSocket, EventSource, `sendBeacon`, workers and
+`importScripts()`, media the audio engine fetches, and the speculative
+preload scanner (which reads the response header and `<meta>` policies
+before the page's script runs) use the same check. Two exceptions: the
+stylesheets the renderer loads for `<link>` and `@import` get the
+`file:` and mixed-content checks but not `style-src` (see *Known gaps*),
+and an extension's web-accessible resources are exempt from
+`connect-src`.
 
 ### Origin isolation
 
@@ -373,8 +388,14 @@ worker use the same check.
   with nonces, hashes and `'strict-dynamic'`), `connect-src`,
   `frame-src`/`child-src`, `worker-src`, `img-src`, `media-src`,
   `font-src`, `frame-ancestors`, `object-src`, `base-uri` and
-  `form-action`, including on redirects. `style-src` is parsed but not
-  enforced when parser-inserted stylesheets load (it only withholds a
+  `form-action`, including on redirects; `script-src-elem` and
+  `style-src-elem` stand in for `script-src` and `style-src` when those
+  are absent. Inline event handlers and `javascript:` URLs need
+  `'unsafe-inline'`, and `eval()`, `Function()` and string timers need
+  `'unsafe-eval'`, each judged by the policy of the document the code
+  belongs to. `style-src` is enforced only for stylesheets that script
+  inserts: parser-inserted `<link>` and `@import` loads, inline
+  `<style>` and `style=` attributes are not checked (it only withholds a
   `<link>` element's `load` event). Host
   source expressions match scheme, host (with `*.` wildcard), port
   (defaulting to the scheme's default), and path (left-anchored if the
@@ -391,17 +412,21 @@ worker use the same check.
   imitates.
 - Service workers can only be registered from a secure context (https,
   or http on loopback), and registrations and interception are restricted
-  to the script's origin, with a scope under the script's directory. The
+  to the script's origin, with a scope under the script's directory; a
+  registration can only be removed by its own origin. The
   `Service-Worker-Allowed` header, which would widen that, is not
   supported.
 - WebExtensions are explicitly installed local code, not capabilities
   granted to web pages. Packaged-resource paths are resolved beneath the
   extension root before loading (with symlinks resolved on Unix; on
   Windows the check is lexical), and extension storage is separated by
-  extension identity. Content scripts run in the page's main world —
-  there are no isolated worlds — so a page that has already run can
-  tamper with the JavaScript environment a `document_idle` content script
-  sees.
+  extension identity. Web pages can load only the files an extension
+  lists in `web_accessible_resources` (the MV3 `matches` restriction is
+  not applied). Content scripts run in the page's main world — there are
+  no isolated worlds — so a page that has already run can tamper with the
+  JavaScript environment a `document_idle` content script sees; the
+  native storage helpers are handed to the content-script shim as an
+  argument and never appear on the page's global object.
 - Safe browsing (`src/safebrowsing.c`) checks a top-level navigation's
   host against a local SHA-256 blocklist (the bundled
   `safebrowsing.list`, plus a user list in the config directory or
@@ -560,7 +585,13 @@ are parsed, scoped, and re-sent by libcurl, honouring `HttpOnly`,
 `SameSite`; the browser treats every cookie as `SameSite=Lax`, so a
 cross-site initiator only gets cookies sent on safe (GET/HEAD) top-level
 navigations, and third-party requests get none under the default
-`cookie_policy`. At navigation the
+`cookie_policy`. Requests from script follow their credentials mode:
+`fetch()` sends cookies cross-origin only with `credentials: 'include'`
+(and `XMLHttpRequest` only with `withCredentials`), and such a response
+is readable only with the exact origin in `Access-Control-Allow-Origin`
+and `Access-Control-Allow-Credentials: true`. Documents with an opaque
+origin (sandboxed frames, `about:blank`, `file:`) send `Origin: null`.
+At navigation the
 non-`HttpOnly` cookies for the document's origin are read back out of
 the jar (`ns_net_cookies_for_js`) and seeded into `document.cookie`,
 and the `document.cookie` setter writes back into that same per-site
@@ -625,9 +656,7 @@ The `document.cookie` setter:
   in the browser process (see *Media*). They are bounded, but nothing
   stands between them and the rest of the process.
 - **Linux read access is wider than the browser needs.** The whole XDG
-  config, data and cache directories are readable, and so is the
-  directory holding `$XAUTHORITY` — `$HOME` itself on systems that keep
-  `~/.Xauthority`.
+  config, data and cache directories are readable.
 - **Windows: no per-path filesystem sandbox, and no dynamic-code ban in
   the GUI.** The mitigation suite restricts the *process* (no remote DLL
   loads, no child processes, etc.) but does not allow-list the files the
