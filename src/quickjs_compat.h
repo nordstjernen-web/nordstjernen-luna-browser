@@ -13,6 +13,8 @@
 
 JSContext *JS_GetCallerRealm(JSContext *ctx);
 JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj);
+/* From the cross-realm-compile-check patch applied to both engines. */
+void JS_SetCrossRealmCompileCheck(int (*cb)(JSContext *target, JSContext *caller));
 
 int JS_RepointArrayBuffer(JSContext *ctx, JSValueConst obj, uint8_t *data,
                           size_t byte_length);

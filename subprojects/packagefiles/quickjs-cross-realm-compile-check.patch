@@ -1,0 +1,71 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -39760,9 +39760,59 @@
+     return JS_EXCEPTION;
+ }
+ 
++/* Embedder veto on compiling source text through an eval or Function
++ * constructor that belongs to a different realm than the calling code.
++ * Realms that share objects (e.g. browser frames) would otherwise let code
++ * in one realm run arbitrary code in the other via
++ * someObject.constructor.constructor("..."). */
++static int (*js_cross_realm_compile_check)(JSContext *target, JSContext *caller);
++
++void JS_SetCrossRealmCompileCheck(int (*cb)(JSContext *target, JSContext *caller))
++{
++    js_cross_realm_compile_check = cb;
++}
++
++/* Realm of the innermost JS function on the stack, skipping native frames
++ * such as Function.prototype.call or Reflect.construct. NULL when no JS
++ * code is running (e.g. a promise job calling a native handler). */
++static JSContext *js_caller_realm(JSRuntime *rt)
++{
++    JSStackFrame *sf;
++    for (sf = rt->current_stack_frame; sf; sf = sf->prev_frame) {
++        JSObject *p;
++        if (JS_VALUE_GET_TAG(sf->cur_func) != JS_TAG_OBJECT)
++            continue;
++        p = JS_VALUE_GET_OBJ(sf->cur_func);
++        switch (p->class_id) {
++        case JS_CLASS_BYTECODE_FUNCTION:
++        case JS_CLASS_GENERATOR_FUNCTION:
++        case JS_CLASS_ASYNC_FUNCTION:
++        case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
++            return p->u.func.function_bytecode->realm;
++        default:
++            break;
++        }
++    }
++    return NULL;
++}
++
++static int js_cross_realm_compile_denied(JSContext *ctx)
++{
++    JSContext *caller;
++    if (!js_cross_realm_compile_check)
++        return 0;
++    caller = js_caller_realm(ctx->rt);
++    if (caller == ctx || js_cross_realm_compile_check(ctx, caller))
++        return 0;
++    JS_ThrowTypeError(ctx, "code generation from another realm is not allowed");
++    return 1;
++}
++
+ static JSValue js_global_eval(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv)
+ {
++    if (js_cross_realm_compile_denied(ctx))
++        return JS_EXCEPTION;
+     return JS_EvalObject(ctx, ctx->global_obj, argv[0], JS_EVAL_TYPE_INDIRECT, -1);
+ }
+ 
+@@ -40943,6 +40993,8 @@
+     JSValue s, proto, obj = JS_UNDEFINED;
+     StringBuffer b_s, *b = &b_s;
+ 
++    if (js_cross_realm_compile_denied(ctx))
++        return JS_EXCEPTION;
+     string_buffer_init(ctx, b, 0);
+     string_buffer_putc8(b, '(');
+ 
