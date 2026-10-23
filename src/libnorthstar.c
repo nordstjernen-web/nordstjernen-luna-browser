@@ -1204,6 +1204,11 @@ static gboolean
 browser_allows_navigation_url(ns_browser *b, const char *url)
 {
     if (!url) return TRUE;
+    /* A bare drive path ("c:/Users/..."), which browser_open_common would
+     * turn into a file: URL; only the user may open local paths. */
+    if (g_ascii_isalpha(url[0]) && url[1] == ':' &&
+        (url[2] == '/' || url[2] == '\\'))
+        return b && b->base_url && g_str_has_prefix(b->base_url, "file:");
     /* The "continue anyway" link is only meaningful on the Safe Browsing
      * warning page; from anywhere else it would be a way to navigate with
      * no initiator (and so with chrome privileges). */
@@ -1621,11 +1626,13 @@ browser_open_common(const char *url, int viewport_width, double viewport_height,
             g_clear_error(&err);
         }
     }
-    if (!resp)
+    if (!resp) {
+        ns_net_set_navigation_fetch(TRUE, user_activated);
         resp = body
             ? ns_engine_post_blocking(fetch_url, referrer, body, body_len,
                                       content_type, &err)
             : ns_engine_fetch_blocking(fetch_url, referrer, &err);
+    }
     ns_net_set_navigation_fetch(FALSE, FALSE);
     if (resp && !body && (resp->error || resp->status >= 400) &&
         (!resp->body || resp->body->len == 0)) {

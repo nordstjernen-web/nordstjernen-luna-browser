@@ -3917,11 +3917,14 @@ maybe_guess_ftp_content_type(ns_response *resp)
     g_free(ctype);
 }
 
+/* file: is readable by file: pages and by top-level navigations the user
+ * starts (no initiating page); a request that merely lost its document
+ * URL is not one of those. */
 static gboolean
-ns_file_access_allowed(const char *top_url)
+ns_file_access_allowed(const char *top_url, gboolean navigation)
 {
     if (!g_allow_file_urls) return FALSE;
-    if (!top_url || !*top_url) return TRUE;
+    if (!top_url || !*top_url) return navigation;
     return g_str_has_prefix(top_url, "file:");
 }
 
@@ -3930,7 +3933,7 @@ synthesize_file_response(const char *url, const char *top_url,
                          gboolean navigation, ns_response *resp)
 {
     if (!url || !g_str_has_prefix(url, "file:")) return FALSE;
-    if (!ns_file_access_allowed(top_url)) {
+    if (!ns_file_access_allowed(top_url, navigation)) {
         resp->final_url = g_strdup(url);
         resp->status = 0;
         resp->error = g_strdup("local file access is not allowed from a "
@@ -4758,13 +4761,14 @@ view_source_emit_error(ns_response *resp, const char *inner_url,
 
 static gboolean
 synthesize_view_source_response(const char *url, const char *top_url,
+                                gboolean navigation,
                                 GCancellable *cancellable, ns_response *resp)
 {
     static const char prefix[] = "view-source:";
     if (!g_str_has_prefix(url, prefix)) return FALSE;
     const char *inner = url + sizeof prefix - 1;
     resp->final_url = g_strdup(url);
-    gboolean from_chrome = !top_url || !*top_url ||
+    gboolean from_chrome = ((!top_url || !*top_url) && navigation) ||
         g_str_has_prefix(top_url, prefix) ||
         ns_about_url_is_chrome(top_url);
     gboolean inner_allowed =
@@ -4836,7 +4840,11 @@ static gboolean ns_fetch_is_navigation(const char *top_url,
 #define NS_NAV_TOP_LEVEL      0x1
 #define NS_NAV_USER_ACTIVATED 0x2
 
-static gboolean g_navigation_fetch;
+/* Per thread and one-shot: the next request this thread starts is the
+ * top-level navigation; it consumes the flag, so requests that script or
+ * other threads start while the navigation is in flight are not mistaken
+ * for it (cookies, Sec-Fetch-*). */
+static __thread gboolean g_navigation_fetch;
 
 void
 ns_net_set_navigation_fetch(gboolean navigation, gboolean user_activated)
@@ -4978,7 +4986,8 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
     if (synthesize_about_response(url, top_url, is_navigation, method, body,
                                   body_len, resp))
         return resp;
-    if (synthesize_view_source_response(url, top_url, cancellable, resp))
+    if (synthesize_view_source_response(url, top_url, is_navigation,
+                                        cancellable, resp))
         return resp;
     if (synthesize_data_response(url, resp))
         return resp;
@@ -6569,6 +6578,7 @@ ns_net_request_async(const char         *url,
     g_return_if_fail(url != NULL);
 
     gboolean navigation = g_navigation_fetch;
+    g_navigation_fetch = 0;
     g_autofree char *upgraded = NULL;
     if (ns_request_is_gated(top_url, extra_headers, dest)) {
         ns_fetch_verdict verdict =
@@ -6639,6 +6649,7 @@ ns_net_request_blocking(const char        *url,
                         GError           **error)
 {
     gboolean navigation = g_navigation_fetch;
+    g_navigation_fetch = 0;
     gboolean gated = ns_request_is_gated(top_url, extra_headers, dest);
     g_autofree char *upgraded = NULL;
     if (gated) {
