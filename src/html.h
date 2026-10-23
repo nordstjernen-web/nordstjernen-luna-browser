@@ -39,6 +39,10 @@ ns_node *ns_html_parse_document(const char *input, gssize len,
                                 const char *content_type);
 
 gboolean ns_xml_well_formed(const char *input, gssize len, char **out_root_ns);
+/* Given p just past "<!DOCTYPE", the '>' that closes the declaration, or
+ * NULL.  Quoted literals, comments and processing instructions are
+ * skipped, so a '>' / '[' / ']' inside them does not end or nest it. */
+const char *ns_xml_doctype_end(const char *p, const char *end);
 
 ns_node *ns_html_parse_fragment_with_scripting(const char *context_tag,
                                                const char *input, gssize len,

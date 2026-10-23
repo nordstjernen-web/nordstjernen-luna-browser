@@ -573,8 +573,16 @@ ns_xml_well_formed(const char *input, gssize len, char **out_root_ns)
                 if (!e) { ok = FALSE; break; }
                 p = e; continue;
             }
-            const char *e = q;
-            while (e < end && *e != '>') e++;
+            const char *e;
+            if (end - q >= 8 && g_ascii_strncasecmp(q, "!DOCTYPE", 8) == 0) {
+                /* Same scanner as the parser, so both agree on where the
+                 * DOCTYPE (and its internal subset) ends. */
+                e = ns_xml_doctype_end(q + 8, end);
+                if (!e) { ok = FALSE; break; }
+            } else {
+                e = q;
+                while (e < end && *e != '>') e++;
+            }
             if (e >= end) { ok = FALSE; break; }
             p = e + 1; continue;
         }
