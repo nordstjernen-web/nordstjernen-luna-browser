@@ -452,6 +452,10 @@ ns_ws_worker_curl(gpointer data)
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, ws);
 
     struct curl_slist *headers = NULL;
+    /* Header values come from page-supplied data; refuse anything that
+     * could split the request. */
+    if ((ws->origin && strpbrk(ws->origin, "\r\n")))
+        ws->origin[0] = '\0';
     if (ws->origin && *ws->origin) {
         char *h = g_strconcat("Origin: ", ws->origin, NULL);
         headers = curl_slist_append(headers, h);
@@ -459,11 +463,15 @@ ns_ws_worker_curl(gpointer data)
     }
     if (ws->protocols && ws->protocols->len > 0) {
         GString *s = g_string_new("Sec-WebSocket-Protocol: ");
+        gboolean clean = TRUE;
         for (guint i = 0; i < ws->protocols->len; i++) {
+            const char *proto = g_ptr_array_index(ws->protocols, i);
+            if (!proto || strpbrk(proto, "\r\n")) clean = FALSE;
             if (i > 0) g_string_append(s, ", ");
-            g_string_append(s, g_ptr_array_index(ws->protocols, i));
+            g_string_append(s, proto ? proto : "");
         }
-        headers = curl_slist_append(headers, s->str);
+        if (clean)
+            headers = curl_slist_append(headers, s->str);
         g_string_free(s, TRUE);
     }
     if (headers)

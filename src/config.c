@@ -15,11 +15,20 @@
 static ns_config g_cfg;
 static char     *g_cfg_path;
 
+/* The config file is line-based "key = value": a CR or LF inside a value
+ * (e.g. a home_url submitted from the settings page) would start a new,
+ * attacker-chosen line when saved.  Values never legitimately contain
+ * them, so drop them on the way in. */
 static void
 set_string(char **slot, const char *value)
 {
     g_free(*slot);
-    *slot = g_strdup(value ? value : "");
+    char *v = g_strdup(value ? value : "");
+    char *w = v;
+    for (const char *r = v; *r; r++)
+        if (*r != '\r' && *r != '\n') *w++ = *r;
+    *w = '\0';
+    *slot = v;
 }
 
 typedef struct { const char *name; int val; } ns_enum_choice;
@@ -410,7 +419,10 @@ ns_config_save(GError **error)
         switch (f->kind) {
         case CFG_STRING: {
             const char *v = *(const char *const *)slot;
-            g_string_append_printf(s, "%s = %s\n", f->key, v ? v : "");
+            g_string_append_printf(s, "%s = ", f->key);
+            for (const char *r = v ? v : ""; *r; r++)
+                if (*r != '\r' && *r != '\n') g_string_append_c(s, *r);
+            g_string_append_c(s, '\n');
             break;
         }
         case CFG_BOOL:
