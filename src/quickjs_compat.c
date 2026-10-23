@@ -311,6 +311,7 @@ typedef struct ns_quickjs_class_ids {
     JSClassID array;
     JSClassID error;
     JSClassID array_buffer;
+    JSClassID data_view;
     JSClassID typed_array[JS_TYPED_ARRAY_FLOAT64 + 1];
 } ns_quickjs_class_ids;
 
@@ -341,6 +342,10 @@ static void ns_quickjs_learn_class_ids(JSContext *ctx)
     for (int type = JS_TYPED_ARRAY_UINT8C; type <= JS_TYPED_ARRAY_FLOAT64; type++)
         ids->typed_array[type] = ns_quickjs_class_of(ctx,
             JS_NewTypedArray(ctx, 1, &zero, (JSTypedArrayEnum)type));
+    static const char dv_src[] = "new DataView(new ArrayBuffer(1))";
+    ids->data_view = ns_quickjs_class_of(ctx,
+        JS_Eval(ctx, dv_src, sizeof(dv_src) - 1, "<class-ids>",
+                JS_EVAL_TYPE_GLOBAL));
 }
 
 static void ns_quickjs_learn_class_ids_once(JSContext *ctx)
@@ -370,6 +375,11 @@ bool ns_quickjs_is_error(JSValueConst val)
 bool JS_IsArrayBuffer(JSValueConst obj)
 {
     return ns_quickjs_has_class(obj, ns_quickjs_classes.array_buffer);
+}
+
+bool JS_IsDataView(JSValueConst obj)
+{
+    return ns_quickjs_has_class(obj, ns_quickjs_classes.data_view);
 }
 
 int JS_GetTypedArrayType(JSValueConst obj)

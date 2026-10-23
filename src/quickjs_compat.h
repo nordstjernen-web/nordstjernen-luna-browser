@@ -88,6 +88,7 @@ JS_IsStrictEqual(JSContext *ctx, JSValueConst op1, JSValueConst op2)
 const char *JS_GetVersion(void);
 bool JS_IsArrayBuffer(JSValueConst obj);
 int JS_GetTypedArrayType(JSValueConst obj);
+bool JS_IsDataView(JSValueConst obj);
 JSValue JS_NewUint8ArrayCopy(JSContext *ctx, const uint8_t *buf, size_t len);
 uint8_t *JS_GetUint8Array(JSContext *ctx, size_t *psize, JSValueConst obj);
 JSValue JS_ToObject(JSContext *ctx, JSValueConst val);
