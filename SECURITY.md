@@ -196,7 +196,11 @@ unconfined.
   `prctl`, `socket`, `mmap` and `mprotect` are allowed with any flags. A
   small filter loaded before it refuses a few argument combinations:
   `ioctl` `TIOCSTI` and `TIOCLINUX` (which could type into the terminal
-  the browser was started from) and `shmat` with `SHM_EXEC`. TSYNC
+  the browser was started from), `shmat` with `SHM_EXEC`, `clone` with
+  any namespace flag, `unshare` and `setns`, and `kill`/`tgkill` aimed at
+  any process but the browser itself; `clone3`, whose flags a filter
+  cannot read, returns `ENOSYS` so that the C library falls back to
+  `clone`. TSYNC
   propagates the filters to every thread. The allow-list's one argument
   rule allows `seccomp` only with `SECCOMP_SET_MODE_FILTER`, so a thread
   can add a
@@ -372,7 +376,9 @@ and an extension's web-accessible resources are exempt from
   so a 302 cannot move it into the target's first-party partition or
   relabel it as a navigation in the `Sec-Fetch-*` headers.
 - `about:settings`, `about:config` and `about:history` are served only
-  to navigations and to requests made by about: pages; the settings
+  to navigations and to requests made by those same pages (no other
+  about: URL counts as a browser page), and a request with no document
+  URL counts as a navigation only when it loads a document; the settings
   endpoints accept changes only by POST, validate the URLs they store,
   and web content cannot navigate to any about: page other than
   `about:blank` and the start page.
@@ -401,7 +407,12 @@ and an extension's web-accessible resources are exempt from
   (defaulting to the scheme's default), and path (left-anchored if the
   source ends in `/`, exact otherwise). `*` follows CSP3 semantics — it
   matches network schemes only, never `data:`, `blob:`, `filesystem:`,
-  or `javascript:`.
+  or `javascript:` — and so does `'self'`, so `data:` and `blob:` scripts,
+  frames and workers need their scheme listed. `srcdoc`, `about:blank`
+  and `blob:` frames get the embedder's policy plus their own `<meta>`
+  policies. An import map is honoured only in the page's own document and
+  only as an inline script its policy allows. Service workers run under
+  the policy of the document that registered them.
 - Subresource Integrity (`integrity="sha256-…"` / `sha384-` / `sha512-`)
   is verified against the response body before a script runs.
   Stylesheets' `integrity` attributes are not checked.
@@ -416,6 +427,11 @@ and an extension's web-accessible resources are exempt from
   registration can only be removed by its own origin. The
   `Service-Worker-Allowed` header, which would widen that, is not
   supported.
+- Camera access is asked for per page origin. A frame shares the page's
+  decision only when every frame between it and the page is same-origin
+  with the page or delegates the camera with `allow="camera"`; sandboxed
+  frames never do. Until the camera is granted, `enumerateDevices()`
+  reports at most one camera with no id and no label.
 - WebExtensions are explicitly installed local code, not capabilities
   granted to web pages. Packaged-resource paths are resolved beneath the
   extension root before loading (with symlinks resolved on Unix; on
@@ -426,7 +442,10 @@ and an extension's web-accessible resources are exempt from
   no isolated worlds — so a page that has already run can tamper with the
   JavaScript environment a `document_idle` content script sees; the
   native storage helpers are handed to the content-script shim as an
-  argument and never appear on the page's global object.
+  argument and never appear on the page's global object. Each extension's
+  content scripts get their own shim, whose helpers are bound to that
+  extension's id, so one extension's scripts cannot reach another's
+  storage.
 - Safe browsing (`src/safebrowsing.c`) checks a top-level navigation's
   host against a local SHA-256 blocklist (the bundled
   `safebrowsing.list`, plus a user list in the config directory or
