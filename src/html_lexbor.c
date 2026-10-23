@@ -64,8 +64,9 @@ lxb_borrow_attributes(lxb_dom_element_t *el, ns_node *out)
                 char *prefix = colon ? g_strndup(qn, (gsize)(colon - qn)) : NULL;
                 char *local = (ln && llen) ? g_strndup((const char *)ln, llen)
                                            : g_strdup(qn);
-                ns_element_set_attr_ns(out, uri, prefix, local, qn,
-                                       v ? (const char *)v : "");
+                if (!ns_attr_name_is_internal(local))
+                    ns_element_set_attr_ns(out, uri, prefix, local, qn,
+                                           v ? (const char *)v : "");
                 g_free(prefix);
                 g_free(local);
             } else {

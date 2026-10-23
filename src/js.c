@@ -23921,6 +23921,11 @@ ns_js_set_attr_ns_recorded(ns_js *js, ns_node *n, const char *namespace_uri,
                            const char *name, const char *value)
 {
     if (!n || !local_name || !name) return;
+    /* Every caller is reachable from page script (Attr.value,
+     * setAttributeNode, setNamedItem, setAttributeNS), so the browser's
+     * private data-nd-* state must never be written through here. */
+    if (ns_attr_name_is_internal(local_name) || ns_attr_name_is_internal(name))
+        return;
     const char *new_value = value ? value : "";
     const ns_attr *old_attr = ns_element_find_attr_ns(n, namespace_uri,
                                                        local_name);
@@ -23963,10 +23968,10 @@ static void
 ns_js_remove_attr_ns_recorded(ns_js *js, ns_node *n, const char *namespace_uri,
                               const char *local_name)
 {
-    if (!n || !local_name) return;
+    if (!n || !local_name || ns_attr_name_is_internal(local_name)) return;
     const ns_attr *old_attr = ns_element_find_attr_ns(n, namespace_uri,
                                                        local_name);
-    if (!old_attr) return;
+    if (!old_attr || ns_attr_name_is_internal(old_attr->name)) return;
     char *old_copy = g_strdup(old_attr->value ? old_attr->value : "");
     char *record_copy = g_strdup(old_attr->name ? old_attr->name : local_name);
     ns_attr_detach_matching(js, n, namespace_uri, local_name);
@@ -30424,6 +30429,9 @@ ns_element_setAttributeNode(JSContext *ctx, JSValueConst this_val,
     if (state->owner && state->owner != n)
         return ns_throw_dom_exception(ctx, "InUseAttributeError", 10,
             "the attribute is in use by another element");
+    if (ns_attr_name_is_internal(state->local_name) ||
+        ns_attr_name_is_internal(state->name))
+        return JS_NULL;
     const ns_attr *prev = ns_element_attr_by_namespace(n, state->namespace_uri,
                                                         state->local_name);
     ns_js_attr *prev_state = ns_attr_state_find(js_from_ctx(ctx), n,
@@ -30480,6 +30488,11 @@ ns_element_toggleAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     }
     char *lowered = NULL;
     const char *name = ns_attr_name_normalize(n, raw_name, &lowered);
+    if (ns_attr_name_is_internal(name)) {
+        JS_FreeCString(ctx, raw_name);
+        g_free(lowered);
+        return JS_FALSE;
+    }
     gboolean had = ns_element_get_attr(n, name) != NULL;
     gboolean want;
     if (argc >= 2 && !JS_IsUndefined(argv[1]))
