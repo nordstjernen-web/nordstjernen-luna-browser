@@ -71,6 +71,7 @@ static ns_csp_policy *
 policy_parse(const char *policy_text)
 {
     ns_csp_policy *p = g_new0(ns_csp_policy, 1);
+    GPtrArray *script_elem = NULL, *style_elem = NULL;
     char **clauses = g_strsplit(policy_text, ";", -1);
     for (int i = 0; clauses[i]; i++) {
         char *clause = g_strstrip(clauses[i]);
@@ -78,6 +79,25 @@ policy_parse(const char *policy_text)
         char **toks = g_strsplit_set(clause, " \t", -1);
         if (!toks || !toks[0]) { g_strfreev(toks); continue; }
         ns_csp_kind k = directive_kind(toks[0]);
+        /* script-src-elem / style-src-elem: script and style elements are
+         * not told apart from other script and style loads here, so the
+         * -elem list governs them all when there is no script-src /
+         * style-src.  Ignoring it would fall back to default-src, or to no
+         * restriction at all. */
+        GPtrArray **elem = NULL;
+        if (g_ascii_strcasecmp(toks[0], "script-src-elem") == 0)
+            elem = &script_elem;
+        else if (g_ascii_strcasecmp(toks[0], "style-src-elem") == 0)
+            elem = &style_elem;
+        if (elem && !*elem) {
+            *elem = g_ptr_array_new_with_free_func(g_free);
+            for (int j = 1; toks[j]; j++) {
+                char *t = g_strstrip(toks[j]);
+                if (*t) g_ptr_array_add(*elem, csp_normalize_source(t));
+            }
+            g_strfreev(toks);
+            continue;
+        }
         if (k == NS_CSP_KIND_COUNT || p->set[k]) { g_strfreev(toks); continue; }
         p->set[k] = TRUE;
         if (!p->sources[k])
@@ -90,6 +110,18 @@ policy_parse(const char *policy_text)
         g_strfreev(toks);
     }
     g_strfreev(clauses);
+    struct { GPtrArray *list; ns_csp_kind kind; } elems[] = {
+        { script_elem, NS_CSP_SCRIPT }, { style_elem, NS_CSP_STYLE },
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(elems); i++) {
+        if (!elems[i].list) continue;
+        if (p->set[elems[i].kind]) {
+            g_ptr_array_free(elems[i].list, TRUE);
+            continue;
+        }
+        p->set[elems[i].kind] = TRUE;
+        p->sources[elems[i].kind] = elems[i].list;
+    }
     return p;
 }
 
@@ -427,6 +459,15 @@ list_has_nonce_or_hash(const GPtrArray *list)
 }
 
 static gboolean
+list_has_nonce(const GPtrArray *list)
+{
+    for (guint i = 0; list && i < list->len; i++)
+        if (g_str_has_prefix(g_ptr_array_index(list, i), "'nonce-"))
+            return TRUE;
+    return FALSE;
+}
+
+static gboolean
 hash_token_matches(const char *src, const char *body, gsize body_len)
 {
     GChecksumType type;
@@ -496,8 +537,9 @@ ns_csp_allows_import(const ns_csp *csp, const char *resource_url,
         /* Imported modules inherit the importing script's nonce, and
          * 'strict-dynamic' trusts what trusted scripts load; neither can
          * be told apart here, so such policies are left to the check on
-         * the top-level script. */
-        if (list_has_nonce_or_hash(p->sources[k]) ||
+         * the top-level script.  A hash says nothing about an import:
+         * hash-only policies still need the import's URL to match. */
+        if (list_has_nonce(p->sources[k]) ||
             list_has_token(p->sources[k], "'strict-dynamic'"))
             continue;
         if (!policy_allows_with_nonce(p, NS_CSP_SCRIPT, resource_url,
