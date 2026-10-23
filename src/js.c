@@ -57874,9 +57874,24 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
                 content_doc = NULL;
             } else {
                 doc_is_xml = TRUE;
+                /* Whether scripts run follows the namespace the parser
+                 * gave the root, not the pre-scan's guess. */
+                const char *ns_uri =
+                    ns_element_get_attr(content_root, "data-nd-ns-uri");
+                if (!ns_uri ||
+                    strcmp(ns_uri, "http://www.w3.org/1999/xhtml") != 0)
+                    xhtml_suppress_scripts = TRUE;
                 ns_node_own_strings_deep(content_doc);
                 ns_node_append_child(iframe, content_doc);
             }
+        }
+        /* The well-formedness pre-scan is more lenient than the parser.
+         * Whatever the parser rejects is malformed: it must get the error
+         * document, never fall through to the HTML parser with scripts
+         * enabled (which would turn CDATA and the like into live markup). */
+        if (!content_doc) {
+            malformed_xml = TRUE;
+            xhtml_suppress_scripts = TRUE;
         }
     }
     gboolean is_plaintext = resp && resp->content_type &&
