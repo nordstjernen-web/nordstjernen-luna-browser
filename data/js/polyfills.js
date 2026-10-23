@@ -1898,8 +1898,12 @@
                             if (this[sslot] === code && this[cslot])
                                 return this[cslot];
                             var fn;
-                            try { fn = new Function('event', code); }
-                            catch (e) { return null; }
+                            try {
+                                fn = typeof __ndCompileHandler === 'function'
+                                    ? __ndCompileHandler(code)
+                                    : new Function('event', code);
+                            } catch (e) { return null; }
+                            if (!fn) return null;
                             this[cslot] = fn;
                             this[sslot] = code;
                             return fn;

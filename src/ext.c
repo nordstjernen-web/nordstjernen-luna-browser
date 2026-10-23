@@ -399,7 +399,7 @@ static const char ns_ext_shim_prelude_tmpl[] =
 "clear:function(cb){wr({});return done(undefined,cb);}};}"
 "function make_api(id){"
 "var man=null;"
-"function getManifest(){if(man===null){try{man=JSON.parse(M(id));}catch(e){man={};}}return man;}"
+"function getManifest(){if(man===null){try{man=JP(M(id));}catch(e){man={};}}return man;}"
 "function getURL(p){return U(id,String(p==null?'':p));}"
 "var runtime={id:id,lastError:null,getManifest:getManifest,getURL:getURL,"
 "getPlatformInfo:function(cb){var v={os:PL(),arch:AR()};if(typeof cb==='function')cb(v);return PRES.call(P,v);}};"
@@ -1057,6 +1057,31 @@ ns_ext_migrate_default_dir(void)
     if (g_file_test(legacy, G_FILE_TEST_IS_DIR) &&
         !g_file_test(dir, G_FILE_TEST_EXISTS))
         (void)g_rename(legacy, dir);
+    /* Always leave the new directory in place, so this one-time move can
+     * never pick up a directory that a sandboxed session wrote later. */
+    g_mkdir_with_parents(dir, 0700);
+}
+
+void
+ns_ext_drop_helpers(JSContext *ctx)
+{
+    /* The content-script shim removes the native helpers itself; if the
+     * script failed to parse or was cut short they would stay on the
+     * page's global object. */
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSPropertyEnum *props = NULL;
+    uint32_t n = 0;
+    if (JS_GetOwnPropertyNames(ctx, &props, &n, global,
+                               JS_GPN_STRING_MASK) == 0) {
+        for (uint32_t i = 0; i < n; i++) {
+            const char *name = JS_AtomToCString(ctx, props[i].atom);
+            if (name && g_str_has_prefix(name, "__nd_ext_"))
+                JS_DeleteProperty(ctx, global, props[i].atom, 0);
+            if (name) JS_FreeCString(ctx, name);
+        }
+        JS_FreePropertyEnum(ctx, props, n);
+    }
+    JS_FreeValue(ctx, global);
 }
 
 static void

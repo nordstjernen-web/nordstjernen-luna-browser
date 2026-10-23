@@ -1630,6 +1630,8 @@ ns_js_setTimeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
         return JS_NewInt32(ctx, ++js_from_ctx(ctx)->next_timer_id);
     gboolean is_function = JS_IsFunction(ctx, argv[0]);
     char *code = NULL;
+    if (!is_function && !ns_js_eval_allowed(ctx))
+        return JS_NewInt32(ctx, ++js_from_ctx(ctx)->next_timer_id);
     if (!is_function) {
         const char *s = JS_ToCString(ctx, argv[0]);
         if (!s) return JS_NewInt32(ctx, 0);
@@ -23073,11 +23075,68 @@ ns_sw_prepare_document(ns_js *js)
 }
 
 /* Secure context for service workers: https, or loopback http. */
+/* The policy of the document a realm belongs to: a frame realm's own
+ * document, otherwise the page (or worker). */
+static const ns_csp *
+ns_js_realm_csp(ns_js *js, JSContext *ctx)
+{
+    if (ctx != js->ctx && js->frame_contexts) {
+        GHashTableIter it;
+        gpointer iframe, fctx;
+        g_hash_table_iter_init(&it, js->frame_contexts);
+        while (g_hash_table_iter_next(&it, &iframe, &fctx))
+            if (fctx == ctx)
+                return ns_js_csp_for_node(js, ns_iframe_document_node(iframe));
+    }
+    return js->csp;
+}
+
 gboolean
 ns_js_eval_allowed(JSContext *ctx)
 {
     ns_js *js = js_from_ctx(ctx);
-    return !js || ns_csp_allows_eval(js->csp);
+    return !js || ns_csp_allows_eval(ns_js_realm_csp(js, ctx));
+}
+
+/* QuickJS asks before eval()/Function()/... compile a string. */
+static int
+ns_js_eval_string_check(JSContext *ctx)
+{
+    ns_js *js = js_from_ctx(ctx);
+    if (js && ns_js_eval_allowed(ctx)) return 1;
+    if (js && js->log_cb) {
+        char *line = g_strdup("Refused to evaluate a string as JavaScript: "
+                              "Content-Security-Policy has no 'unsafe-eval'");
+        js->log_cb(line, js->log_user_data);
+        g_free(line);
+    }
+    return js ? 0 : 1;
+}
+
+/* Inline event handler attributes are compiled here rather than with
+ * new Function(): they are governed by 'unsafe-inline', not
+ * 'unsafe-eval'. */
+static JSValue
+ns_window_compile_handler(JSContext *ctx, JSValueConst this_val,
+                          int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    ns_js *js = js_from_ctx(ctx);
+    if (argc < 1 || !JS_IsString(argv[0])) return JS_NULL;
+    if (js && !ns_csp_inline_event_handler_allowed(ns_js_realm_csp(js, ctx)))
+        return JS_NULL;
+    const char *code = JS_ToCString(ctx, argv[0]);
+    if (!code) return JS_EXCEPTION;
+    char *src = g_strdup_printf("(function(event){\n%s\n})", code);
+    JS_FreeCString(ctx, code);
+    JSValue fn = JS_Eval(ctx, src, strlen(src), "<event-handler>",
+                         JS_EVAL_TYPE_GLOBAL);
+    g_free(src);
+    if (JS_IsException(fn)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_NULL;
+    }
+    return fn;
 }
 
 static gboolean
@@ -48867,6 +48926,7 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     if (!js->ctx) { JS_FreeRuntime(js->rt); g_free(js); return NULL; }
     js->main_realm_ctx = js->ctx;
     JS_SetCrossRealmCompileCheck(ns_js_cross_realm_compile_check);
+    JS_SetEvalStringCheck(ns_js_eval_string_check);
     JS_SetContextOpaque(js->ctx, js);
     JS_SetRuntimeOpaque(js->rt, js);
     JS_SetModuleLoaderFunc2(js->rt, ns_js_module_normalize,
@@ -49423,6 +49483,9 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     JS_DefinePropertyValueStr(ctx, global, "__ns_linked_css",
         JS_NewCFunction(ctx, ns_linked_css_text, "__ns_linked_css", 1),
         0);
+    JS_DefinePropertyValueStr(ctx, global, "__ndCompileHandler",
+        JS_NewCFunction(ctx, ns_window_compile_handler,
+                        "__ndCompileHandler", 1), 0);
     JS_DefinePropertyValueStr(ctx, global, "__ns_anim_list",
         JS_NewCFunction(ctx, ns_anim_list_native, "__ns_anim_list", 1), 0);
     JS_DefinePropertyValueStr(ctx, global, "__ns_anim_query",
@@ -55120,6 +55183,13 @@ ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
         JS_ThrowRangeError(ctx, "module load limit exceeded");
         return NULL;
     }
+    const ns_csp *module_csp = js ? ns_js_realm_csp(js, ctx) : NULL;
+    if (js && !ns_csp_allows_import(module_csp, module_name,
+                                    js->current_url)) {
+        JS_ThrowReferenceError(ctx,
+            "module %s refused by Content-Security-Policy", module_name);
+        return NULL;
+    }
     if (g_str_has_prefix(module_name, "data:")) {
         gsize body_len = 0;
         char *body = ns_js_decode_data_url(module_name, &body_len);
@@ -55201,6 +55271,15 @@ ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
         if (resp) ns_response_free(resp);
         g_clear_error(&err);
         JS_ThrowReferenceError(ctx, "module fetch failed: %s", module_name);
+        return NULL;
+    }
+    if (resp->final_url && strcmp(resp->final_url, module_name) != 0 &&
+        !ns_csp_allows_import(module_csp, resp->final_url,
+                              js ? js->current_url : NULL)) {
+        ns_response_free(resp);
+        g_clear_error(&err);
+        JS_ThrowReferenceError(ctx,
+            "module %s refused by Content-Security-Policy", module_name);
         return NULL;
     }
     if (js) js->module_load_bytes += resp->body->len;
@@ -57468,6 +57547,12 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
                 strcmp(resp->final_url, abs_url) != 0) {
                 g_free(abs_url);
                 abs_url = g_strdup(resp->final_url);
+                /* object-src / frame-src apply to the redirect target too. */
+                if (frame_csp &&
+                    !ns_csp_allows(frame_csp, frame_kind, abs_url, origin)) {
+                    ns_response_free(resp);
+                    resp = NULL;
+                }
             }
             if (resp && ns_iframe_framing_blocked(origin, abs_url, resp)) {
                 if (js->log_cb) {
@@ -57949,6 +58034,7 @@ ns_js_lifecycle_tick(gpointer data)
         char *result = ns_js_eval_source(js, content_script,
                                          "content-script");
         g_free(result);
+        ns_ext_drop_helpers(js->ctx);
     }
     if (ns_js_profile_enabled())
         g_printerr("[profile] js lifecycle total=%.1fms\n",
@@ -58001,7 +58087,11 @@ ns_js_run_scripts_in_doc(ns_js *js, ns_node *doc,
                                            base_url && *base_url ? base_url : NULL,
                                            TRUE);
         JS_FreeValue(js->ctx, global);
-        if (cs) { char *r = ns_js_eval_source(js, cs, "content-script"); g_free(r); }
+        if (cs) {
+            char *r = ns_js_eval_source(js, cs, "content-script");
+            g_free(r);
+            ns_ext_drop_helpers(js->ctx);
+        }
     }
     ns_js_schedule_static_iframes(js, doc);
     gint64 t_install = profile ? g_get_monotonic_time() : 0;

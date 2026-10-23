@@ -1,6 +1,24 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -39760,9 +39760,66 @@
+@@ -37206,6 +37206,8 @@
+     return ret;
+ }
+ 
++static int (*js_eval_string_check)(JSContext *ctx);
++
+ static JSValue JS_EvalObject(JSContext *ctx, JSValueConst this_obj,
+                              JSValueConst val, int flags, int scope_idx)
+ {
+@@ -37215,6 +37217,8 @@
+ 
+     if (!JS_IsString(val))
+         return JS_DupValue(ctx, val);
++    if (js_eval_string_check && !js_eval_string_check(ctx))
++        return JS_ThrowTypeError(ctx, "refused to evaluate a string as JavaScript");
+     str = JS_ToCStringLen(ctx, &len, val);
+     if (!str)
+         return JS_EXCEPTION;
+@@ -39760,9 +39764,75 @@
      return JS_EXCEPTION;
  }
  
@@ -14,6 +32,15 @@
 +void JS_SetCrossRealmCompileCheck(int (*cb)(JSContext *target, JSContext *caller))
 +{
 +    js_cross_realm_compile_check = cb;
++}
++
++/* Embedder veto on evaluating a string as code (eval, Function and
++ * friends), e.g. for Content-Security-Policy without 'unsafe-eval'. */
++static int (*js_eval_string_check)(JSContext *ctx);
++
++void JS_SetEvalStringCheck(int (*cb)(JSContext *ctx))
++{
++    js_eval_string_check = cb;
 +}
 +
 +/* Realm of the innermost JS function on the stack, skipping native frames
@@ -67,7 +94,7 @@
      return JS_EvalObject(ctx, ctx->global_obj, argv[0], JS_EVAL_TYPE_INDIRECT, -1);
  }
  
-@@ -40943,6 +41000,8 @@
+@@ -40943,6 +41013,8 @@
      JSValue s, proto, obj = JS_UNDEFINED;
      StringBuffer b_s, *b = &b_s;
  

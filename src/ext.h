@@ -14,6 +14,8 @@ G_BEGIN_DECLS
 /* Move extensions from their previous location inside the writable profile
  * directory; call before the sandbox is set up. */
 void     ns_ext_migrate_default_dir(void);
+/* Remove any leftover content-script helper functions from a global. */
+void     ns_ext_drop_helpers(JSContext *ctx);
 char    *ns_ext_content_scripts_for_url(JSContext *ctx, JSValueConst global,
                                         const char *url, gboolean at_start);
 gboolean ns_ext_should_block(const char *url, const char *initiator);

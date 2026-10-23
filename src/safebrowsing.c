@@ -102,9 +102,12 @@ ensure_loaded(void)
     g_blocked = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     g_allow = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 
+    /* An extra list (NS_SAFEBROWSING_LIST) adds to the bundled one; it
+     * must not be a way to switch protection off. */
     const char *override = g_getenv("NS_SAFEBROWSING_LIST");
     if (override && *override) {
         load_file(override);
+        load_bundled();
         return;
     }
     char *user = g_build_filename(g_get_user_config_dir(), "northstar",
