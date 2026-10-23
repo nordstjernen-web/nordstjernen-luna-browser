@@ -258,8 +258,9 @@ by headless/tooling runs.
 The macOS build applies a Seatbelt profile with `sandbox_init(3)`. It
 allows reads and system interaction by default but denies filesystem
 writes, then permits writes to the temporary directories, `/dev`, the
-runtime directory, Nordstjernen Web Browser's config/data/cache directories, Downloads,
-and the output directory of a headless dump. This is write confinement,
+runtime directory, Nordstjernen Web Browser's config/data/cache directories and
+Downloads; files named on the command line for a headless dump are opened
+before the profile is applied. This is write confinement,
 not the Linux profile's read allow-list or syscall filter; all engine and
 audio code still shares the browser process. Set `NS_NO_SANDBOX=1` only
 for debugging.
