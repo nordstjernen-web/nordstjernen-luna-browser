@@ -336,11 +336,11 @@ ns_page_session_open(ns_page_session *s, const char *url, int width,
         s->cur = NULL;
         session_bfcache_park_or_close(s, previous);
     }
+    /* Always pass the initiating document: the network layer needs it to
+     * send truthful Origin / Sec-Fetch-Site headers and to withhold
+     * cookies from cross-site form posts. */
     if (!restored)
-        ns_browser_set_next_navigation(
-            referrer && url && ns_url_same_origin(referrer, url) ? referrer
-                                                                 : NULL,
-            user_activated != 0);
+        ns_browser_set_next_navigation(referrer, user_activated != 0);
     free(referrer);
     s->frame_valid = 0;
     ns_net_log_clear();

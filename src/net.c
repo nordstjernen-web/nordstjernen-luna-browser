@@ -4831,13 +4831,19 @@ response_from_cache_entry(ns_cache_entry *e)
 static gboolean ns_fetch_is_navigation(const char *top_url,
                                        GPtrArray *extra_headers);
 
+/* Top-level navigation state for the next fetch, carried down the fetch
+ * path in the "navigation" flag word. */
+#define NS_NAV_TOP_LEVEL      0x1
+#define NS_NAV_USER_ACTIVATED 0x2
+
 static gboolean g_navigation_fetch;
 
 void
 ns_net_set_navigation_fetch(gboolean navigation, gboolean user_activated)
 {
-    (void)user_activated;
-    g_navigation_fetch = navigation;
+    g_navigation_fetch = navigation
+        ? (NS_NAV_TOP_LEVEL | (user_activated ? NS_NAV_USER_ACTIVATED : 0))
+        : 0;
 }
 
 static const char *const ns_script_accept_headers[] = {
@@ -5007,12 +5013,25 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
             : ns_user_agent_for_mode(cfg ? cfg->compat_mode : NULL);
     const char *effective_ua = configured_ua;
     const char *accept_language = ns_net_effective_accept_language();
-    const char *effective_top_url = top_url ? top_url : url;
+    /* For a top-level navigation top_url is the document that initiated
+     * it (NULL when the user did), while the new document itself becomes
+     * the top-level site: cookies and caches are keyed by the target, and
+     * Origin / Sec-Fetch-* describe the initiator. */
+    gboolean top_level_nav = (navigation & NS_NAV_TOP_LEVEL) != 0;
+    const char *initiator = top_level_nav ? top_url : NULL;
+    const char *effective_top_url = top_level_nav ? url
+                                  : (top_url ? top_url : url);
     char *top_origin = ns_url_origin_from(effective_top_url);
     char *top_site   = ns_url_site_from(effective_top_url);
     const char *partition_key = (top_site && *top_site) ? top_site
                               : (top_origin ? top_origin : "");
-    char *cache_partition = ns_net_partition_key(url, top_url);
+    char *cache_partition = ns_net_partition_key(url,
+        top_level_nav ? NULL : top_url);
+    g_autofree char *initiator_origin =
+        initiator ? ns_url_origin_from(initiator) : NULL;
+    gboolean unsafe_method = method && *method &&
+        g_ascii_strcasecmp(method, "GET") != 0 &&
+        g_ascii_strcasecmp(method, "HEAD") != 0;
     const char *request_accept = "*/*";
     gboolean range_request = FALSE;
     for (guint i = 0; extra_headers && i < extra_headers->len; i++) {
@@ -5032,8 +5051,10 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
         g_strdup_printf("Accept-Language: %s", accept_language);
     g_autofree char *vary_agent =
         g_strdup_printf("User-Agent: %s", effective_ua);
-    const char *request_origin =
-        ns_net_request_origin(url, top_url, top_origin, method);
+    const char *request_origin = top_level_nav
+        ? (unsafe_method && initiator_origin &&
+           !strpbrk(initiator_origin, "\r\n") ? initiator_origin : "")
+        : ns_net_request_origin(url, top_url, top_origin, method);
     g_autofree char *vary_origin =
         g_strdup_printf("Origin: %s", request_origin);
     const char *const cache_request_headers[] = {
@@ -5044,6 +5065,12 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
         (cookie_policy != NS_COOKIE_NEVER);
     if (cookies_allowed && cookie_policy == NS_COOKIE_FIRST_PARTY &&
         top_url && !ns_url_is_same_site(url, effective_top_url))
+        cookies_allowed = FALSE;
+    /* Cookies carry no SameSite attribute here, so treat them all as
+     * SameSite=Lax: a cross-site initiator only gets them sent on safe
+     * (GET/HEAD) top-level navigations. */
+    if (cookies_allowed && initiator && unsafe_method &&
+        !ns_url_is_same_site(initiator, url))
         cookies_allowed = FALSE;
     if (!*partition_key)
         cookies_allowed = FALSE;
@@ -5208,11 +5235,12 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
 
     if (request_http) {
         const char *fetch_site;
-        if (!top_url || !*top_url) {
+        const char *site_ref = top_level_nav ? initiator : top_url;
+        if (!site_ref || !*site_ref) {
             fetch_site = "none";
-        } else if (ns_url_same_origin(top_url, url)) {
+        } else if (ns_url_same_origin(site_ref, url)) {
             fetch_site = "same-origin";
-        } else if (ns_url_is_same_site(top_url, url)) {
+        } else if (ns_url_is_same_site(site_ref, url)) {
             fetch_site = "same-site";
         } else {
             fetch_site = "cross-site";
@@ -5242,7 +5270,8 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
         g_free(dest_h);
 
         if (is_navigation) {
-            headers = curl_slist_append(headers, "Sec-Fetch-User: ?1");
+            if (navigation & NS_NAV_USER_ACTIVATED)
+                headers = curl_slist_append(headers, "Sec-Fetch-User: ?1");
             headers = curl_slist_append(headers,
                                         "Upgrade-Insecure-Requests: 1");
         }
@@ -5637,6 +5666,167 @@ ns_fetch_gate_final_url(ns_response *resp, const char *url,
         ns_fetch_refuse(resp, verdict, dest, resp->final_url);
 }
 
+/* ---- CORS preflight (Fetch Standard, "CORS-preflight fetch") ---- */
+
+static gboolean
+ns_cors_method_is_simple(const char *method)
+{
+    return !method || !*method ||
+           g_ascii_strcasecmp(method, "GET") == 0 ||
+           g_ascii_strcasecmp(method, "HEAD") == 0 ||
+           g_ascii_strcasecmp(method, "POST") == 0;
+}
+
+static gboolean
+ns_cors_content_type_is_simple(const char *value)
+{
+    if (!value) return TRUE;
+    while (*value == ' ' || *value == '\t') value++;
+    gsize n = strcspn(value, "; \t");
+    return (n == 33 && g_ascii_strncasecmp(value,
+                "application/x-www-form-urlencoded", n) == 0) ||
+           (n == 19 && g_ascii_strncasecmp(value, "multipart/form-data", n) == 0) ||
+           (n == 10 && g_ascii_strncasecmp(value, "text/plain", n) == 0);
+}
+
+/* Lower-cased name of a request header that is not CORS-safelisted, or
+ * NULL when the header needs no preflight. */
+static char *
+ns_cors_unsafe_header_name(const char *line)
+{
+    const char *colon = line ? strchr(line, ':') : NULL;
+    if (!colon || colon == line) return NULL;
+    char *name = g_ascii_strdown(line, colon - line);
+    g_strstrip(name);
+    const char *value = colon + 1;
+    gboolean safe =
+        g_str_has_prefix(name, "x-nd-") ||
+        strcmp(name, "accept") == 0 ||
+        strcmp(name, "accept-language") == 0 ||
+        strcmp(name, "content-language") == 0 ||
+        (strcmp(name, "content-type") == 0 &&
+         ns_cors_content_type_is_simple(value));
+    if (safe) { g_free(name); return NULL; }
+    return name;
+}
+
+static char *
+ns_cors_raw_header(const char *raw, const char *name)
+{
+    if (!raw) return NULL;
+    gsize nlen = strlen(name);
+    GString *out = NULL;
+    for (const char *line = raw; line && *line; ) {
+        const char *eol = strchr(line, '\n');
+        gsize len = eol ? (gsize)(eol - line) : strlen(line);
+        if (len > nlen && line[nlen] == ':' &&
+            g_ascii_strncasecmp(line, name, nlen) == 0) {
+            if (!out) out = g_string_new(NULL);
+            else g_string_append_c(out, ',');
+            g_string_append_len(out, line + nlen + 1, len - nlen - 1);
+        }
+        line = eol ? eol + 1 : NULL;
+    }
+    return out ? g_string_free(out, FALSE) : NULL;
+}
+
+static gboolean
+ns_cors_list_allows(const char *list, const char *token, gboolean wildcard_ok)
+{
+    if (!list) return FALSE;
+    gboolean ok = FALSE;
+    char **items = g_strsplit(list, ",", -1);
+    for (char **it = items; it && *it && !ok; it++) {
+        g_strstrip(*it);
+        ok = (wildcard_ok && strcmp(*it, "*") == 0) ||
+             g_ascii_strcasecmp(*it, token) == 0;
+    }
+    g_strfreev(items);
+    return ok;
+}
+
+/* Run the preflight a non-simple cross-origin fetch()/XMLHttpRequest
+ * needs before the actual request may be sent.  Returns NULL when the
+ * request may proceed, or an error response to hand back instead. */
+static ns_response *
+ns_cors_preflight(const char *url, const char *top_url, const char *method,
+                  const char *content_type, GPtrArray *extra_headers,
+                  ns_fetch_destination dest, GCancellable *cancellable)
+{
+    if (dest != NS_FETCH_DEST_CONNECT || !top_url || !url ||
+        !ns_url_is_http_or_https(url) || ns_url_same_origin(top_url, url))
+        return NULL;
+    GPtrArray *unsafe = g_ptr_array_new_with_free_func(g_free);
+    for (guint i = 0; extra_headers && i < extra_headers->len; i++) {
+        char *name = ns_cors_unsafe_header_name(
+            g_ptr_array_index(extra_headers, i));
+        if (name) g_ptr_array_add(unsafe, name);
+    }
+    if (content_type && !ns_cors_content_type_is_simple(content_type))
+        g_ptr_array_add(unsafe, g_strdup("content-type"));
+    if (ns_cors_method_is_simple(method) && unsafe->len == 0) {
+        g_ptr_array_free(unsafe, TRUE);
+        return NULL;
+    }
+
+    GPtrArray *hdrs = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(hdrs, g_strdup_printf("Access-Control-Request-Method: %s",
+                                          method ? method : "GET"));
+    if (unsafe->len > 0) {
+        GString *names = g_string_new(NULL);
+        for (guint i = 0; i < unsafe->len; i++) {
+            if (i) g_string_append_c(names, ',');
+            g_string_append(names, g_ptr_array_index(unsafe, i));
+        }
+        g_ptr_array_add(hdrs, g_strdup_printf(
+            "Access-Control-Request-Headers: %s", names->str));
+        g_string_free(names, TRUE);
+    }
+    GError *err = NULL;
+    ns_response *pre = ns_fetch_sync_hop(url, top_url, "OPTIONS", NULL, 0,
+                                         NULL, hdrs, cancellable, &err,
+                                         FALSE, NULL, FALSE);
+    g_ptr_array_free(hdrs, TRUE);
+    g_clear_error(&err);
+
+    char *origin = ns_url_origin_from(top_url);
+    gboolean ok = pre && !pre->error && pre->status >= 200 &&
+                  pre->status < 300 && pre->cors_allow_origin;
+    if (ok) {
+        char *allow = g_strstrip(g_strdup(pre->cors_allow_origin));
+        ok = strcmp(allow, "*") == 0 ||
+             (origin && g_ascii_strcasecmp(allow, origin) == 0);
+        g_free(allow);
+    }
+    if (ok && !ns_cors_method_is_simple(method)) {
+        char *methods = ns_cors_raw_header(pre->raw_headers,
+                                           "access-control-allow-methods");
+        ok = ns_cors_list_allows(methods, method, TRUE);
+        g_free(methods);
+    }
+    if (ok && unsafe->len > 0) {
+        char *allowed = ns_cors_raw_header(pre->raw_headers,
+                                           "access-control-allow-headers");
+        for (guint i = 0; ok && i < unsafe->len; i++) {
+            const char *h = g_ptr_array_index(unsafe, i);
+            /* "*" does not cover Authorization (Fetch Standard). */
+            ok = ns_cors_list_allows(allowed, h,
+                                     strcmp(h, "authorization") != 0);
+        }
+        g_free(allowed);
+    }
+    g_free(origin);
+    g_ptr_array_free(unsafe, TRUE);
+    if (pre) ns_response_free(pre);
+    if (ok) return NULL;
+
+    ns_response *refused = g_new0(ns_response, 1);
+    refused->body = g_byte_array_new();
+    refused->final_url = g_strdup(url);
+    refused->error = g_strdup("CORS preflight did not succeed");
+    return refused;
+}
+
 static ns_response *
 ns_fetch_sync(const char *url, const char *top_url, const char *method,
               const void *body, gsize body_len, const char *content_type,
@@ -5673,6 +5863,11 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
     }
     gboolean subresource = !ns_fetch_is_navigation(top_url, extra_headers) &&
                            !navigation;
+    ns_response *preflight_refusal =
+        subresource && ns_ext_should_block(url, top_url) ? NULL
+        : ns_cors_preflight(url, top_url, method, content_type,
+                            extra_headers, dest, cancellable);
+    if (preflight_refusal) return preflight_refusal;
 
     const ns_config *cfg = ns_config_get();
     long max_redirs = cfg ? (long)cfg->max_redirects : (long)NS_MAX_REDIRECTS;
@@ -5752,7 +5947,15 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
             cur_len = 0;
             cur_ct = NULL;
         }
-        if (!subresource) {
+        if (navigation & NS_NAV_TOP_LEVEL) {
+            /* Keep the initiator, or blame the redirecting site when it
+             * is cross-site to it, so a redirect cannot launder a
+             * cross-site navigation into a same-site or user one. */
+            if (cur_top && !ns_url_is_same_site(cur_top, cur_url)) {
+                g_free(cur_top);
+                cur_top = g_strdup(cur_url);
+            }
+        } else if (!subresource) {
             g_free(cur_top);
             cur_top = NULL;
         }
