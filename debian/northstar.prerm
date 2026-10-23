@@ -2,7 +2,7 @@
 set -e
 
 if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
-    update-alternatives --remove open-internet-browser /usr/bin/northstar
+    update-alternatives --remove x-www-browser /usr/bin/northstar
 fi
 
 #DEBHELPER#

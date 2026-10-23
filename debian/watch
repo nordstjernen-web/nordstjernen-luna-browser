@@ -1,4 +1,7 @@
-version=4
-opts="filenamemangle=s%(?:.*?)?v?(\d[\d.]*)\.tar\.gz%northstar-$1.tar.gz%" \
-  https://github.com/nordstjernen-web/nordstjernen-web-browser/tags \
-  (?:.*?/)?v?(\d[\d.]+)\.tar\.gz debian uupdate
+Version: 5
+
+Template: Github
+Owner: nordstjernen-web
+Project: northstar-web-browser
+Repack-Suffix: +ds
+Dversion-Mangle: auto

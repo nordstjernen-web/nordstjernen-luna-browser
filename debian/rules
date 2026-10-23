@@ -1,15 +1,21 @@
 #!/usr/bin/make -f
 
+# meson.build already sets -D_FORTIFY_SOURCE=3; dpkg's =2 would override it.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all,-fortify
+
 include /usr/share/dpkg/architecture.mk
 include /usr/share/dpkg/pkg-info.mk
 
-export DEB_BUILD_MAINT_OPTIONS = hardening=+all
-
-BUILD_DATE := $(shell date -u -d @$(SOURCE_DATE_EPOCH) +%Y-%m-%d)
+# The About dialog shows the build date; take it from the changelog so the
+# build is reproducible.
+BUILD_DATE := $(shell date -u -d "@$(SOURCE_DATE_EPOCH)" +%Y-%m-%d)
 
 %:
-	dh $@
+	dh $@ --without=single-binary
 
+# The optional codecs are required explicitly so a missing build dependency
+# fails the build instead of silently dropping a feature. H.264 stays off:
+# only Cisco's prebuilt OpenH264 binaries carry its patent licence.
 override_dh_auto_configure:
 	dh_auto_configure -- \
 		-Dbuild_date=$(BUILD_DATE) \
@@ -19,7 +25,16 @@ override_dh_auto_configure:
 		-Dvp9=enabled \
 		-Dh264=disabled
 
+# quickjs-ng's own test suite expects upstream error messages and bytecode
+# version, which the patches in subprojects/packagefiles/ change.
+override_dh_auto_test:
+	dh_auto_test -- --no-suite quickjs-ng
+
+# lexbor and quickjs-ng are linked statically from the bundled subprojects;
+# their headers and archives are not shipped.
 override_dh_auto_install:
-	meson install -C obj-$(DEB_HOST_GNU_TYPE) \
-		--destdir $(CURDIR)/debian/northstar --skip-subprojects
-	rm debian/northstar/usr/bin/open-internet-browser
+	dh_auto_install -- --skip-subprojects
+
+# x-www-browser is registered by the maintainer scripts instead.
+execute_after_dh_auto_install:
+	rm debian/tmp/usr/bin/open-internet-browser

@@ -15,13 +15,20 @@ disk. Neither `git archive` nor `meson dist` keeps those uncommitted
 changes. Meson also never moves an existing checkout when a wrap's
 revision changes, so check that every checkout matches its pin first.
 
-To produce a suitable orig tarball from a git checkout:
+The orig tarball is therefore a repack, versioned <version>+ds. It
+also leaves out the render-test fixtures copied from Wikipedia, listed
+under Files-Excluded in debian/copyright; nothing in the build uses
+them. To produce it from a checkout of the upstream release tag:
 
     meson subprojects download lexbor quickjs-ng
     scripts/check-subprojects.sh
     tar --exclude-vcs --exclude='subprojects/*/.git' \
-        --exclude='builddir' \
-        -czf ../northstar_<version>.orig.tar.gz .
+        --exclude='builddir*' --exclude='subprojects/quickjs' \
+        --exclude='data/render-tests/assets/wiki-*' \
+        --exclude='data/render-tests/assets/wikipedia-*.css' \
+        --exclude='data/render-tests/realworld-wikipedia*.html' \
+        --transform='s,^\.,northstar-<version>+ds,' \
+        -cJf ../northstar_<version>+ds.orig.tar.xz .
 
 If check-subprojects.sh reports a stale checkout, delete
 subprojects/<name> and download it again.
