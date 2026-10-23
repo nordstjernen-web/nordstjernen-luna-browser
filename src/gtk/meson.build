@@ -40,7 +40,7 @@ executable(
 
 if host_machine.system() != 'windows'
   install_symlink(
-    'internet-browser',
+    'open-internet-browser',
     pointing_to: 'northstar',
     install_dir: get_option('bindir'),
   )

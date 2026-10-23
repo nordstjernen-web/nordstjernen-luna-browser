@@ -58,13 +58,13 @@ Significant changes in each release:
   `BadDrawable` error; the watchdog restarted it until it gave up. In GUI
   mode the sandbox now lets those device nodes be opened read-write;
   headless runs keep them read-only. Backported from Nordstjernen.
-* `internet-browser` is a second name for the browser. `meson install`
-  links it to `northstar` in the binary directory; the `.deb` and `.rpm`
-  packages register it with `update-alternatives`, so Northstar installs
-  beside Nordstjernen and Southstar and `update-alternatives --config
-  internet-browser` picks which one the name starts; the Windows
-  installer adds it as an App Paths alias and the MSIX package as an app
-  execution alias.
+* `open-internet-browser` is a second name for the browser. `meson
+  install` links it to `northstar` in the binary directory; the `.deb`
+  and `.rpm` packages register it with `update-alternatives`, so
+  Northstar installs beside Nordstjernen and Southstar and
+  `update-alternatives --config open-internet-browser` picks which one
+  the name starts; the Windows installer adds it as an App Paths alias
+  and the MSIX package as an app execution alias.
 * The animated cartoon splash is gone from `about:start`, which now
   opens on the search row. `data/splash.gif` is no longer installed or
   packaged, and `scripts/gen-splash.py` and `scripts/gen-splash.sh`,

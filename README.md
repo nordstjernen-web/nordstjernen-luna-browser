@@ -193,18 +193,19 @@ that `meson setup` fetches; see
 [docs/building.md](docs/building.md#updating-a-pinned-dependency) for how
 a pin is moved.
 
-### The `internet-browser` command
+### The `open-internet-browser` command
 
-`meson install` puts `internet-browser` beside `northstar` in the binary
-directory, a symbolic link to it, so `internet-browser https://example.com`
-starts Nordstjernen Web Browser. Nordstjernen Sol and Southstar install the same name, so the
-command opens whichever of the browsers is installed. The `.deb` and `.rpm`
-packages register it with `update-alternatives` instead of shipping the
-link, so the browsers install side by side and
-`sudo update-alternatives --config internet-browser` chooses the one it
-runs. On Windows the installer registers `internet-browser` as an App
-Paths alias (the Run dialog and `start internet-browser` find it) and the
-MSIX package declares it as an app execution alias.
+`meson install` puts `open-internet-browser` beside `northstar` in the
+binary directory, a symbolic link to it, so `open-internet-browser
+https://example.com` starts Nordstjernen Web Browser. Nordstjernen Sol and
+Southstar install the same name, so the command opens whichever of the
+browsers is installed. The `.deb` and `.rpm` packages register it with
+`update-alternatives` instead of shipping the link, so the browsers
+install side by side and `sudo update-alternatives --config
+open-internet-browser` chooses the one it runs. On Windows the installer
+registers `open-internet-browser` as an App Paths alias (the Run dialog
+and `start open-internet-browser` find it) and the MSIX package declares
+it as an app execution alias.
 
 ## Dependencies
 

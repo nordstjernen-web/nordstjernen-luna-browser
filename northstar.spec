@@ -78,26 +78,26 @@ test -f meson.build
 %install
 %meson_install
 mkdir -p %{buildroot}%{_sysconfdir}/alternatives
-ln -sf %{_sysconfdir}/alternatives/internet-browser %{buildroot}%{_bindir}/internet-browser
-touch %{buildroot}%{_sysconfdir}/alternatives/internet-browser
+ln -sf %{_sysconfdir}/alternatives/open-internet-browser %{buildroot}%{_bindir}/open-internet-browser
+touch %{buildroot}%{_sysconfdir}/alternatives/open-internet-browser
 
 %suse_update_desktop_file org.northstar.WebBrowser
 
 %post
-%{_sbindir}/update-alternatives --install %{_bindir}/internet-browser \
-    internet-browser %{_bindir}/northstar 50
+%{_sbindir}/update-alternatives --install %{_bindir}/open-internet-browser \
+    open-internet-browser %{_bindir}/northstar 50
 
 %postun
 if [ ! -f %{_bindir}/northstar ]; then
-    %{_sbindir}/update-alternatives --remove internet-browser %{_bindir}/northstar
+    %{_sbindir}/update-alternatives --remove open-internet-browser %{_bindir}/northstar
 fi
 
 %files
 %doc README.md
 %license %{_datadir}/northstar/LICENSE
 %{_bindir}/northstar
-%{_bindir}/internet-browser
-%ghost %{_sysconfdir}/alternatives/internet-browser
+%{_bindir}/open-internet-browser
+%ghost %{_sysconfdir}/alternatives/open-internet-browser
 %{_datadir}/applications/org.northstar.WebBrowser.desktop
 %{_datadir}/metainfo/org.northstar.WebBrowser.metainfo.xml
 %{_datadir}/northstar/
