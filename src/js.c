@@ -1128,6 +1128,10 @@ ns_js_attach_idle(ns_js *js, GSourceFunc func, gpointer data)
 }
 
 static void ns_storage_drain_deferred_events(ns_js *js);
+static char *ns_js_caller_origin(ns_js *js, JSContext *ctx);
+static char *ns_js_caller_document_url(ns_js *js, JSContext *ctx);
+static JSContext *ns_js_handler_realm(ns_js *js, const ns_node *n);
+static const ns_csp *ns_js_csp_for_node(ns_js *js, const ns_node *n);
 static void ns_js_report_pending_rejections(ns_js *js);
 static void ns_js_drop_pending_rejections(ns_js *js);
 
@@ -2998,28 +3002,49 @@ ns_storage_fire_frame_body_handler(ns_js *js, JSValueConst fwin,
 {
     const char *src = ns_element_get_attr(body, "onstorage");
     if (!src || !*src) return;
-    if (!ns_csp_inline_event_handler_allowed(js->csp)) return;
+    /* The frame's handler belongs to the frame: compile it in the frame's
+     * realm under the frame's policy, never in the embedder's. */
+    JSContext *hctx = ns_js_handler_realm(js, body);
+    if (!hctx) return;
+    if (!ns_csp_inline_event_handler_allowed(ns_js_csp_for_node(js, body)))
+        return;
     GString *code = g_string_new(
         "(function(__nsStorageEvt){with(this){(function(event){\n");
     g_string_append(code, src);
     g_string_append(code, "\n}).call(this,__nsStorageEvt);}})");
-    JSValue fn = JS_Eval(js->ctx, code->str, code->len, "<inline>",
+    JSValue fn = JS_Eval(hctx, code->str, code->len, "<inline>",
                          JS_EVAL_TYPE_GLOBAL);
     g_string_free(code, TRUE);
     if (JS_IsException(fn)) {
-        JS_FreeValue(js->ctx, JS_GetException(js->ctx));
+        JS_FreeValue(hctx, JS_GetException(hctx));
         return;
     }
     ns_storage_call_frame_handler(js, fn, fwin, ev);
     JS_FreeValue(js->ctx, fn);
 }
 
+/* Storage is per origin, and so are its events: only frames whose
+ * document is of the storage's origin see them. */
+static gboolean
+ns_storage_frame_is_origin(const ns_node *frame, const char *origin)
+{
+    if (!frame || !origin) return FALSE;
+    if (ns_element_get_attr(frame, "data-nd-frame-opaque")) return FALSE;
+    const char *fu = ns_element_get_attr(frame, "data-nd-frame-url");
+    g_autofree char *fo = fu ? ns_url_origin_from(fu) : NULL;
+    return fo && g_ascii_strcasecmp(fo, origin) == 0;
+}
+
 static void
 ns_storage_deliver_frames(ns_js *js, ns_node *n, JSValueConst ev,
-                          JSValueConst source_win, int depth)
+                          JSValueConst source_win, const char *origin,
+                          int depth)
 {
     if (!n || depth > 512) return;
-    if (n->kind == NS_NODE_DOCUMENT && n->parent) {
+    if (n->kind == NS_NODE_DOCUMENT && n->parent &&
+        !ns_storage_frame_is_origin(n->parent, origin)) {
+        /* Not this origin's frame; its own subframes may still be. */
+    } else if (n->kind == NS_NODE_DOCUMENT && n->parent) {
         JSValue fwin = ns_iframe_lookup_realm_window(js, n->parent);
         gboolean is_source = JS_IsObject(fwin) &&
             JS_VALUE_GET_PTR(fwin) == JS_VALUE_GET_PTR(source_win);
@@ -3039,12 +3064,13 @@ ns_storage_deliver_frames(ns_js *js, ns_node *n, JSValueConst ev,
         JS_FreeValue(js->ctx, fwin);
     }
     for (ns_node *c = n->first_child; c; c = c->next_sibling)
-        ns_storage_deliver_frames(js, c, ev, source_win, depth + 1);
+        ns_storage_deliver_frames(js, c, ev, source_win, origin, depth + 1);
 }
 
 typedef struct {
     JSValue ev;
     JSValue src;
+    char   *origin;
 } ns_pending_storage_event;
 
 static void
@@ -3062,14 +3088,24 @@ ns_storage_drain_deferred_events(ns_js *js)
             js->pending_storage_events, ns_pending_storage_event, 0);
         g_array_remove_index(js->pending_storage_events, 0);
         if (js->current_doc)
-            ns_storage_deliver_frames(js, js->current_doc, p.ev, p.src, 0);
-        JSValue g = JS_GetGlobalObject(js->ctx);
-        JS_SetPropertyStr(js->ctx, p.ev, "target", JS_DupValue(js->ctx, g));
-        JS_FreeValue(js->ctx, g);
-        ns_js_dispatch_window_only_event(js, js->current_doc, "storage",
-                                         JS_DupValue(js->ctx, p.ev), NULL);
+            ns_storage_deliver_frames(js, js->current_doc, p.ev, p.src,
+                                      p.origin, 0);
+        /* Same value ns_js_caller_origin() gives the page's own scripts. */
+        g_autofree char *main_origin = js->current_url
+            ? ns_url_origin_from(js->current_url) : NULL;
+        if (!main_origin)
+            main_origin = g_strdup_printf("null:%p", (void *)js);
+        if (p.origin && main_origin &&
+            g_ascii_strcasecmp(p.origin, main_origin) == 0) {
+            JSValue g = JS_GetGlobalObject(js->ctx);
+            JS_SetPropertyStr(js->ctx, p.ev, "target", JS_DupValue(js->ctx, g));
+            JS_FreeValue(js->ctx, g);
+            ns_js_dispatch_window_only_event(js, js->current_doc, "storage",
+                                             JS_DupValue(js->ctx, p.ev), NULL);
+        }
         JS_FreeValue(js->ctx, p.ev);
         JS_FreeValue(js->ctx, p.src);
+        g_free(p.origin);
         ns_drain_microtasks(js);
     }
     js->storage_events_draining = FALSE;
@@ -3086,6 +3122,7 @@ ns_storage_free_deferred_events(ns_js *js)
             &g_array_index(q, ns_pending_storage_event, i);
         JS_FreeValue(js->ctx, p->ev);
         JS_FreeValue(js->ctx, p->src);
+        g_free(p->origin);
     }
     g_array_free(q, TRUE);
 }
@@ -3097,20 +3134,10 @@ ns_storage_fire_event(JSContext *ctx, JSValueConst storage_obj,
     ns_js *js = js_from_ctx(ctx);
     if (!js || js->halted) return;
     JSValue src_global = JS_GetGlobalObject(ctx);
-    g_autofree char *url = NULL;
-    JSValue loc = JS_GetPropertyStr(ctx, src_global, "location");
-    if (JS_IsObject(loc)) {
-        JSValue hrefv = JS_GetPropertyStr(ctx, loc, "href");
-        if (JS_IsString(hrefv)) {
-            const char *s = JS_ToCString(ctx, hrefv);
-            if (s) {
-                url = g_strdup(s);
-                JS_FreeCString(ctx, s);
-            }
-        }
-        JS_FreeValue(ctx, hrefv);
-    }
-    JS_FreeValue(ctx, loc);
+    /* The writer's document as the browser knows it, not its scriptable
+     * location object. */
+    g_autofree char *url = ns_js_caller_document_url(js, ctx);
+    char *origin = ns_js_caller_origin(js, ctx);
     JSValue ev = ns_make_event(js->ctx, "storage", NULL);
     JS_SetPropertyStr(js->ctx, ev, "bubbles", JS_FALSE);
     JS_SetPropertyStr(js->ctx, ev, "cancelable", JS_FALSE);
@@ -3127,7 +3154,7 @@ ns_storage_fire_event(JSContext *ctx, JSValueConst storage_obj,
                                                           : "")));
     JS_SetPropertyStr(js->ctx, ev, "storageArea",
                       JS_DupValue(js->ctx, storage_obj));
-    ns_pending_storage_event p = { ev, src_global };
+    ns_pending_storage_event p = { ev, src_global, origin };
     if (!js->pending_storage_events)
         js->pending_storage_events =
             g_array_new(FALSE, FALSE, sizeof(ns_pending_storage_event));
@@ -23151,17 +23178,23 @@ ns_window_compile_handler(JSContext *ctx, JSValueConst this_val,
     (void)this_val;
     ns_js *js = js_from_ctx(ctx);
     if (argc < 1 || !JS_IsString(argv[0])) return JS_NULL;
-    if (js && !ns_csp_inline_event_handler_allowed(ns_js_realm_csp(js, ctx)))
+    /* Frames are handed the embedder's copy of this function, and a C
+     * function runs in the realm that created it: compile in the realm
+     * of the script that called it, or a frame could compile code into
+     * its embedder's globals. */
+    JSContext *rctx = JS_GetCallerRealmOrNull(ctx);
+    if (!rctx) rctx = ctx;
+    if (js && !ns_csp_inline_event_handler_allowed(ns_js_realm_csp(js, rctx)))
         return JS_NULL;
     const char *code = JS_ToCString(ctx, argv[0]);
     if (!code) return JS_EXCEPTION;
     char *src = g_strdup_printf("(function(event){\n%s\n})", code);
     JS_FreeCString(ctx, code);
-    JSValue fn = JS_Eval(ctx, src, strlen(src), "<event-handler>",
+    JSValue fn = JS_Eval(rctx, src, strlen(src), "<event-handler>",
                          JS_EVAL_TYPE_GLOBAL);
     g_free(src);
     if (JS_IsException(fn)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(rctx, JS_GetException(rctx));
         return JS_NULL;
     }
     return fn;
@@ -26971,7 +27004,12 @@ ns_fire_inline_on_handler(ns_js *js, const ns_node *target, const char *type,
     const char *body = ns_element_get_attr(target, attr_name);
     if (!body || !*body) return FALSE;
 
-    if (!ns_csp_inline_event_handler_allowed(js->csp)) {
+    /* A handler inside a frame runs in that frame's realm; a frame with no
+     * realm (no scripts, or sandboxed without allow-scripts) runs none. */
+    JSContext *hctx = ns_js_handler_realm(js, target);
+    if (!hctx) return FALSE;
+
+    if (!ns_csp_inline_event_handler_allowed(ns_js_csp_for_node(js, target))) {
         if (js->log_cb) {
             char *line = g_strdup_printf(
                 "CSP blocked: inline event handler %s", attr_name);
@@ -26981,17 +27019,17 @@ ns_fire_inline_on_handler(ns_js *js, const ns_node *target, const char *type,
         return FALSE;
     }
 
-    JSValue fn = ns_compile_inline_handler(js->ctx, body);
+    JSValue fn = ns_compile_inline_handler(hctx, body);
     if (JS_IsException(fn)) {
-        JSValue ex = JS_GetException(js->ctx);
-        const char *m = JS_ToCString(js->ctx, ex);
+        JSValue ex = JS_GetException(hctx);
+        const char *m = JS_ToCString(hctx, ex);
         if (m && js->log_cb) {
             char *line = g_strdup_printf("JS error compiling %s: %s", attr_name, m);
             js->log_cb(line, js->log_user_data);
             g_free(line);
         }
-        if (m) JS_FreeCString(js->ctx, m);
-        JS_FreeValue(js->ctx, ex);
+        if (m) JS_FreeCString(hctx, m);
+        JS_FreeValue(hctx, ex);
         return FALSE;
     }
 
@@ -40905,11 +40943,26 @@ ns_element_activation_behavior(JSContext *ctx, const ns_node *act,
         ns_node_is_element_named(act, "area")) {
         const char *href = ns_element_get_attr(act, "href");
         if (href && g_str_has_prefix(href, "javascript:")) {
+            /* Like an inline script: it runs in the link's own document's
+             * realm, and only where that document's policy allows
+             * 'unsafe-inline'. */
+            JSContext *hctx = ns_js_handler_realm(js, act);
+            if (!hctx ||
+                !ns_csp_inline_event_handler_allowed(
+                    ns_js_csp_for_node(js, act))) {
+                if (hctx && js->log_cb)
+                    js->log_cb("CSP blocked: javascript: URL",
+                               js->log_user_data);
+                return JS_UNDEFINED;
+            }
             char *code = g_uri_unescape_string(href + strlen("javascript:"),
                                                NULL);
+            JSContext *saved_ctx = js->ctx;
+            js->ctx = hctx;
             char *r = ns_js_eval_source(js, code ? code
                                         : href + strlen("javascript:"),
                                         "javascript-url");
+            js->ctx = saved_ctx;
             g_free(r);
             g_free(code);
             return JS_UNDEFINED;
@@ -41322,6 +41375,23 @@ ns_js_node_realm_context(ns_js *js, const ns_node *node)
 {
     ns_node *frame = ns_js_node_frame(node);
     return js && js->frame_contexts && frame
+        ? g_hash_table_lookup(js->frame_contexts, frame) : NULL;
+}
+
+/* The realm an element's own inline code (event handler attributes,
+ * javascript: URLs) runs in: the page's main realm for the page's
+ * elements, the frame's realm for an element inside a frame, and NULL --
+ * run nothing -- inside a frame that has no realm (no scripts, or
+ * sandboxed without allow-scripts).  A frame element itself belongs to
+ * the document that contains it. */
+static JSContext *
+ns_js_handler_realm(ns_js *js, const ns_node *n)
+{
+    if (!js || !n) return NULL;
+    ns_node *frame = ns_js_node_frame(n->parent);
+    if (!frame)
+        return js->main_realm_ctx ? js->main_realm_ctx : js->ctx;
+    return js->frame_contexts
         ? g_hash_table_lookup(js->frame_contexts, frame) : NULL;
 }
 
@@ -47813,10 +47883,13 @@ ns_element_on_get(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, v);
     if (cleared || !body) return JS_NULL;
     ns_js *js = js_from_ctx(ctx);
-    if (js && !ns_csp_inline_event_handler_allowed(js->csp)) return JS_NULL;
-    JSValue fn = ns_compile_inline_handler(ctx, body);
+    JSContext *hctx = js ? ns_js_handler_realm(js, el) : ctx;
+    if (!hctx) return JS_NULL;
+    if (js && !ns_csp_inline_event_handler_allowed(ns_js_csp_for_node(js, el)))
+        return JS_NULL;
+    JSValue fn = ns_compile_inline_handler(hctx, body);
     if (JS_IsException(fn)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(hctx, JS_GetException(hctx));
         return JS_NULL;
     }
     JS_SetPropertyStr(ctx, this_val, key, JS_DupValue(ctx, fn));
@@ -55561,6 +55634,9 @@ ns_js_eval_script_source(ns_js *js, ns_node *script, const char *source,
                          gboolean is_module)
 {
     JSContext *realm = ns_js_node_realm_context(js, script);
+    /* A script inside a frame that has no realm of its own (sandboxed
+     * without allow-scripts, ...) must not fall back to the embedder's. */
+    if (!realm && ns_js_node_frame(script)) return;
     if (!realm || realm == js->ctx) {
         if (is_module) {
             ns_js_eval_module(js, source, length, origin);
