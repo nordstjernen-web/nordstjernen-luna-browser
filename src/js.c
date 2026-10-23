@@ -304,7 +304,8 @@ static void ns_text_selection_set_state(JSContext *ctx,
                                         uint32_t start, uint32_t end,
                                         const char *direction);
 static void ns_js_process_pending_iframes(ns_js *js);
-static GBytes *ns_js_blob_url_lookup(ns_js *js, const char *url, char **out_type);
+static GBytes *ns_js_blob_url_lookup(ns_js *js, JSContext *ctx,
+                                     const char *url, char **out_type);
 static void ns_js_record_child_change(ns_js *js, ns_node *parent,
                                       ns_node *added, ns_node *removed,
                                       ns_node *previous_sibling, ns_node *next_sibling);
@@ -8392,8 +8393,12 @@ static gboolean
 cors_allows(const char *doc_url, const char *resp_url, const char *cors_header)
 {
     if (resp_url && (g_str_has_prefix(resp_url, "data:") ||
-                     g_str_has_prefix(resp_url, "blob:") ||
-                     g_str_has_prefix(resp_url, "about:"))) return TRUE;
+                     g_str_has_prefix(resp_url, "blob:"))) return TRUE;
+    /* Browser about: pages (about:northstar's version list, ...) are for
+     * the browser's own pages to read, not for web content. */
+    if (resp_url && g_ascii_strncasecmp(resp_url, "about:", 6) == 0)
+        return ns_about_url_is_public(resp_url) ||
+               ns_about_url_is_chrome(doc_url);
     if (ns_url_same_origin(doc_url, resp_url)) return TRUE;
     if (!cors_header || !*cors_header) return FALSE;
     char *trimmed = g_strdup(cors_header);
@@ -9119,7 +9124,7 @@ ns_js_fetch_for(JSContext *ctx, JSValueConst frame_url, int argc,
     }
     if (g_str_has_prefix(url, "blob:")) {
         g_autofree char *btype = NULL;
-        g_autoptr(GBytes) b = ns_js_blob_url_lookup(st->js, url, &btype);
+        g_autoptr(GBytes) b = ns_js_blob_url_lookup(st->js, ctx, url, &btype);
         ns_response *resp = g_new0(ns_response, 1);
         if (b) {
             gsize blen = 0;
@@ -15711,8 +15716,9 @@ ns_linked_css_text(JSContext *ctx, JSValueConst this_val,
      * <link rel=stylesheet>, so only hand back same-origin sheets: a
      * cross-origin sheet's rules are not readable by the page (CSSOM). */
     ns_js *js = js_from_ctx(ctx);
-    char *text = js && js->current_url &&
-                 ns_url_same_origin(js->current_url, url)
+    /* Judge by the calling frame's document, not the embedder's. */
+    g_autofree char *caller = js ? ns_js_caller_document_url(js, ctx) : NULL;
+    char *text = caller && ns_url_same_origin(caller, url)
         ? ns_engine_linked_css_text(url) : NULL;
     JS_FreeCString(ctx, url);
     JSValue r = JS_NewString(ctx, text ? text : "");
@@ -19006,17 +19012,30 @@ ns_js_blob_store(ns_js *js, const char *url, ns_blob_entry *e)
     g_mutex_unlock(&g_blob_lock);
 }
 
+/* Origin a blob URL created or read by the calling script belongs to:
+ * the calling frame's origin, not the embedder's, so a cross-origin frame
+ * cannot mint blob: URLs that load as its embedder.  Opaque origins are
+ * all "null". */
+static char *
+ns_js_blob_requester_origin(ns_js *js, JSContext *ctx)
+{
+    char *o = ns_js_caller_origin(js, ctx ? ctx : js->ctx);
+    if (!o || g_str_has_prefix(o, "null:")) {
+        g_free(o);
+        return g_strdup("null");
+    }
+    return o;
+}
+
 static JSValue
 ns_window_url_create_object(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
     (void)this_val;
     ns_js *js = js_from_ctx(ctx);
-    char *origin = (js && js->current_url) ? ns_url_origin_from(js->current_url)
-                                           : NULL;
+    char *origin = js ? ns_js_blob_requester_origin(js, ctx) : g_strdup("null");
     char *uuid = g_uuid_string_random();
-    char *url = g_strdup_printf("blob:%s/%s",
-                                (origin && *origin) ? origin : "null", uuid);
+    char *url = g_strdup_printf("blob:%s/%s", origin, uuid);
     g_free(origin);
     g_free(uuid);
 
@@ -19072,12 +19091,21 @@ ns_window_url_revoke_object(JSContext *ctx, JSValueConst this_val,
 }
 
 /* Returns a new reference (and a copy of the type) so the bytes survive a
- * revokeObjectURL() made while the caller is still using them. */
+ * revokeObjectURL() made while the caller is still using them.  Only the
+ * origin that created a blob URL (its label, which createObjectURL takes
+ * from the calling realm) can read it; ctx is the calling context, or
+ * NULL when no script is calling (a <script src=blob:>). */
 static GBytes *
-ns_js_blob_url_lookup(ns_js *js, const char *url, char **out_type)
+ns_js_blob_url_lookup(ns_js *js, JSContext *ctx, const char *url,
+                      char **out_type)
 {
     if (out_type) *out_type = NULL;
-    if (!js || !url) return NULL;
+    if (!js || !url || !g_str_has_prefix(url, "blob:")) return NULL;
+    const char *slash = strrchr(url + 5, '/');
+    if (!slash) return NULL;
+    g_autofree char *label = g_strndup(url + 5, (gsize)(slash - (url + 5)));
+    g_autofree char *requester = ns_js_blob_requester_origin(js, ctx);
+    if (g_ascii_strcasecmp(label, requester) != 0) return NULL;
     GBytes *bytes = NULL;
     g_mutex_lock(&g_blob_lock);
     ns_blob_entry *e = js->blob_urls
@@ -22723,7 +22751,7 @@ ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     char *inline_script = NULL;
     gsize inline_script_len = 0;
     if (g_str_has_prefix(raw, "blob:")) {
-        g_autoptr(GBytes) blob = ns_js_blob_url_lookup(js, raw, NULL);
+        g_autoptr(GBytes) blob = ns_js_blob_url_lookup(js, ctx, raw, NULL);
         if (!blob) {
             JS_FreeCString(ctx, raw);
             return JS_ThrowTypeError(ctx, "Worker: blob URL not found");
@@ -55217,7 +55245,8 @@ ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
         return m;
     }
     if (g_str_has_prefix(module_name, "blob:")) {
-        g_autoptr(GBytes) blob = ns_js_blob_url_lookup(js, module_name, NULL);
+        g_autoptr(GBytes) blob = ns_js_blob_url_lookup(js, ctx, module_name,
+                                                       NULL);
         if (!blob) {
             JS_ThrowReferenceError(ctx, "module blob URL not found: %s",
                                    module_name);
@@ -55648,7 +55677,7 @@ ns_js_run_script_element(ns_js *js, ns_node *n, const char *origin)
             return;
         }
         if (g_str_has_prefix(src, "blob:")) {
-            g_autoptr(GBytes) b = ns_js_blob_url_lookup(js, src, NULL);
+            g_autoptr(GBytes) b = ns_js_blob_url_lookup(js, NULL, src, NULL);
             if (b) {
                 gsize blen = 0;
                 const char *data = g_bytes_get_data(b, &blen);
