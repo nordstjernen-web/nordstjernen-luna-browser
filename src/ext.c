@@ -5,6 +5,7 @@
 
 #include "ext.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include <gio/gio.h>
@@ -68,28 +69,31 @@ ns_ext_area_ok(const char *area)
                     strcmp(area, "managed") == 0);
 }
 
+/* '*' / '?' glob match.  Iterative with a single backtrack point, so a
+ * pattern like "*a*a*a*a*b" stays O(len(pat) * len(str)) instead of
+ * exponential. */
 static gboolean
 ns_ext_wildcard(const char *pat, const char *str)
 {
-    while (*pat) {
+    const char *star_p = NULL, *star_s = NULL;
+    for (;;) {
         if (*pat == '*') {
-            pat++;
+            while (*pat == '*') pat++;
             if (!*pat) return TRUE;
-            for (; *str; str++)
-                if (ns_ext_wildcard(pat, str)) return TRUE;
-            return FALSE;
+            star_p = pat;
+            star_s = str;
+            continue;
         }
-        if (*pat == '?') {
-            if (!*str) return FALSE;
+        if (!*pat && !*str) return TRUE;
+        if (*pat && *str && (*pat == '?' || *pat == *str)) {
             pat++;
             str++;
             continue;
         }
-        if (*pat != *str) return FALSE;
-        pat++;
-        str++;
+        if (!star_p || !*star_s) return FALSE;
+        pat = star_p;
+        str = ++star_s;
     }
-    return *str == 0;
 }
 
 static void
@@ -366,36 +370,41 @@ ns_ext_js_uilang(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
-static const char ns_ext_shim_prelude[] =
+/* The native helpers are parked on the page global only for the moment
+ * the shim takes them; their names carry a per-injection random suffix
+ * (@NDTOKEN@ below) so page script cannot plant accessors on them beforehand.
+ * The intrinsics the storage shim relies on are captured up front. */
+static const char ns_ext_shim_prelude_tmpl[] =
 ";(function(){"
-"var M=globalThis.__nd_ext_manifest,U=globalThis.__nd_ext_url,"
-"SR=globalThis.__nd_ext_sread,SW=globalThis.__nd_ext_swrite,"
-"PL=globalThis.__nd_ext_platform,AR=globalThis.__nd_ext_arch,UL=globalThis.__nd_ext_uilang;"
-"delete globalThis.__nd_ext_manifest;delete globalThis.__nd_ext_url;"
-"delete globalThis.__nd_ext_sread;delete globalThis.__nd_ext_swrite;"
-"delete globalThis.__nd_ext_platform;delete globalThis.__nd_ext_arch;delete globalThis.__nd_ext_uilang;"
+"var G=globalThis,T='@NDTOKEN@';"
+"function take(n){var k='__nd_ext_'+n+T,v=G[k];delete G[k];return v;}"
+"var M=take('manifest'),U=take('url'),SR=take('sread'),SW=take('swrite'),"
+"PL=take('platform'),AR=take('arch'),UL=take('uilang');"
+"var JP=JSON.parse,JS=JSON.stringify,OK=Object.keys,AI=Array.isArray,"
+"P=Promise,PRES=Promise.resolve;"
+"function each(a,f){for(var i=0;i<a.length;i++)f(a[i]);}"
 "function area(id,name){"
-"function rd(){try{return JSON.parse(SR(id,name))||{};}catch(e){return{};}}"
-"function wr(o){return SW(id,name,JSON.stringify(o));}"
-"function done(v,cb){if(typeof cb==='function')try{cb(v);}catch(e){}return Promise.resolve(v);}"
+"function rd(){try{return JP(SR(id,name))||{};}catch(e){return{};}}"
+"function wr(o){return SW(id,name,JS(o));}"
+"function done(v,cb){if(typeof cb==='function')try{cb(v);}catch(e){}return PRES.call(P,v);}"
 "return {get:function(keys,cb){var a=rd(),o={};"
 "if(keys==null)o=a;"
 "else if(typeof keys==='string'){if(keys in a)o[keys]=a[keys];}"
-"else if(Array.isArray(keys)){keys.forEach(function(k){if(k in a)o[k]=a[k];});}"
-"else if(typeof keys==='object'){Object.keys(keys).forEach(function(k){o[k]=(k in a)?a[k]:keys[k];});}"
+"else if(AI(keys)){each(keys,function(k){if(k in a)o[k]=a[k];});}"
+"else if(typeof keys==='object'){each(OK(keys),function(k){o[k]=(k in a)?a[k]:keys[k];});}"
 "return done(o,cb);},"
-"set:function(items,cb){var a=rd();Object.keys(items||{}).forEach(function(k){a[k]=items[k];});wr(a);return done(undefined,cb);},"
-"remove:function(keys,cb){var a=rd();(Array.isArray(keys)?keys:[keys]).forEach(function(k){delete a[k];});wr(a);return done(undefined,cb);},"
+"set:function(items,cb){var a=rd();each(OK(items||{}),function(k){a[k]=items[k];});wr(a);return done(undefined,cb);},"
+"remove:function(keys,cb){var a=rd();each(AI(keys)?keys:[keys],function(k){delete a[k];});wr(a);return done(undefined,cb);},"
 "clear:function(cb){wr({});return done(undefined,cb);}};}"
 "function make_api(id){"
 "var man=null;"
 "function getManifest(){if(man===null){try{man=JSON.parse(M(id));}catch(e){man={};}}return man;}"
 "function getURL(p){return U(id,String(p==null?'':p));}"
 "var runtime={id:id,lastError:null,getManifest:getManifest,getURL:getURL,"
-"getPlatformInfo:function(cb){var v={os:PL(),arch:AR()};if(typeof cb==='function')cb(v);return Promise.resolve(v);}};"
+"getPlatformInfo:function(cb){var v={os:PL(),arch:AR()};if(typeof cb==='function')cb(v);return PRES.call(P,v);}};"
 "var i18n={"
 "getUILanguage:function(){return UL();},"
-"getAcceptLanguages:function(cb){var v=[UL()];if(typeof cb==='function')cb(v);return Promise.resolve(v);}};"
+"getAcceptLanguages:function(cb){var v=[UL()];if(typeof cb==='function')cb(v);return PRES.call(P,v);}};"
 "return {runtime:runtime,i18n:i18n,extension:{getURL:getURL},"
 "storage:{local:area(id,'local')}};"
 "}\n";
@@ -433,13 +442,30 @@ ns_ext_collect_strings(JSContext *ctx, JSValueConst arr, GPtrArray *out)
     }
 }
 
+/* Resolve symlinks as well as "..": g_canonicalize_filename() is purely
+ * lexical, so a symlink inside an extension could point anywhere. */
+static char *
+ns_ext_real_path(const char *path)
+{
+#ifdef G_OS_UNIX
+    char *r = realpath(path, NULL);
+    if (!r) return NULL;
+    char *out = g_strdup(r);
+    free(r);
+    return out;
+#else
+    return g_canonicalize_filename(path, NULL);
+#endif
+}
+
 static char *
 ns_ext_safe_path(const char *base_dir, const char *rel)
 {
     if (!base_dir || !rel || !*rel) return NULL;
-    g_autofree char *canon_base = g_canonicalize_filename(base_dir, NULL);
+    g_autofree char *canon_base = ns_ext_real_path(base_dir);
     g_autofree char *joined = g_build_filename(base_dir, rel, NULL);
-    char *canon = g_canonicalize_filename(joined, NULL);
+    char *canon = canon_base ? ns_ext_real_path(joined) : NULL;
+    if (!canon) return NULL;
     gsize blen = strlen(canon_base);
     if (strncmp(canon, canon_base, blen) != 0 ||
         (canon[blen] != '\0' && canon[blen] != G_DIR_SEPARATOR)) {
@@ -829,7 +855,9 @@ ns_abp_parse_cosmetic(ns_ext *e, const char *line, const char *sep)
     g_autofree char *dom_spec = g_strndup(line, at - line);
     const char *selector = at + strlen(sep);
     while (*selector == ' ') selector++;
-    if (!*selector || strchr(selector, '{')) return;
+    /* The selector is pasted into "<selector> { display: none }", so a
+     * brace would let a filter list inject arbitrary CSS rules. */
+    if (!*selector || strpbrk(selector, "{}")) return;
     if (g_str_has_prefix(selector, "+js") || g_str_has_prefix(selector, "script:"))
         return;
 
@@ -1135,22 +1163,38 @@ ns_ext_content_scripts_for_url(JSContext *ctx, JSValueConst global,
     }
     if (body->len == 0) { g_string_free(body, TRUE); return NULL; }
 
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_manifest",
-        JS_NewCFunction(ctx, ns_ext_js_manifest, "m", 1), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_url",
-        JS_NewCFunction(ctx, ns_ext_js_url, "u", 2), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_sread",
-        JS_NewCFunction(ctx, ns_ext_js_sread, "r", 2), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_swrite",
-        JS_NewCFunction(ctx, ns_ext_js_swrite, "w", 3), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_platform",
-        JS_NewCFunction(ctx, ns_ext_js_platform, "p", 0), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_arch",
-        JS_NewCFunction(ctx, ns_ext_js_arch, "a", 0), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, global, "__nd_ext_uilang",
-        JS_NewCFunction(ctx, ns_ext_js_uilang, "l", 0), JS_PROP_C_W_E);
+    char *uuid = g_uuid_string_random();
+    GString *token = g_string_new("_");
+    for (const char *p = uuid; *p; p++)
+        if (*p != '-') g_string_append_c(token, *p);
+    g_free(uuid);
+    static const struct {
+        const char *name;
+        JSCFunction *fn;
+        int argc;
+    } helpers[] = {
+        { "manifest", ns_ext_js_manifest, 1 },
+        { "url",      ns_ext_js_url,      2 },
+        { "sread",    ns_ext_js_sread,    2 },
+        { "swrite",   ns_ext_js_swrite,   3 },
+        { "platform", ns_ext_js_platform, 0 },
+        { "arch",     ns_ext_js_arch,     0 },
+        { "uilang",   ns_ext_js_uilang,   0 },
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(helpers); i++) {
+        g_autofree char *key = g_strdup_printf("__nd_ext_%s%s",
+                                               helpers[i].name, token->str);
+        JS_DefinePropertyValueStr(ctx, global, key,
+            JS_NewCFunction(ctx, helpers[i].fn, helpers[i].name,
+                            helpers[i].argc),
+            JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    }
 
-    GString *out = g_string_new(ns_ext_shim_prelude);
+    g_auto(GStrv) prelude_parts = g_strsplit(ns_ext_shim_prelude_tmpl,
+                                             "@NDTOKEN@", -1);
+    g_autofree char *prelude = g_strjoinv(token->str, prelude_parts);
+    g_string_free(token, TRUE);
+    GString *out = g_string_new(prelude);
     g_string_append(out, body->str);
     g_string_append(out, ns_ext_shim_epilogue);
     g_string_free(body, TRUE);
@@ -1219,26 +1263,30 @@ ns_dnr_sep(char c)
 static gboolean
 ns_dnr_match_here(const char *p, const char *s, gboolean end_anchor)
 {
-    while (*p) {
+    /* Iterative with one backtrack point (see ns_ext_wildcard). */
+    const char *star_p = NULL, *star_s = NULL;
+    for (;;) {
         if (*p == '*') {
-            p++;
+            while (*p == '*') p++;
             if (!*p) return TRUE;
-            for (;;) {
-                if (ns_dnr_match_here(p, s, end_anchor)) return TRUE;
-                if (!*s) return FALSE;
-                s++;
-            }
+            star_p = p;
+            star_s = s;
+            continue;
         }
-        if (*p == '^') {
+        if (!*p) {
+            if (!end_anchor || *s == '\0') return TRUE;
+        } else if (*p == '^') {
             if (*s == '\0') { p++; continue; }
             if (ns_dnr_sep(*s)) { p++; s++; continue; }
-            return FALSE;
+        } else if (*s && *s == *p) {
+            p++;
+            s++;
+            continue;
         }
-        if (*s != *p) return FALSE;
-        p++;
-        s++;
+        if (!star_p || !*star_s) return FALSE;
+        p = star_p;
+        s = ++star_s;
     }
-    return end_anchor ? (*s == '\0') : TRUE;
 }
 
 static gboolean
