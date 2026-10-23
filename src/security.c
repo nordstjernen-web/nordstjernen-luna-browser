@@ -12,6 +12,33 @@
  * the browser write: the XDG download directory if it lies strictly
  * below $HOME (an XDG_DOWNLOAD_DIR of $HOME itself, or outside it,
  * would widen that grant), otherwise ~/Downloads. */
+gboolean
+ns_env_flag(const char *name)
+{
+    const char *v = name ? g_getenv(name) : NULL;
+    if (!v) return FALSE;
+    while (*v == ' ' || *v == '\t') v++;
+    return *v &&
+           strcmp(v, "0") != 0 &&
+           g_ascii_strcasecmp(v, "false") != 0 &&
+           g_ascii_strcasecmp(v, "no") != 0 &&
+           g_ascii_strcasecmp(v, "off") != 0;
+}
+
+static gboolean ns_tool_mode;
+
+void
+ns_security_set_tool_mode(gboolean on)
+{
+    ns_tool_mode = on;
+}
+
+gboolean
+ns_security_tool_mode(void)
+{
+    return ns_tool_mode;
+}
+
 const char *
 ns_security_downloads_dir(void)
 {
@@ -254,7 +281,7 @@ ns_security_refuse_root(void)
 {
 #if defined(__linux__) || defined(__APPLE__)
     if (geteuid() != 0 && getuid() != 0) return TRUE;
-    if (g_getenv("NS_ALLOW_ROOT")) {
+    if (ns_env_flag("NS_ALLOW_ROOT")) {
         g_warning("northstar: running as root because NS_ALLOW_ROOT is set");
         return TRUE;
     }
@@ -266,12 +293,12 @@ ns_security_refuse_root(void)
     return FALSE;
 #elif defined(G_OS_WIN32)
     if (!ns_win_is_elevated()) return TRUE;
-    if (g_getenv("NS_ALLOW_ROOT")) {
+    if (ns_env_flag("NS_ALLOW_ROOT")) {
         g_warning("northstar: running as Administrator because "
                   "NS_ALLOW_ROOT is set");
         return TRUE;
     }
-    if (!g_getenv("NS_DEELEVATED") && ns_win_relaunch_deelevated()) {
+    if (!ns_env_flag("NS_DEELEVATED") && ns_win_relaunch_deelevated()) {
         g_warning("northstar: dropped Administrator rights by relaunching "
                   "as the current desktop user");
         return FALSE;
@@ -405,7 +432,7 @@ add_gpu_devices(int rfd, guint64 fs_read, guint64 fs_dev)
 void
 ns_security_sandbox_init(const char *self_exe)
 {
-    if (g_getenv("NS_NO_SANDBOX")) return;
+    if (ns_env_flag("NS_NO_SANDBOX")) return;
 
     int abi = landlock_create_ruleset_(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
     if (abi < 0) {
@@ -857,8 +884,8 @@ static const char *const ns_seccomp_allowed_names[] = {
 void
 ns_security_seccomp_init(void)
 {
-    if (g_getenv("NS_NO_SANDBOX")) return;
-    if (g_getenv("NS_NO_SECCOMP")) return;
+    if (ns_env_flag("NS_NO_SANDBOX")) return;
+    if (ns_env_flag("NS_NO_SECCOMP")) return;
 
 #ifdef NS_HAVE_SECCOMP
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
@@ -924,8 +951,8 @@ seccomp_deny_exec_shared(scmp_filter_ctx ctx, const char *name)
 void
 ns_security_deny_exec_memory(gboolean whole_process)
 {
-    if (g_getenv("NS_NO_SANDBOX")) return;
-    if (g_getenv("NS_NO_SECCOMP")) return;
+    if (ns_env_flag("NS_NO_SANDBOX")) return;
+    if (ns_env_flag("NS_NO_SECCOMP")) return;
 
 #ifdef NS_HAVE_SECCOMP
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return;
@@ -988,7 +1015,7 @@ void
 ns_security_sandbox_init(const char *self_exe)
 {
     (void)self_exe;
-    if (g_getenv("NS_NO_SANDBOX"))
+    if (ns_env_flag("NS_NO_SANDBOX"))
         return;
 
     GString *prof = g_string_new(
@@ -1098,7 +1125,7 @@ ns_win32_apply_mitigation(ns_smp_fn fn, PROCESS_MITIGATION_POLICY policy,
 void
 ns_security_win32_mitigations_init(gboolean interactive)
 {
-    if (g_getenv("NS_NO_WIN32_MITIGATIONS")) return;
+    if (ns_env_flag("NS_NO_WIN32_MITIGATIONS")) return;
 
     HMODULE k = GetModuleHandleW(L"kernel32.dll");
     if (!k) return;
