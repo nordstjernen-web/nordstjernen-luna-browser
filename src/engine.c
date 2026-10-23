@@ -404,12 +404,49 @@ on_preload_fetched(GObject *src, GAsyncResult *res, gpointer user_data)
     if (resp) ns_response_free(resp);
 }
 
+static void
+preload_add_csp(ns_csp **csp, const char *text)
+{
+    if (!text || !*text) return;
+    ns_csp *parsed = ns_csp_parse(text);
+    if (!parsed) return;
+    if (!*csp) {
+        *csp = parsed;
+        return;
+    }
+    ns_csp_merge(*csp, parsed);
+    ns_csp_free(parsed);
+}
+
+static void
+preload_collect_meta_csp(const ns_node *n, ns_csp **csp, int depth)
+{
+    if (!n || depth > 256) return;
+    if (ns_node_is_element_named(n, "iframe") ||
+        ns_node_is_element_named(n, "template"))
+        return;
+    if (ns_node_is_element_named(n, "meta")) {
+        const char *he = ns_element_get_attr(n, "http-equiv");
+        if (he && g_ascii_strcasecmp(he, "content-security-policy") == 0)
+            preload_add_csp(csp, ns_element_get_attr(n, "content"));
+    }
+    for (const ns_node *c = n->first_child; c; c = c->next_sibling)
+        preload_collect_meta_csp(c, csp, depth + 1);
+}
+
 void
 ns_engine_speculative_preload(ns_node *doc, const char *base_url,
+                              const char *csp_header,
                               gboolean include_images)
 {
     if (!doc || !base_url || !ns_url_is_http_or_https(base_url))
         return;
+    /* Speculative loads are requests the page made: they get the page's
+     * policy, which the scanner runs ahead of. */
+    ns_csp *csp = NULL;
+    preload_add_csp(&csp, csp_header);
+    preload_collect_meta_csp(doc, &csp, 0);
+    ns_fetch_policy *policy = ns_fetch_policy_new(base_url, csp);
     GPtrArray *urls = g_ptr_array_new_with_free_func(preload_target_free);
     GPtrArray *connects = g_ptr_array_new_with_free_func(g_free);
     GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal,
@@ -422,10 +459,17 @@ ns_engine_speculative_preload(ns_node *doc, const char *base_url,
     g_hash_table_destroy(seen);
     g_hash_table_destroy(connect_seen);
     ns_net_preload_clear();
-    for (guint i = 0; i < connects->len; i++)
+    /* A preconnect is only a hint; under a policy it is not worth judging
+     * which hosts the page may contact. */
+    for (guint i = 0; !csp && i < connects->len; i++)
         ns_net_preconnect_async(g_ptr_array_index(connects, i));
     for (guint i = 0; i < urls->len; i++) {
         const preload_target *target = g_ptr_array_index(urls, i);
+        if (ns_fetch_verdict_blocks(ns_fetch_policy_check(
+                policy, target->dest == NS_FETCH_DEST_DEFAULT
+                            ? NS_FETCH_DEST_CONNECT : target->dest,
+                base_url, target->url, NULL)))
+            continue;
         const char *const *headers = ns_net_accept_headers_for(target->dest);
         if (target->dest != NS_FETCH_DEST_DEFAULT) {
             char *key = ns_net_request_key(target->url, base_url, "GET", headers);
@@ -437,9 +481,11 @@ ns_engine_speculative_preload(ns_node *doc, const char *base_url,
         req->url = g_strdup(target->url);
         req->top_url = g_strdup(base_url);
         ns_net_request_async(target->url, base_url, "GET", NULL, 0, NULL,
-                             headers, target->dest, NULL, NULL,
+                             headers, target->dest, policy, NULL,
                              on_preload_fetched, req);
     }
+    ns_fetch_policy_unref(policy);
+    if (csp) ns_csp_free(csp);
     g_ptr_array_free(urls, TRUE);
     g_ptr_array_free(connects, TRUE);
 }
