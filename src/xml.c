@@ -229,13 +229,71 @@ xml_binding_free(gpointer p)
 
 static gboolean xml_parse_element(xml_parser *xp, ns_node *parent, int depth);
 
+static const char *
+xml_skip_past(const char *p, const char *end, const char *delim)
+{
+    gsize n = strlen(delim);
+    for (; p + n <= end; p++)
+        if (memcmp(p, delim, n) == 0) return p + n;
+    return NULL;
+}
+
+const char *
+ns_xml_doctype_end(const char *p, const char *end)
+{
+    int bracket = 0;
+    while (p && p < end) {
+        char c = *p;
+        if (c == '"' || c == '\'') {
+            const char *q = memchr(p + 1, c, (gsize)(end - p - 1));
+            if (!q) return NULL;
+            p = q + 1;
+        } else if (bracket > 0 && end - p >= 4 && memcmp(p, "<!--", 4) == 0) {
+            p = xml_skip_past(p + 4, end, "-->");
+        } else if (bracket > 0 && end - p >= 2 && memcmp(p, "<?", 2) == 0) {
+            p = xml_skip_past(p + 2, end, "?>");
+        } else if (c == '[') {
+            bracket++;
+            p++;
+        } else if (c == ']') {
+            if (bracket > 0) bracket--;
+            p++;
+        } else if (c == '>' && bracket == 0) {
+            return p;
+        } else {
+            p++;
+        }
+    }
+    return NULL;
+}
+
 static void
 xml_parse_internal_entities(xml_parser *xp, const char *p, const char *end)
 {
     while (p < end && xp->ok) {
-        const char *decl = g_strstr_len(p, (gssize)(end - p), "<!ENTITY");
-        if (!decl) return;
-        p = decl + 8;
+        /* Walk the subset declaration by declaration: "<!ENTITY" inside a
+         * comment, PI or quoted literal is not a declaration. */
+        if (end - p >= 4 && memcmp(p, "<!--", 4) == 0) {
+            p = xml_skip_past(p + 4, end, "-->");
+            if (!p) return;
+            continue;
+        }
+        if (end - p >= 2 && memcmp(p, "<?", 2) == 0) {
+            p = xml_skip_past(p + 2, end, "?>");
+            if (!p) return;
+            continue;
+        }
+        if (*p == '"' || *p == '\'') {
+            const char *q = memchr(p + 1, *p, (gsize)(end - p - 1));
+            if (!q) return;
+            p = q + 1;
+            continue;
+        }
+        if (end - p < 8 || memcmp(p, "<!ENTITY", 8) != 0) {
+            p++;
+            continue;
+        }
+        p += 8;
         xml_parser name_parser = *xp;
         name_parser.p = p;
         name_parser.end = end;
@@ -319,15 +377,8 @@ xml_skip_misc_and_doctype(xml_parser *xp, ns_node *doc)
                 continue;
             }
             if (xp->end - xp->p >= 9 && g_ascii_strncasecmp(xp->p, "<!DOCTYPE", 9) == 0) {
-                const char *e = xp->p + 9;
-                int bracket = 0;
-                while (e < xp->end) {
-                    if (*e == '[') bracket++;
-                    else if (*e == ']') { if (bracket > 0) bracket--; }
-                    else if (*e == '>' && bracket == 0) break;
-                    e++;
-                }
-                if (e >= xp->end) {
+                const char *e = ns_xml_doctype_end(xp->p + 9, xp->end);
+                if (!e) {
                     xp->p = xp->end;
                     xp->ok = FALSE;
                     return;
