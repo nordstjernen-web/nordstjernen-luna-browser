@@ -213,8 +213,9 @@ ns_engine_linked_css_text(const char *url)
 
 static GBytes *
 fetch_css_bytes(const char *url, const char *top_url, GHashTable *cache,
-                gboolean strict_mime)
+                gboolean strict_mime, gboolean *out_cross_origin)
 {
+    if (out_cross_origin) *out_cross_origin = FALSE;
     if (!url || !*url) return NULL;
     guint8 attempts = 0;
     if (cache) {
@@ -224,7 +225,12 @@ fetch_css_bytes(const char *url, const char *top_url, GHashTable *cache,
             const guint8 *hdata = g_bytes_get_data(hit, &hsize);
             gboolean fail_marker = hsize == 0 ||
                 (hsize == 1 && hdata && hdata[0] <= 8);
-            if (!fail_marker) return g_bytes_ref(hit);
+            if (!fail_marker) {
+                /* Cached by an earlier fetch whose final origin was not
+                 * recorded: be conservative about exposing it. */
+                if (out_cross_origin) *out_cross_origin = TRUE;
+                return g_bytes_ref(hit);
+            }
             attempts = hsize == 1 ? hdata[0] : 1;
             if (attempts >= 3) return NULL;
         }
@@ -234,10 +240,17 @@ fetch_css_bytes(const char *url, const char *top_url, GHashTable *cache,
     GBytes *bytes = NULL;
     /* The quirks-mode MIME leniency only applies to same-origin sheets;
      * otherwise any cross-origin HTML/JSON response would be parsed (and
-     * its contents exposed) as CSS. */
+     * its contents exposed) as CSS.  Judge by where the response finally
+     * came from, not by the URL that was requested: a same-origin URL can
+     * redirect anywhere. */
+    const char *final_url = resp && resp->final_url ? resp->final_url : url;
+    gboolean cross_origin = !top_url ||
+        !ns_url_same_origin(top_url, url) ||
+        !ns_url_same_origin(top_url, final_url);
+    if (out_cross_origin) *out_cross_origin = cross_origin;
     gboolean enforce_mime = strict_mime ||
         (resp && ns_net_header_is_nosniff(resp->x_content_type_options)) ||
-        !top_url || !ns_url_same_origin(top_url, url);
+        cross_origin;
     gboolean mime_ok = !enforce_mime || !resp ||
                        content_type_is_css(resp->content_type);
     if (resp && !resp->error && resp->status < 400 && mime_ok &&
@@ -450,7 +463,7 @@ append_stylesheet_expanded(GPtrArray *out, ns_css_stylesheet *sh,
                 continue;
             }
             if (seen) g_hash_table_add(seen, g_strdup(abs));
-            GBytes *bytes = fetch_css_bytes(abs, top_url, cache, TRUE);
+            GBytes *bytes = fetch_css_bytes(abs, top_url, cache, TRUE, NULL);
             if (bytes) {
                 ns_css_stylesheet *child =
                     ns_css_stylesheet_parse_import_cached(abs, im->layer_name,
@@ -754,12 +767,16 @@ collect_stylesheets_walk(ns_node *n, const char *base_url,
             link_sheet_enabled(n) &&
             (!media || !*media || ns_css_media_query_matches(media))) {
             char *abs = ns_url_resolve(base_url, href);
+            gboolean cross_origin = FALSE;
             GBytes *bytes = fetch_css_bytes(abs, cc->top_url, cache,
-                                            cc->strict_css_mime);
+                                            cc->strict_css_mime, &cross_origin);
             if (bytes) {
                 gsize len = 0;
                 const char *data = g_bytes_get_data(bytes, &len);
-                engine_remember_linked_css(abs, bytes);
+                /* Only same-origin sheets may be read back by page script
+                 * (CSSOM); never remember a cross-origin body. */
+                if (!cross_origin)
+                    engine_remember_linked_css(abs, bytes);
                 if (css_bytes_have_viewport_media(bytes)) cc->media_seen = TRUE;
                 ns_css_stylesheet *sh =
                     ns_css_stylesheet_parse_url_cached(abs, data, (gssize)len);

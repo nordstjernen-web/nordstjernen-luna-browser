@@ -448,7 +448,8 @@ media_start_fetch(ns_media_player *p)
     ns_js *js = p->js;
     NsAudioContext *audio = media_audio_context(js);
     if (g_str_has_prefix(p->src, "blob:")) {
-        GBytes *bytes = ns_net_resolve_blob(p->src, NULL);
+        GBytes *bytes = ns_net_resolve_blob_for(p->src,
+                                                ns_js_current_url(js), NULL);
         if (!bytes) {
             media_fail_source(p, MEDIA_ERR_SRC_NOT_SUPPORTED,
                               "blob URL not found");
@@ -1316,7 +1317,8 @@ ns_media_blob_updated(ns_js *js, const char *url)
         ns_media_player *p = value;
         if (!p->fetching || !p->src || strcmp(p->src, url) != 0) continue;
         if (p->mse || p->progressive) continue;
-        GBytes *bytes = ns_net_resolve_blob(url, NULL);
+        GBytes *bytes = ns_net_resolve_blob_for(url,
+                                                ns_js_current_url(js), NULL);
         if (!bytes) continue;
         ns_audio_context_open_bytes(js->audio_context, p->token, bytes, TRUE);
         g_bytes_unref(bytes);

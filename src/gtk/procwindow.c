@@ -770,6 +770,20 @@ download_finish_idle(gpointer ud)
     return G_SOURCE_REMOVE;
 }
 
+/* Downloads requested by a page are fetched without an initiator, so
+ * only network-style schemes may be saved: never file:, about: or a
+ * view-source: wrapper around them. */
+static gboolean
+download_url_allowed(const char *url)
+{
+    static const char *const ok[] = {
+        "http://", "https://", "ftp://", "data:", "blob:", NULL,
+    };
+    for (gsize i = 0; url && ok[i]; i++)
+        if (g_ascii_strncasecmp(url, ok[i], strlen(ok[i])) == 0) return TRUE;
+    return FALSE;
+}
+
 static gpointer
 download_worker(gpointer ud)
 {
@@ -777,6 +791,10 @@ download_worker(gpointer ud)
     ns_security_deny_exec_memory(FALSE);
     GError *err = NULL;
     ns_response *resp = ns_net_fetch_blocking(d->url, NULL, &err);
+    if (resp && resp->final_url && !download_url_allowed(resp->final_url)) {
+        ns_response_free(resp);
+        resp = NULL;
+    }
     if (resp && !resp->error && resp->body &&
         g_file_set_contents(d->path, (const char *)resp->body->data,
                             resp->body->len, NULL)) {
@@ -923,7 +941,7 @@ download_name_acceptable(const char *name)
 static void
 pw_start_download(ProcWindow *pw, const char *url, const char *suggested)
 {
-    if (!url || !*url) return;
+    if (!url || !*url || !download_url_allowed(url)) return;
     char *name = NULL;
     if (suggested && *suggested)
         name = g_path_get_basename(suggested);
