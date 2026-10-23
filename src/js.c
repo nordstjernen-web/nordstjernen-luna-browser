@@ -54363,13 +54363,15 @@ ns_js_profile_enabled(void)
 }
 
 static gboolean
-ns_js_eval_bytecode_cached(ns_js *js, const char *src, gsize len,
-                           JSValue *out_value, gboolean *out_compiled)
+ns_js_eval_bytecode_cached(ns_js *js, const char *name, const char *src,
+                           gsize len, JSValue *out_value,
+                           gboolean *out_compiled)
 {
     if (out_compiled) *out_compiled = FALSE;
     if (len < 1024) return FALSE;
     gsize bc_len = 0;
-    guint8 *bc = ns_bytecode_cache_get(src, len, &bc_len);
+    guint8 *bc = ns_bytecode_cache_get(js->current_url, name, src, len,
+                                       &bc_len);
     if (!bc) return FALSE;
     JSValue fn = JS_ReadObject(js->ctx, bc, bc_len, JS_READ_OBJ_BYTECODE);
     g_free(bc);
@@ -54383,7 +54385,8 @@ ns_js_eval_bytecode_cached(ns_js *js, const char *src, gsize len,
 }
 
 static void
-ns_js_bytecode_cache_store(ns_js *js, JSValue fn_obj, const char *src, gsize len)
+ns_js_bytecode_cache_store(ns_js *js, JSValue fn_obj, const char *name,
+                           const char *src, gsize len)
 {
     if (len < 1024) return;
     size_t bc_size = 0;
@@ -54393,7 +54396,7 @@ ns_js_bytecode_cache_store(ns_js *js, JSValue fn_obj, const char *src, gsize len
         if (bc) js_free(js->ctx, bc);
         return;
     }
-    ns_bytecode_cache_put(src, len, bc, bc_size);
+    ns_bytecode_cache_put(js->current_url, name, src, len, bc, bc_size);
     js_free(js->ctx, bc);
 }
 
@@ -54547,7 +54550,7 @@ ns_js_eval(ns_js *js, const char *src, gsize len, const char *origin)
     gboolean cache_hit = FALSE;
     int src_line = (js->current_script && js->current_script->src_line > 0)
                        ? js->current_script->src_line : 1;
-    if (!(ns_js_eval_bytecode_cached(js, copy, len, &v, &cache_hit) &&
+    if (!(ns_js_eval_bytecode_cached(js, origin, copy, len, &v, &cache_hit) &&
           cache_hit)) {
         JSValue geval = JS_GetGlobalObject(js->ctx);
         JSEvalOptions opts = {
@@ -54561,7 +54564,7 @@ ns_js_eval(ns_js *js, const char *src, gsize len, const char *origin)
             : JS_EvalThis2(js->ctx, geval, copy, len, &opts);
         JS_FreeValue(js->ctx, geval);
         if (!JS_IsException(fn)) {
-            ns_js_bytecode_cache_store(js, fn, copy, len);
+            ns_js_bytecode_cache_store(js, fn, origin, copy, len);
             v = JS_EvalFunction(js->ctx, fn);
         } else {
             v = fn;
@@ -54840,16 +54843,15 @@ static JSValue
 ns_js_compile_module_cached(JSContext *ctx, const char *src, gsize len,
                             const char *module_name)
 {
-    gsize  name_len = module_name ? strlen(module_name) : 0;
-    gsize  key_len  = name_len + 1 + len;
-    char  *key      = g_malloc(key_len);
-    memcpy(key, module_name ? module_name : "", name_len);
-    key[name_len] = '\0';
-    memcpy(key + name_len + 1, src ? src : "", len);
+    ns_js *owner = js_from_ctx(ctx);
+    const char *top_url = owner ? owner->current_url : NULL;
+    gsize  key_len  = len;
+    char  *key      = g_memdup2(src ? src : "", len + 1);
 
     if (len >= 1024) {
         gsize bc_len = 0;
-        guint8 *bc = ns_bytecode_cache_get(key, key_len, &bc_len);
+        guint8 *bc = ns_bytecode_cache_get(top_url, module_name, key, key_len,
+                                           &bc_len);
         if (bc) {
             JSValue m = JS_ReadObject(ctx, bc, bc_len, JS_READ_OBJ_BYTECODE);
             g_free(bc);
@@ -54876,7 +54878,9 @@ ns_js_compile_module_cached(JSContext *ctx, const char *src, gsize len,
         uint8_t *bc = JS_WriteObject(ctx, &bc_size, func_val,
                                      JS_WRITE_OBJ_BYTECODE);
         if (bc) {
-            if (bc_size > 0) ns_bytecode_cache_put(key, key_len, bc, bc_size);
+            if (bc_size > 0)
+                ns_bytecode_cache_put(top_url, module_name, key, key_len,
+                                      bc, bc_size);
             js_free(ctx, bc);
         }
     } else if (!JS_IsException(func_val) &&

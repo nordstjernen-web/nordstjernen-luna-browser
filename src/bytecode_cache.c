@@ -6,14 +6,22 @@
 #include "bytecode_cache.h"
 
 #include "config.h"
+#include "net.h"
 #include "quickjs_compat.h"
 
+#include <fcntl.h>
 #include <glib/gstdio.h>
+#include <stdio.h>
 #include <string.h>
 #ifdef G_OS_WIN32
+#include <io.h>
 #include <sys/utime.h>
 #else
+#include <unistd.h>
 #include <utime.h>
+#endif
+#ifndef O_BINARY
+#define O_BINARY 0
 #endif
 
 #define NS_BYTECODE_CACHE_MEM_CAP_BYTES   (64u * 1024u * 1024u)
@@ -92,12 +100,27 @@ ns_bytecode_cache_shutdown(void)
 }
 
 static void
-hash_source(const char *src, gsize len, char out[65])
+hash_source(const char *top_url, const char *name,
+            const char *src, gsize len, char out[65])
 {
+    g_autofree char *site = top_url ? ns_url_site_from(top_url) : NULL;
+    if (!site && top_url) site = ns_url_origin_from(top_url);
+    const char *partition = site ? site : (top_url ? top_url : "");
     GChecksum *c = g_checksum_new(G_CHECKSUM_SHA256);
+    g_checksum_update(c, (const guchar *)partition, (gssize)strlen(partition) + 1);
+    g_checksum_update(c, (const guchar *)(name ? name : ""),
+                      (gssize)(name ? strlen(name) : 0) + 1);
     g_checksum_update(c, (const guchar *)(src ? src : ""), (gssize)len);
     g_strlcpy(out, g_checksum_get_string(c), 65);
     g_checksum_free(c);
+}
+
+/* Private browsing must neither read nor leave a trace in the cache. */
+static gboolean
+cache_bypassed(void)
+{
+    const ns_config *cfg = ns_config_get();
+    return cfg && cfg->private_mode;
 }
 
 static char *
@@ -221,8 +244,13 @@ write_disk(const char *key, const guint8 *bc, gsize bc_len)
     guint32 magic = GUINT32_TO_LE(0x4E4A4243u);
     guint32 fmt   = GUINT32_TO_LE(NS_BYTECODE_CACHE_FORMAT_VERSION);
     char *tmp = g_strdup_printf("%s.tmp", path);
-    FILE *f = g_fopen(tmp, "wb");
-    if (!f) { g_free(tmp); g_free(path); return; }
+    int fd = g_open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600);
+    FILE *f = fd >= 0 ? fdopen(fd, "wb") : NULL;
+    if (!f) {
+        if (fd >= 0) close(fd);
+        g_free(tmp); g_free(path);
+        return;
+    }
     gboolean wrote = fwrite(&magic, 1, 4, f) == 4 &&
                      fwrite(&fmt,   1, 4, f) == 4 &&
                      fwrite(bc,     1, bc_len, f) == bc_len &&
@@ -265,11 +293,12 @@ evict_until_fits(gsize want_bytes)
 }
 
 guint8 *
-ns_bytecode_cache_get(const char *src, gsize src_len, gsize *out_len)
+ns_bytecode_cache_get(const char *top_url, const char *name,
+                      const char *src, gsize src_len, gsize *out_len)
 {
-    if (!src || !src_len) return NULL;
+    if (!src || !src_len || cache_bypassed()) return NULL;
     char key[65];
-    hash_source(src, src_len, key);
+    hash_source(top_url, name, src, src_len, key);
 
     g_mutex_lock(&g_lock);
     if (!g_mem) {
@@ -312,13 +341,14 @@ ns_bytecode_cache_get(const char *src, gsize src_len, gsize *out_len)
 }
 
 void
-ns_bytecode_cache_put(const char *src, gsize src_len,
-              const guint8 *bc, gsize bc_len)
+ns_bytecode_cache_put(const char *top_url, const char *name,
+                      const char *src, gsize src_len,
+                      const guint8 *bc, gsize bc_len)
 {
-    if (!src || !src_len || !bc || !bc_len) return;
+    if (!src || !src_len || !bc || !bc_len || cache_bypassed()) return;
     if (bc_len > NS_BYTECODE_CACHE_VALUE_CAP_BYTES) return;
     char key[65];
-    hash_source(src, src_len, key);
+    hash_source(top_url, name, src, src_len, key);
 
     g_mutex_lock(&g_lock);
     if (!g_mem) { g_mutex_unlock(&g_lock); return; }
@@ -337,13 +367,12 @@ ns_bytecode_cache_put(const char *src, gsize src_len,
     g_mem_bytes += bc_len;
     g_mutex_unlock(&g_lock);
 
-    const ns_config *cfg = ns_config_get();
-    if (!cfg || !cfg->private_mode)
-        write_disk(key, bc, bc_len);
+    write_disk(key, bc, bc_len);
 }
 
 typedef struct {
     char    key[65];
+    char   *top_url;
     char   *url;
     GBytes *source;
 } precompile_job;
@@ -356,6 +385,7 @@ precompile_job_finish(precompile_job *job)
     g_cond_broadcast(&g_pending_cond);
     g_mutex_unlock(&g_lock);
     g_bytes_unref(job->source);
+    g_free(job->top_url);
     g_free(job->url);
     g_free(job);
 }
@@ -381,7 +411,8 @@ precompile_run(gpointer data, gpointer user_data)
             uint8_t *bc = JS_WriteObject(ctx, &bc_size, fn,
                                          JS_WRITE_OBJ_BYTECODE);
             if (bc && bc_size > 0)
-                ns_bytecode_cache_put(src, len, bc, bc_size);
+                ns_bytecode_cache_put(job->top_url, job->url, src, len,
+                                      bc, bc_size);
             if (bc) js_free(ctx, bc);
         }
         JS_FreeValue(ctx, fn);
@@ -392,11 +423,13 @@ precompile_run(gpointer data, gpointer user_data)
 }
 
 void
-ns_bytecode_cache_precompile(const char *url, const guint8 *src, gsize len)
+ns_bytecode_cache_precompile(const char *top_url, const char *url,
+                             const guint8 *src, gsize len)
 {
-    if (!src || len < NS_BYTECODE_PRECOMPILE_MIN_BYTES) return;
+    if (!src || len < NS_BYTECODE_PRECOMPILE_MIN_BYTES || cache_bypassed())
+        return;
     precompile_job *job = g_new0(precompile_job, 1);
-    hash_source((const char *)src, len, job->key);
+    hash_source(top_url, url ? url : "", (const char *)src, len, job->key);
     g_mutex_lock(&g_lock);
     gboolean skip = !g_mem || g_hash_table_contains(g_mem, job->key) ||
                     (g_pending && g_hash_table_contains(g_pending, job->key));
@@ -418,6 +451,7 @@ ns_bytecode_cache_precompile(const char *url, const guint8 *src, gsize len)
                                               NULL);
     g_mutex_unlock(&g_lock);
     job->url = g_strdup(url ? url : "");
+    job->top_url = g_strdup(top_url);
     char *terminated = g_malloc(len + 1);
     memcpy(terminated, src, len);
     terminated[len] = '\0';
