@@ -669,6 +669,13 @@ The `document.cookie` setter:
   not consulted for script writes.
 - **`style-src` for parser-inserted stylesheets and stylesheet SRI are
   not enforced**, as described under *Origin isolation*.
+- **Web fonts are registered with fontconfig for the whole process**
+  under the family name a page gives them, so one site's `@font-face`
+  can change how another tab renders that family.
+- **Internal `data-nd-*` attributes are visible to CSS selectors.** Page
+  script cannot write them, but a selector such as `[data-nd-frame-opaque]`
+  can observe some of the engine's bookkeeping about the page's own
+  elements.
 - **In-process codecs.** The MP4 and WebM demuxers, MSE, MPEG-1 video,
   AV1/VP9/H.264 (when built), MP2/MP3/AAC/Opus/Vorbis audio, AVIF (when
   built) and WebAssembly are ordinary C parsing attacker-controlled bytes

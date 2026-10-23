@@ -13922,19 +13922,16 @@ ns_nav_navigate(JSContext *ctx, JSValueConst this_val,
 
     gboolean same_origin = FALSE;
     {
-        ns_url_parts *ap = ns_url_parts_new(url);
-        ns_url_parts *bp = js->current_url ? ns_url_parts_new(js->current_url)
-                                           : NULL;
-        if (ap && bp)
-            same_origin =
-                strcmp(ap->protocol ? ap->protocol : "",
-                       bp->protocol ? bp->protocol : "") == 0 &&
-                g_ascii_strcasecmp(ap->hostname ? ap->hostname : "",
-                                   bp->hostname ? bp->hostname : "") == 0 &&
-                strcmp(ap->port ? ap->port : "",
-                       bp->port ? bp->port : "") == 0;
-        if (ap) ns_url_parts_free(ap);
-        if (bp) ns_url_parts_free(bp);
+        /* A real (network) origin match, and with the page's own origin as
+         * pushState requires: comparing scheme/host/port strings made any
+         * two about: URLs "same-origin". */
+        same_origin = js->current_url &&
+                      ns_url_same_origin(url, js->current_url);
+        if (same_origin && js->document_origin) {
+            g_autofree char *uo = ns_url_origin_from(url);
+            same_origin = uo &&
+                g_ascii_strcasecmp(uo, js->document_origin) == 0;
+        }
     }
 
     JSValue ev = ns_target_make_event(ctx, this_val, "navigate");
@@ -24551,6 +24548,13 @@ ns_js_set_attr_recorded_len(ns_js *js, ns_node *n, const char *name,
                             const char *value, gssize len)
 {
     if (!n || n->kind != NS_NODE_ELEMENT || !name) return;
+    /* Internal state is never written through the recorded (script-facing)
+     * path, apart from the two internal attributes the engine itself
+     * records this way: SVG animation values and a control's checkedness. */
+    if (ns_attr_name_is_internal(name) &&
+        !g_str_has_prefix(name, "data-nd-anim-") &&
+        strcmp(name, "data-nd-checked") != 0)
+        return;
     gsize vlen = len < 0 ? (value ? strlen(value) : 0) : (gsize)len;
     const char *new_value = value ? value : "";
     gsize old_len = 0;
