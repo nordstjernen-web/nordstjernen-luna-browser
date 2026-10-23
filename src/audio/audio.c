@@ -1318,7 +1318,11 @@ ns_audio_context_stream_push(NsAudioContext *context, const char *token,
         audio_unlock();
         return FALSE;
     }
-    int bytes = frames * channels * (int)sizeof(float);
+    if ((size_t)frames > (size_t)G_MAXINT / sizeof(float) / (size_t)channels) {
+        audio_unlock();
+        return FALSE;
+    }
+    int bytes = (int)((size_t)frames * (size_t)channels * sizeof(float));
     gboolean ok = SDL_AudioStreamPut(p->converter, samples, bytes) == 0;
     int avail = ok ? SDL_AudioStreamAvailable(p->converter) : 0;
     size_t new_frames = avail > 0 ? (size_t)avail / (2 * sizeof(float)) : 0;

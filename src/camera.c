@@ -11,6 +11,8 @@
 #include "js.h"
 #include "net.h"
 
+/* Permission state is touched from the engine and UI threads. */
+static GMutex g_camera_lock;
 static GHashTable *g_camera_decisions;
 static char *g_camera_pending;
 
@@ -36,14 +38,19 @@ ns_camera_record_decision(const char *origin, gboolean allow)
 gboolean
 ns_camera_has_pending_origin(void)
 {
-    return g_camera_pending != NULL;
+    g_mutex_lock(&g_camera_lock);
+    gboolean pending = g_camera_pending != NULL;
+    g_mutex_unlock(&g_camera_lock);
+    return pending;
 }
 
 char *
 ns_camera_take_pending_origin(void)
 {
+    g_mutex_lock(&g_camera_lock);
     char *origin = g_camera_pending;
     g_camera_pending = NULL;
+    g_mutex_unlock(&g_camera_lock);
     return origin;
 }
 
@@ -51,10 +58,14 @@ void
 ns_camera_set_decision(const char *origin, int allow)
 {
     if (!origin || !*origin) return;
+    g_mutex_lock(&g_camera_lock);
     ns_camera_record_decision(origin, allow ? TRUE : FALSE);
     if (g_camera_pending && g_strcmp0(g_camera_pending, origin) == 0)
         g_clear_pointer(&g_camera_pending, g_free);
+    g_mutex_unlock(&g_camera_lock);
 }
+
+static int ns_camera_permission_locked(char *origin);
 
 int
 ns_camera_permission(ns_js *js)
@@ -62,10 +73,21 @@ ns_camera_permission(ns_js *js)
     const char *url = ns_js_current_url(js);
     char *origin = ns_url_origin_from(url);
     if (!origin || !*origin) {
+        /* Opaque origins (file:, data:, ...) must not share one decision:
+         * key them by their URL without the fragment. */
         g_free(origin);
-        origin = g_strdup("this page");
+        gsize n = url ? strcspn(url, "#") : 0;
+        origin = n ? g_strndup(url, n) : g_strdup("about:blank");
     }
+    g_mutex_lock(&g_camera_lock);
+    int r = ns_camera_permission_locked(origin);
+    g_mutex_unlock(&g_camera_lock);
+    return r;
+}
 
+static int
+ns_camera_permission_locked(char *origin)
+{
     if (!g_camera_decisions)
         g_camera_decisions = g_hash_table_new_full(g_str_hash, g_str_equal,
                                                    g_free, NULL);

@@ -32,7 +32,7 @@ image_to_texture(const vpx_image_t *image)
         .bits = high ? (int)image->bit_depth : 8,
         .sub_x = (int)image->x_chroma_shift,
         .sub_y = (int)image->y_chroma_shift,
-        .monochrome = FALSE,
+        .monochrome = !image->planes[1] || !image->planes[2],
         .bt601 = image->cs == VPX_CS_BT_601 || image->cs == VPX_CS_SMPTE_170,
         .full_range = image->range == VPX_CR_FULL_RANGE,
     };

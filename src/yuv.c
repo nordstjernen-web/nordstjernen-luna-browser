@@ -58,8 +58,12 @@ ns_yuv_to_texture(const ns_yuv_picture *picture)
     int w = picture->width;
     int h = picture->height;
     if (w <= 0 || h <= 0 || w > NS_YUV_MAX_DIMENSION || h > NS_YUV_MAX_DIMENSION ||
-        picture->bits < 8 || picture->bits > 16)
+        picture->bits < 8 || picture->bits > 16 || !picture->planes[0])
         return NULL;
+    /* A decoder that hands over no chroma planes is giving us a
+     * monochrome picture whatever its flags say. */
+    gboolean monochrome = picture->monochrome ||
+                          !picture->planes[1] || !picture->planes[2];
     int shift = picture->bits > 8 ? picture->bits - 8 : -1;
     yuv_coefficients c = coefficients_for(picture);
     gsize stride = (gsize)w * 4;
@@ -72,7 +76,7 @@ ns_yuv_to_texture(const ns_yuv_picture *picture)
             int luma = (sample_at(picture->planes[0], picture->strides[0], x, y, shift) -
                         c.y_offset) * c.y_scale;
             int u = 0, v = 0;
-            if (!picture->monochrome) {
+            if (!monochrome) {
                 int cx = x >> picture->sub_x;
                 u = sample_at(picture->planes[1], picture->strides[1], cx, cy, shift) - 128;
                 v = sample_at(picture->planes[2], picture->strides[2], cx, cy, shift) - 128;
