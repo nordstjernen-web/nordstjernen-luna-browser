@@ -2946,6 +2946,9 @@ static gboolean ns_fire_inline_on_handler(ns_js *js, const ns_node *target,
 static gboolean ns_fire_property_on_handler(ns_js *js, const ns_node *target,
                                             const char *type, JSValue event);
 static JSValue ns_iframe_lookup_realm_window(ns_js *js, ns_node *iframe);
+static char *ns_js_exposed_response_headers(const ns_response *resp,
+                                             gboolean same_origin);
+static char *ns_xhr_serialize_headers(const ns_response *resp);
 static JSValue ns_iframe_lookup_realm_doc(ns_js *js, const ns_node *iframe);
 static void ns_iframe_store_realm_window(ns_js *js, ns_node *iframe,
                                          JSValueConst window);
@@ -8579,21 +8582,9 @@ ns_on_js_fetch_deliver(ns_js_fetch_state *st, ns_response *resp, GError *err)
         if (allow) {
             gboolean same_origin = ns_url_same_origin(
                 st->js ? st->js->current_url : NULL, resp->final_url);
-            if (same_origin && resp->raw_headers) {
-                ns_headers_init_add_raw(st->ctx, header_init, resp->raw_headers);
-            } else {
-                const struct { const char *name; const char *value; } known[] = {
-                    { "content-type",                resp->content_type        },
-                    { "content-disposition",         resp->content_disposition },
-                    { "content-security-policy",     resp->csp_header          },
-                    { "x-frame-options",             resp->xframe_options      },
-                    { "access-control-allow-origin", resp->cors_allow_origin   },
-                };
-                for (gsize i = 0; i < G_N_ELEMENTS(known); i++)
-                    if (known[i].value && *known[i].value)
-                        JS_SetPropertyStr(st->ctx, header_init, known[i].name,
-                                          JS_NewString(st->ctx, known[i].value));
-            }
+            g_autofree char *exposed =
+                ns_js_exposed_response_headers(resp, same_origin);
+            ns_headers_init_add_raw(st->ctx, header_init, exposed);
         }
         JSValue global = JS_GetGlobalObject(st->ctx);
         JSValue hdr_ctor = JS_GetPropertyStr(st->ctx, global, "Headers");
@@ -11878,19 +11869,73 @@ ns_window_bind_post_message(JSContext *ctx, JSValueConst global)
     ns_install_cross_window_maker(ctx, global);
 }
 
-static JSValue
-ns_broadcast_registry(JSContext *ctx)
+/* BroadcastChannel instances live in a C-side registry, tagged with the
+ * origin of the realm that created them; messages only go to channels of
+ * the same name *and* origin.  (A JS-visible registry let any page add
+ * receivers, and matching by name alone crossed origins.) */
+typedef struct {
+    JSValue obj;
+    char   *name;
+    char   *origin;
+} ns_bc_entry;
+
+static void
+ns_bc_entry_free(ns_js *js, ns_bc_entry *e)
 {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue reg = JS_GetPropertyStr(ctx, global, "__ns_broadcast_channels");
-    if (!JS_IsArray(reg)) {
-        JS_FreeValue(ctx, reg);
-        reg = JS_NewArray(ctx);
-        JS_SetPropertyStr(ctx, global, "__ns_broadcast_channels",
-                          JS_DupValue(ctx, reg));
+    JS_FreeValue(js->ctx, e->obj);
+    g_free(e->name);
+    g_free(e->origin);
+    g_free(e);
+}
+
+static void
+ns_broadcast_registry_clear(ns_js *js)
+{
+    if (!js || !js->broadcast_channels) return;
+    for (guint i = 0; i < js->broadcast_channels->len; i++)
+        ns_bc_entry_free(js, g_ptr_array_index(js->broadcast_channels, i));
+    g_ptr_array_free(js->broadcast_channels, TRUE);
+    js->broadcast_channels = NULL;
+}
+
+static ns_bc_entry *
+ns_broadcast_find(ns_js *js, JSValueConst obj, guint *out_index)
+{
+    if (!js || !js->broadcast_channels || !JS_IsObject(obj)) return NULL;
+    for (guint i = 0; i < js->broadcast_channels->len; i++) {
+        ns_bc_entry *e = g_ptr_array_index(js->broadcast_channels, i);
+        if (JS_VALUE_GET_PTR(e->obj) == JS_VALUE_GET_PTR(obj)) {
+            if (out_index) *out_index = i;
+            return e;
+        }
     }
-    JS_FreeValue(ctx, global);
-    return reg;
+    return NULL;
+}
+
+static gboolean ns_iframe_is_cross_origin(ns_js *js, const ns_node *iframe);
+
+/* Origin of the realm running the calling script: frames call the
+ * embedder's constructor, so the function's own realm is not enough. */
+static char *
+ns_js_caller_origin(ns_js *js, JSContext *ctx)
+{
+    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    if (!caller) caller = ctx;
+    if (js->frame_contexts) {
+        GHashTableIter it;
+        gpointer iframe, fctx;
+        g_hash_table_iter_init(&it, js->frame_contexts);
+        while (g_hash_table_iter_next(&it, &iframe, &fctx)) {
+            if (fctx != caller) continue;
+            const char *u = ns_element_get_attr(iframe, "data-nd-frame-url");
+            char *o = ns_element_get_attr(iframe, "data-nd-frame-opaque") ||
+                      !u ? NULL : ns_url_origin_from(u);
+            /* Each opaque origin is unique to its frame. */
+            return o ? o : g_strdup_printf("null:%p", iframe);
+        }
+    }
+    char *o = js->current_url ? ns_url_origin_from(js->current_url) : NULL;
+    return o ? o : g_strdup_printf("null:%p", (void *)js);
 }
 
 static JSValue
@@ -11921,34 +11966,26 @@ ns_broadcast_post_message(JSContext *ctx, JSValueConst this_val,
     }
     JS_FreeValue(ctx, clone);
 
-    JSValue name = JS_GetPropertyStr(ctx, this_val, "name");
-    const char *ns = JS_ToCString(ctx, name);
-
-    JSValue reg = ns_broadcast_registry(ctx);
-    uint32_t len = ns_js_array_length(ctx, reg);
-    for (uint32_t i = 0; i < len; i++) {
-        JSValue ch = JS_GetPropertyUint32(ctx, reg, i);
-        if (JS_VALUE_GET_PTR(ch) == JS_VALUE_GET_PTR(this_val)) {
-            JS_FreeValue(ctx, ch);
-            continue;
-        }
-        JSValue cclosed = JS_GetPropertyStr(ctx, ch, "_closed");
-        gboolean cc = JS_ToBool(ctx, cclosed);
-        JS_FreeValue(ctx, cclosed);
-        JSValue cname = JS_GetPropertyStr(ctx, ch, "name");
-        const char *cns = JS_ToCString(ctx, cname);
-        gboolean same = ns && cns && strcmp(ns, cns) == 0;
-        if (cns) JS_FreeCString(ctx, cns);
-        JS_FreeValue(ctx, cname);
-        if (!cc && same) {
-            JSValueConst job_args[2] = { ch, data };
-            ns_queue_message_task(ctx, ns_port_deliver_job, 2, job_args);
-        }
-        JS_FreeValue(ctx, ch);
+    ns_js *js = js_from_ctx(ctx);
+    ns_bc_entry *self = ns_broadcast_find(js, this_val, NULL);
+    if (!self) {
+        JS_FreeValue(ctx, data);
+        return JS_ThrowTypeError(ctx,
+            "BroadcastChannel.postMessage: not a BroadcastChannel");
     }
-    JS_FreeValue(ctx, reg);
-    if (ns) JS_FreeCString(ctx, ns);
-    JS_FreeValue(ctx, name);
+    GPtrArray *targets = g_ptr_array_new();
+    for (guint i = 0; i < js->broadcast_channels->len; i++) {
+        ns_bc_entry *e = g_ptr_array_index(js->broadcast_channels, i);
+        if (e != self && strcmp(e->name, self->name) == 0 &&
+            strcmp(e->origin, self->origin) == 0)
+            g_ptr_array_add(targets, e);
+    }
+    for (guint i = 0; i < targets->len; i++) {
+        ns_bc_entry *e = g_ptr_array_index(targets, i);
+        JSValueConst job_args[2] = { e->obj, data };
+        ns_queue_message_task(ctx, ns_port_deliver_job, 2, job_args);
+    }
+    g_ptr_array_free(targets, TRUE);
     JS_FreeValue(ctx, data);
     return JS_UNDEFINED;
 }
@@ -11959,24 +11996,13 @@ ns_broadcast_close(JSContext *ctx, JSValueConst this_val,
 {
     (void)argc; (void)argv;
     JS_SetPropertyStr(ctx, this_val, "_closed", JS_TRUE);
-    JSValue reg = ns_broadcast_registry(ctx);
-    uint32_t len = ns_js_array_length(ctx, reg);
-    for (uint32_t i = 0; i < len; i++) {
-        JSValue ch = JS_GetPropertyUint32(ctx, reg, i);
-        gboolean match = JS_VALUE_GET_PTR(ch) == JS_VALUE_GET_PTR(this_val);
-        JS_FreeValue(ctx, ch);
-        if (match) {
-            JSValue splice = JS_GetPropertyStr(ctx, reg, "splice");
-            JSValueConst sargs[2] = { JS_NewUint32(ctx, i), JS_NewInt32(ctx, 1) };
-            JSValue r = JS_Call(ctx, splice, reg, 2, sargs);
-            JS_FreeValue(ctx, r);
-            JS_FreeValue(ctx, sargs[0]);
-            JS_FreeValue(ctx, sargs[1]);
-            JS_FreeValue(ctx, splice);
-            break;
-        }
+    ns_js *js = js_from_ctx(ctx);
+    guint idx = 0;
+    ns_bc_entry *e = ns_broadcast_find(js, this_val, &idx);
+    if (e) {
+        g_ptr_array_remove_index(js->broadcast_channels, idx);
+        ns_bc_entry_free(js, e);
     }
-    JS_FreeValue(ctx, reg);
     return JS_UNDEFINED;
 }
 
@@ -11999,15 +12025,15 @@ ns_window_broadcast_channel(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, proto);
     JS_FreeValue(ctx, ctor);
 
-    JSValue loc = JS_GetPropertyStr(ctx, global, "location");
-    JSValue origin = JS_GetPropertyStr(ctx, loc, "origin");
-    const char *os = JS_ToCString(ctx, origin);
-    JS_SetPropertyStr(ctx, bc, "_origin", JS_NewString(ctx, os ? os : "null"));
-    if (os) JS_FreeCString(ctx, os);
-    JS_FreeValue(ctx, origin);
-    JS_FreeValue(ctx, loc);
     JS_FreeValue(ctx, global);
 
+    ns_js *js = js_from_ctx(ctx);
+    ns_bc_entry *entry = NULL;
+    if (js) {
+        entry = g_new0(ns_bc_entry, 1);
+        entry->name = g_strdup(name);
+        entry->origin = ns_js_caller_origin(js, ctx);
+    }
     JS_DefinePropertyValueStr(ctx, bc, "name", JS_NewString(ctx, name),
                               JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
     JS_FreeCString(ctx, name);
@@ -12020,10 +12046,12 @@ ns_window_broadcast_channel(JSContext *ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, bc, "onmessage",      JS_NULL);
     JS_SetPropertyStr(ctx, bc, "onmessageerror", JS_NULL);
 
-    JSValue reg = ns_broadcast_registry(ctx);
-    uint32_t len = ns_js_array_length(ctx, reg);
-    JS_SetPropertyUint32(ctx, reg, len, JS_DupValue(ctx, bc));
-    JS_FreeValue(ctx, reg);
+    if (entry) {
+        entry->obj = JS_DupValue(ctx, bc);
+        if (!js->broadcast_channels)
+            js->broadcast_channels = g_ptr_array_new();
+        g_ptr_array_add(js->broadcast_channels, entry);
+    }
     return bc;
 }
 
@@ -16791,6 +16819,72 @@ ns_http_status_text(int status)
     }
 }
 
+/* Response headers script may see (Fetch Standard): never Set-Cookie /
+ * Set-Cookie2, and for a cross-origin (CORS) response only the
+ * CORS-safelisted headers plus those named in Access-Control-Expose-Headers.
+ * Returns raw "Name: value\r\n" lines. */
+static char *
+ns_js_exposed_response_headers(const ns_response *resp, gboolean same_origin)
+{
+    static const char *const safelisted[] = {
+        "cache-control", "content-language", "content-length",
+        "content-type", "expires", "last-modified", "pragma", NULL,
+    };
+    if (!resp->raw_headers) {
+        if (same_origin) return ns_xhr_serialize_headers(resp);
+        return resp->content_type && *resp->content_type
+            ? g_strdup_printf("content-type: %s\r\n", resp->content_type)
+            : g_strdup("");
+    }
+    GPtrArray *expose = g_ptr_array_new_with_free_func(g_free);
+    gboolean expose_all = FALSE;
+    GString *out = g_string_new(NULL);
+    for (int pass = same_origin ? 1 : 0; pass < 2; pass++) {
+        for (const char *p = resp->raw_headers; *p; ) {
+            const char *eol = strchr(p, '\n');
+            gsize len = eol ? (gsize)(eol - p) : strlen(p);
+            gsize line_len = len;
+            if (line_len > 0 && p[line_len - 1] == '\r') line_len--;
+            const char *colon = memchr(p, ':', line_len);
+            if (colon && colon > p) {
+                g_autofree char *name = g_ascii_strdown(p, colon - p);
+                g_strstrip(name);
+                if (pass == 0) {
+                    if (strcmp(name, "access-control-expose-headers") == 0) {
+                        g_autofree char *v = g_strndup(colon + 1,
+                            line_len - (gsize)(colon + 1 - p));
+                        char **items = g_strsplit(v, ",", -1);
+                        for (char **it = items; *it; it++) {
+                            char *tok = g_ascii_strdown(g_strstrip(*it), -1);
+                            if (strcmp(tok, "*") == 0) expose_all = TRUE;
+                            g_ptr_array_add(expose, tok);
+                        }
+                        g_strfreev(items);
+                    }
+                } else {
+                    gboolean ok = strcmp(name, "set-cookie") != 0 &&
+                                  strcmp(name, "set-cookie2") != 0;
+                    if (ok && !same_origin) {
+                        ok = expose_all;
+                        for (gsize i = 0; !ok && safelisted[i]; i++)
+                            ok = strcmp(name, safelisted[i]) == 0;
+                        for (guint i = 0; !ok && i < expose->len; i++)
+                            ok = strcmp(name, g_ptr_array_index(expose, i)) == 0;
+                    }
+                    if (ok) {
+                        g_string_append_len(out, p, line_len);
+                        g_string_append(out, "\r\n");
+                    }
+                }
+            }
+            if (!eol) break;
+            p = eol + 1;
+        }
+    }
+    g_ptr_array_free(expose, TRUE);
+    return g_string_free(out, FALSE);
+}
+
 static char *
 ns_xhr_serialize_headers(const ns_response *resp)
 {
@@ -17327,10 +17421,8 @@ ns_xhr_deliver(ns_xhr_state *st, ns_response *resp, GError *err)
         char *hdrs;
         if (!allow) {
             hdrs = g_strdup("");
-        } else if (same_origin && resp->raw_headers) {
-            hdrs = g_strdup(resp->raw_headers);
         } else {
-            hdrs = ns_xhr_serialize_headers(resp);
+            hdrs = ns_js_exposed_response_headers(resp, same_origin);
         }
         JS_SetPropertyStr(ctx, st->obj, "_responseHeaders",
                           JS_NewString(ctx, hdrs));
@@ -54375,6 +54467,7 @@ ns_js_free(ns_js *js)
         js->box_lookup_cache = NULL;
     }
     if (ns_active_js() == js) ns_set_active_js(NULL);
+    ns_broadcast_registry_clear(js);
     if (js->frame_windows) {
         GHashTableIter it;
         gpointer k, val;

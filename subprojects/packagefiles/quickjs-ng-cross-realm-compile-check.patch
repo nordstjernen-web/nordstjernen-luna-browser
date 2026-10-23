@@ -1,6 +1,6 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -41228,9 +41228,59 @@
+@@ -41228,9 +41228,66 @@
      return JS_EXCEPTION;
  }
  
@@ -40,6 +40,13 @@
 +    return NULL;
 +}
 +
++/* The realm of the JS code that called the running native function, or
++ * NULL when no JS frame is on the stack. */
++JSContext *JS_GetCallerRealmOrNull(JSContext *ctx)
++{
++    return js_caller_realm(ctx->rt);
++}
++
 +static int js_cross_realm_compile_denied(JSContext *ctx)
 +{
 +    JSContext *caller;
@@ -60,7 +67,7 @@
      return JS_EvalObject(ctx, ctx->global_obj, argv[0], JS_EVAL_TYPE_INDIRECT, -1);
  }
  
-@@ -42574,6 +42624,8 @@
+@@ -42574,6 +42631,8 @@
      JSValue s, proto, obj = JS_UNDEFINED;
      StringBuffer b_s, *b = &b_s;
  
