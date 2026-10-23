@@ -401,6 +401,9 @@ static int
 ns_run_headless(ns_headless_opts *hopts)
 {
     ns_security_set_tool_mode(TRUE);
+    /* Headless runs skip ns_browser_init(), which applies this for the GUI. */
+    if (ns_config_get()->harden_allocator)
+        ns_security_harden_allocator();
     ns_net_init();
     ns_net_set_allow_file_urls(TRUE);
     if (hopts->debug_levels & (1u << NS_DLOG_NET))
