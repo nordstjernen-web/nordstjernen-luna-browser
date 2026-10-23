@@ -357,7 +357,7 @@ Others the browser reads:
 | Variable | Effect |
 |----------|--------|
 | `NS_SAFEBROWSING_LIST` | Blocklist file used instead of `~/.config/northstar/safebrowsing.list` and the bundled list. |
-| `NS_EXTENSIONS_DIR` | WebExtensions directory (default `~/.local/share/northstar/extensions`). |
+| `NS_EXTENSIONS_DIR` | WebExtensions directory (default `~/.local/share/northstar-extensions`). |
 | `NS_I18N_DIR` | Directory of the `.lang` UI catalogues. |
 | `NS_LOG_FILE`, `NS_NO_LOG_FILE` | Mirror the debug event log to a file (on by default only on Windows). |
 | `NS_CAMERA_ALLOW` | Grant every camera request without asking. For testing. |

@@ -10,6 +10,8 @@
 
 G_BEGIN_DECLS
 
+const char *ns_security_downloads_dir(void);
+
 gboolean ns_security_refuse_root(void);
 
 void ns_security_sandbox_init(const char *self_exe);

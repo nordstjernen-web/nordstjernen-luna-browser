@@ -44,6 +44,7 @@
 #include "net.h"
 #include "procview.h"
 #include "procwindow.h"
+#include "ext.h"
 #include "security.h"
 #include "threaddump.h"
 #include "trace.h"
@@ -396,6 +397,19 @@ ns_add_screenshot_writable_dirs(int argc, char **argv)
     }
 }
 
+static void
+ns_add_trace_writable_dirs(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (!g_str_has_prefix(argv[i], "--trace=")) continue;
+        const char *p = argv[i] + 8;
+        if (!*p) continue;
+        char *dir = g_path_get_dirname(p);
+        if (dir && *dir) ns_security_add_writable_dir(dir);
+        g_free(dir);
+    }
+}
+
 static int
 ns_run_headless(ns_headless_opts *hopts)
 {
@@ -505,7 +519,6 @@ main(int argc, char **argv)
     init_self_exe(argc > 0 ? argv[0] : NULL);
     ns_i18n_init(g_self_exe);
     ns_config_init();
-    ns_thread_dump_install_signal("northstar");
 
     gboolean proc_mode = ns_proc_mode_wanted(argc, argv);
 
@@ -522,11 +535,9 @@ main(int argc, char **argv)
     }
 
     ns_security_win32_mitigations_init(proc_mode);
-    for (int i = 1; i < argc; i++)
-        if (g_str_has_prefix(argv[i], "--trace=") &&
-            !ns_trace_open(argv[i] + 8))
-            g_printerr("northstar: cannot write a trace to %s\n", argv[i] + 8);
     ns_add_screenshot_writable_dirs(argc, argv);
+    ns_add_trace_writable_dirs(argc, argv);
+    ns_ext_migrate_default_dir();
 
     if (proc_mode) {
         ns_security_add_writable_dir("/dev/shm");
@@ -536,6 +547,14 @@ main(int argc, char **argv)
     if (!proc_mode)
         ns_security_deny_exec_memory(TRUE);
     ns_security_seccomp_init();
+    /* Landlock and seccomp only bind threads created after them, so the
+     * SIGQUIT dump thread starts here, and the trace file is opened from
+     * inside the sandbox (its directory was granted above). */
+    ns_thread_dump_install_signal("northstar");
+    for (int i = 1; i < argc; i++)
+        if (g_str_has_prefix(argv[i], "--trace=") &&
+            !ns_trace_open(argv[i] + 8))
+            g_printerr("northstar: cannot write a trace to %s\n", argv[i] + 8);
     ns_debug_log_init();
     g_log_set_writer_func(ns_log_writer, NULL, NULL);
 #ifdef G_OS_WIN32

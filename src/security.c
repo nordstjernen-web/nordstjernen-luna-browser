@@ -8,6 +8,28 @@
 #endif
 #include "security.h"
 
+/* Where downloads are saved, and the one place in $HOME the sandbox lets
+ * the browser write: the XDG download directory if it lies strictly
+ * below $HOME (an XDG_DOWNLOAD_DIR of $HOME itself, or outside it,
+ * would widen that grant), otherwise ~/Downloads. */
+const char *
+ns_security_downloads_dir(void)
+{
+    static char *dir;
+    if (dir) return dir;
+    const char *home = g_get_home_dir();
+    const char *dl = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+    gsize home_len = home ? strlen(home) : 0;
+    while (home_len > 1 && home[home_len - 1] == G_DIR_SEPARATOR)
+        home_len--;
+    if (dl && *dl && home && strncmp(dl, home, home_len) == 0 &&
+        dl[home_len] == G_DIR_SEPARATOR && dl[home_len + 1] != '\0')
+        dir = g_strdup(dl);
+    else if (home)
+        dir = g_build_filename(home, "Downloads", NULL);
+    return dir;
+}
+
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -455,7 +477,15 @@ ns_security_sandbox_init(const char *self_exe)
     add_path_rw(rfd, fs_read, g_get_user_config_dir());
     add_path_rw(rfd, fs_read, g_get_user_data_dir());
     add_path_rw(rfd, fs_read, g_get_user_cache_dir());
-    add_path_rw(rfd, fs_rw,   g_get_user_runtime_dir());
+    /* The runtime dir holds other services' state (systemd --user,
+     * gvfs, ...); only dconf's shared-memory flag file is written. */
+    add_path_rw(rfd, fs_read, g_get_user_runtime_dir());
+    {
+        g_autofree char *dconf =
+            g_build_filename(g_get_user_runtime_dir(), "dconf", NULL);
+        if (g_file_test(dconf, G_FILE_TEST_IS_DIR))
+            add_path_rw(rfd, fs_rw, dconf);
+    }
 
     char *ns_cfg_root =
         g_build_filename(g_get_user_config_dir(), "northstar", NULL);
@@ -482,18 +512,12 @@ ns_security_sandbox_init(const char *self_exe)
     g_free(ns_cache_root);
 
     {
-        const char *dl = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
-        char *dl_dir = NULL;
-        if (dl && *dl)
-            dl_dir = g_strdup(dl);
-        else if (home)
-            dl_dir = g_build_filename(home, "Downloads", NULL);
-        if (dl_dir && home && g_str_has_prefix(dl_dir, home)) {
+        const char *dl_dir = ns_security_downloads_dir();
+        if (dl_dir) {
             g_mkdir_with_parents(dl_dir, 0700);
             if (g_file_test(dl_dir, G_FILE_TEST_IS_DIR))
                 add_path_rw(rfd, fs_rw, dl_dir);
         }
-        g_free(dl_dir);
     }
 
     static const char *const home_ro_subdirs[] = {
@@ -883,6 +907,18 @@ seccomp_deny_exec(scmp_filter_ctx ctx, const char *name, gboolean anonymous_only
         (void)seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EACCES), nr, 1,
                                SCMP_A2(SCMP_CMP_MASKED_EQ, PROT_EXEC, PROT_EXEC));
 }
+
+/* Executable shared mappings are never needed (libraries are mapped
+ * private) and would let writes through another mapping become code. */
+static void
+seccomp_deny_exec_shared(scmp_filter_ctx ctx, const char *name)
+{
+    int nr = seccomp_syscall_resolve_name(name);
+    if (nr == __NR_SCMP_ERROR) return;
+    (void)seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EACCES), nr, 2,
+                           SCMP_A2(SCMP_CMP_MASKED_EQ, PROT_EXEC, PROT_EXEC),
+                           SCMP_A3(SCMP_CMP_MASKED_EQ, MAP_SHARED, MAP_SHARED));
+}
 #endif
 
 void
@@ -899,10 +935,23 @@ ns_security_deny_exec_memory(gboolean whole_process)
         (void)seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
 #ifndef __i386__
     seccomp_deny_exec(ctx, "mmap", TRUE);
+    seccomp_deny_exec_shared(ctx, "mmap");
 #endif
     seccomp_deny_exec(ctx, "mmap2", TRUE);
+    seccomp_deny_exec_shared(ctx, "mmap2");
     seccomp_deny_exec(ctx, "mprotect", FALSE);
     seccomp_deny_exec(ctx, "pkey_mprotect", FALSE);
+    /* Writable-then-executable memory can also be had from an anonymous
+     * file mapped twice; content threads have no use for memfds or for
+     * re-arranging file mappings. */
+    static const char *const no_memfd[] = {
+        "memfd_create", "memfd_secret", "remap_file_pages",
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(no_memfd); i++) {
+        int nr = seccomp_syscall_resolve_name(no_memfd[i]);
+        if (nr != __NR_SCMP_ERROR)
+            (void)seccomp_rule_add(ctx, SCMP_ACT_ERRNO(ENOSYS), nr, 0);
+    }
     int rc = seccomp_load(ctx);
     if (rc != 0)
         g_info("seccomp: executable-memory filter not loaded: %s",
@@ -964,8 +1013,7 @@ ns_security_sandbox_init(const char *self_exe)
     sb_append_subpath(prof, cache);
     g_free(cache);
 
-    const char *dl = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
-    sb_append_subpath(prof, dl);
+    sb_append_subpath(prof, ns_security_downloads_dir());
 
     if (ns_extra_writable_dirs) {
         for (guint i = 0; i < ns_extra_writable_dirs->len; i++)
