@@ -218,7 +218,6 @@ void           ns_pango_layout_run_get_css_extents  (NsPangoLayoutRun           
 NS_PANGO_AVAILABLE_IN_ALL
 int            ns_pango_layout_get_spacing          (NsPangoLayout                *layout);
 NS_PANGO_AVAILABLE_IN_1_44
-NS_PANGO_AVAILABLE_IN_1_44
 void           ns_pango_layout_set_line_spacing     (NsPangoLayout                *layout,
                                                   float                       factor);
 NS_PANGO_AVAILABLE_IN_1_44
