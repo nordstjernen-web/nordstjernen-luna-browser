@@ -16,37 +16,65 @@ TOOLS="$ROOT/dist/appimage-tools"
 
 mkdir -p "$ROOT/dist" "$TOOLS"
 
-LINUXDEPLOY="$TOOLS/linuxdeploy-${ARCH}.AppImage"
+# Build tools are pinned to fixed releases and verified by SHA-256 before
+# they are made executable; never run whatever a moving "continuous" tag
+# or branch currently serves.
+LINUXDEPLOY_TAG=1-alpha-20251107-1
+GTKPLUGIN_COMMIT=7a3fbc31a9e5075073ff8790f26effbac5f84453
+APPIMAGETOOL_TAG=1.9.1
+RUNTIME_TAG=20251108
+
+case "$ARCH" in
+    x86_64)
+        LINUXDEPLOY_SHA256=c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+        APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+        RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+        ;;
+    aarch64)
+        LINUXDEPLOY_SHA256=620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff
+        APPIMAGETOOL_SHA256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+        RUNTIME_SHA256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+        ;;
+    *)
+        echo "pack-appimage: no pinned tool checksums for $ARCH" >&2
+        exit 1
+        ;;
+esac
+GTKPLUGIN_SHA256=b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171
+
+LINUXDEPLOY="$TOOLS/linuxdeploy-${LINUXDEPLOY_TAG}-${ARCH}.AppImage"
 GTKPLUGIN="$TOOLS/linuxdeploy-plugin-gtk.sh"
-APPIMAGETOOL="$TOOLS/appimagetool-${ARCH}.AppImage"
-RUNTIME="$TOOLS/runtime-${ARCH}"
+APPIMAGETOOL="$TOOLS/appimagetool-${APPIMAGETOOL_TAG}-${ARCH}.AppImage"
+RUNTIME="$TOOLS/runtime-${RUNTIME_TAG}-${ARCH}"
 
-if [ ! -x "$LINUXDEPLOY" ]; then
-    echo "Fetching linuxdeploy..."
-    curl -L --fail -o "$LINUXDEPLOY" \
-        "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage"
-    chmod +x "$LINUXDEPLOY"
-fi
+# fetch_verified <dest> <sha256> <url>: download to a temporary name and
+# move it into place only if the checksum matches; an existing file is
+# re-verified so a tampered cache is not reused.
+fetch_verified() {
+    local dest=$1 sum=$2 url=$3
+    if [ -s "$dest" ] && echo "$sum  $dest" | sha256sum -c --status; then
+        return 0
+    fi
+    rm -f "$dest"
+    echo "Fetching $(basename "$dest")..."
+    curl -L --fail --proto '=https' --tlsv1.2 -o "$dest.part" "$url"
+    if ! echo "$sum  $dest.part" | sha256sum -c --status; then
+        echo "pack-appimage: checksum mismatch for $url" >&2
+        rm -f "$dest.part"
+        exit 1
+    fi
+    mv "$dest.part" "$dest"
+}
 
-if [ ! -x "$GTKPLUGIN" ]; then
-    echo "Fetching linuxdeploy-plugin-gtk..."
-    curl -L --fail -o "$GTKPLUGIN" \
-        "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
-    chmod +x "$GTKPLUGIN"
-fi
-
-if [ ! -x "$APPIMAGETOOL" ]; then
-    echo "Fetching appimagetool..."
-    curl -L --fail -o "$APPIMAGETOOL" \
-        "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
-    chmod +x "$APPIMAGETOOL"
-fi
-
-if [ ! -s "$RUNTIME" ]; then
-    echo "Fetching type2-runtime..."
-    curl -L --fail -o "$RUNTIME" \
-        "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-${ARCH}"
-fi
+fetch_verified "$LINUXDEPLOY" "$LINUXDEPLOY_SHA256" \
+    "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_TAG}/linuxdeploy-${ARCH}.AppImage"
+fetch_verified "$GTKPLUGIN" "$GTKPLUGIN_SHA256" \
+    "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/${GTKPLUGIN_COMMIT}/linuxdeploy-plugin-gtk.sh"
+fetch_verified "$APPIMAGETOOL" "$APPIMAGETOOL_SHA256" \
+    "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_TAG}/appimagetool-${ARCH}.AppImage"
+fetch_verified "$RUNTIME" "$RUNTIME_SHA256" \
+    "https://github.com/AppImage/type2-runtime/releases/download/${RUNTIME_TAG}/runtime-${ARCH}"
+chmod +x "$LINUXDEPLOY" "$GTKPLUGIN" "$APPIMAGETOOL"
 
 if [ ! -d "$BUILDDIR" ]; then
     meson setup "$BUILDDIR" \
