@@ -58,6 +58,7 @@ typedef struct {
 } ns_ext;
 
 static GPtrArray  *g_exts;
+static char *ns_ext_default_dir(void);
 static GHashTable *g_blocked_hosts;
 static GHashTable *g_private_storage;
 
@@ -1028,13 +1029,34 @@ ns_ext_do_init(void)
             if (**p) ns_ext_scan_root(*p, ctx);
         g_strfreev(parts);
     }
-    g_autofree char *def = g_build_filename(g_get_user_data_dir(),
-                                            NS_APP_DIR_NAME,
-                                            "extensions", NULL);
+    g_autofree char *def = ns_ext_default_dir();
     ns_ext_scan_root(def, ctx);
 
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
+}
+
+/* Extensions run code in every page, so their directory lives outside the
+ * profile directory (~/.local/share/northstar), which the sandboxed
+ * browser can write: a compromised content process must not be able to
+ * install a persistent extension. */
+static char *
+ns_ext_default_dir(void)
+{
+    return g_build_filename(g_get_user_data_dir(),
+                            NS_APP_DIR_NAME "-extensions", NULL);
+}
+
+void
+ns_ext_migrate_default_dir(void)
+{
+    g_autofree char *dir = ns_ext_default_dir();
+    g_autofree char *legacy = g_build_filename(g_get_user_data_dir(),
+                                               NS_APP_DIR_NAME, "extensions",
+                                               NULL);
+    if (g_file_test(legacy, G_FILE_TEST_IS_DIR) &&
+        !g_file_test(dir, G_FILE_TEST_EXISTS))
+        (void)g_rename(legacy, dir);
 }
 
 static void

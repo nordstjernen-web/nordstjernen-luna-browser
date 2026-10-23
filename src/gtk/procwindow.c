@@ -702,13 +702,7 @@ static void pw_start_download(ProcWindow *pw, const char *url,
 static const char *
 downloads_dir(void)
 {
-    const char *d = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
-    if (d && *d)
-        return d;
-    static char *fallback;
-    if (!fallback)
-        fallback = g_build_filename(g_get_home_dir(), "Downloads", NULL);
-    return fallback;
+    return ns_security_downloads_dir();
 }
 
 static void
@@ -780,6 +774,7 @@ static gpointer
 download_worker(gpointer ud)
 {
     NsDownload *d = ud;
+    ns_security_deny_exec_memory(FALSE);
     GError *err = NULL;
     ns_response *resp = ns_net_fetch_blocking(d->url, NULL, &err);
     if (resp && !resp->error && resp->body &&
