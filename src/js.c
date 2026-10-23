@@ -8599,7 +8599,7 @@ ns_on_js_fetch_deliver(ns_js_fetch_state *st, ns_response *resp, GError *err)
                 : ns_url_same_origin(origin_url, resp->final_url)
                     ? "basic" : "cors"));
         JS_SetPropertyStr(st->ctx, r, "redirected",
-            JS_NewBool(st->ctx, resp->redirect_count > 0));
+            JS_NewBool(st->ctx, allow && resp->redirect_count > 0));
         JS_SetPropertyStr(st->ctx, r, "redirectCount",
             JS_NewInt32(st->ctx, allow ? resp->redirect_count : 0));
         JS_SetPropertyStr(st->ctx, r, "bodyUsed", JS_FALSE);
@@ -8614,8 +8614,8 @@ ns_on_js_fetch_deliver(ns_js_fetch_state *st, ns_response *resp, GError *err)
                 (const uint8_t *)body_data, body_data_len));
         JSValue header_init = JS_NewObject(st->ctx);
         if (allow) {
-            gboolean same_origin = ns_url_same_origin(
-                st->js ? st->js->current_url : NULL, resp->final_url);
+            gboolean same_origin = ns_url_same_origin(origin_url,
+                                                      resp->final_url);
             g_autofree char *exposed =
                 ns_js_exposed_response_headers(resp, same_origin);
             ns_headers_init_add_raw(st->ctx, header_init, exposed);
@@ -11483,6 +11483,31 @@ ns_window_message_channel(JSContext *ctx, JSValueConst this_val,
     return mc;
 }
 
+static const ns_node *ns_js_frame_of_window(ns_js *js, JSValueConst window);
+static JSValue ns_iframe_cross_origin_window(JSContext *ctx, JSValue target);
+
+/* A frame's URL and origin as the browser loaded it.  A frame's script
+ * can rewrite its own location object (location.href in a frame realm
+ * only updates the realm's copy, pushState, redefining location), so
+ * that must never be what origin decisions are made from. */
+static char *
+ns_frame_recorded_url(const ns_node *frame)
+{
+    const char *fu = ns_element_get_attr(frame, "data-nd-frame-url");
+    if (ns_element_get_attr(frame, "data-nd-frame-opaque") || !fu || !*fu)
+        return g_strdup("about:blank");
+    return g_strdup(fu);
+}
+
+static char *
+ns_frame_recorded_origin(const ns_node *frame)
+{
+    if (ns_element_get_attr(frame, "data-nd-frame-opaque")) return g_strdup("null");
+    const char *fu = ns_element_get_attr(frame, "data-nd-frame-url");
+    char *o = fu ? ns_url_origin_from(fu) : NULL;
+    return o ? o : g_strdup("null");
+}
+
 static char *
 ns_window_origin_of(JSContext *ctx, JSValueConst win)
 {
@@ -11496,6 +11521,8 @@ ns_window_origin_of(JSContext *ctx, JSValueConst win)
         JS_FreeValue(main_ctx, main_global);
         if (is_main) return g_strdup(js->document_origin);
     }
+    const ns_node *frame = js ? ns_js_frame_of_window(js, win) : NULL;
+    if (frame) return ns_frame_recorded_origin(frame);
     JSValue loc = JS_GetPropertyStr(ctx, win, "location");
     char *out = NULL;
     if (JS_IsObject(loc)) {
@@ -11516,6 +11543,9 @@ ns_window_origin_of(JSContext *ctx, JSValueConst win)
 static char *
 ns_window_url_of(JSContext *ctx, JSValueConst win)
 {
+    ns_js *js = js_from_ctx(ctx);
+    const ns_node *frame = js ? ns_js_frame_of_window(js, win) : NULL;
+    if (frame) return ns_frame_recorded_url(frame);
     JSValue loc = JS_GetPropertyStr(ctx, win, "location");
     char *out = NULL;
     if (JS_IsObject(loc)) {
@@ -11605,6 +11635,23 @@ ns_message_source_seen_by(ns_js *js, JSContext *rctx, JSValueConst receiver,
             return parent;
         }
         JS_FreeValue(rctx, parent);
+    }
+    if (!from_page && !to_page) {
+        /* Frame to frame: a cross-origin receiver only gets the sender's
+         * cross-origin window proxy, never its raw global (which holds
+         * its real document).  A source that is no known frame window
+         * (something the sender planted) is dropped. */
+        const ns_node *sf = ns_js_frame_of_window(js, source);
+        const ns_node *rf = ns_js_frame_of_window(js, receiver);
+        if (!sf || !rf) {
+            JS_FreeValue(rctx, source);
+            return JS_NULL;
+        }
+        g_autofree char *so = ns_frame_recorded_origin(sf);
+        g_autofree char *ro = ns_frame_recorded_origin(rf);
+        if (sf != rf &&
+            (strcmp(so, "null") == 0 || g_ascii_strcasecmp(so, ro) != 0))
+            return ns_iframe_cross_origin_window(rctx, source);
     }
     return source;
 }
@@ -19039,12 +19086,12 @@ ns_js_blob_store(ns_js *js, const char *url, ns_blob_entry *e)
     g_mutex_unlock(&g_blob_lock);
 }
 
-/* Origin a blob URL created or read by the calling script belongs to:
- * the calling frame's origin, not the embedder's, so a cross-origin frame
- * cannot mint blob: URLs that load as its embedder.  Opaque origins are
- * all "null". */
+/* Web origin of the calling script: the calling frame's origin, not the
+ * embedder's (so a cross-origin frame cannot mint blob: URLs that load as
+ * its embedder, or send its embedder's Origin).  Opaque origins are all
+ * "null". */
 static char *
-ns_js_blob_requester_origin(ns_js *js, JSContext *ctx)
+ns_js_caller_web_origin(ns_js *js, JSContext *ctx)
 {
     char *o = ns_js_caller_origin(js, ctx ? ctx : js->ctx);
     if (!o || g_str_has_prefix(o, "null:")) {
@@ -19060,7 +19107,7 @@ ns_window_url_create_object(JSContext *ctx, JSValueConst this_val,
 {
     (void)this_val;
     ns_js *js = js_from_ctx(ctx);
-    char *origin = js ? ns_js_blob_requester_origin(js, ctx) : g_strdup("null");
+    char *origin = js ? ns_js_caller_web_origin(js, ctx) : g_strdup("null");
     char *uuid = g_uuid_string_random();
     char *url = g_strdup_printf("blob:%s/%s", origin, uuid);
     g_free(origin);
@@ -19131,7 +19178,7 @@ ns_js_blob_url_lookup(ns_js *js, JSContext *ctx, const char *url,
     const char *slash = strrchr(url + 5, '/');
     if (!slash) return NULL;
     g_autofree char *label = g_strndup(url + 5, (gsize)(slash - (url + 5)));
-    g_autofree char *requester = ns_js_blob_requester_origin(js, ctx);
+    g_autofree char *requester = ns_js_caller_web_origin(js, ctx);
     if (g_ascii_strcasecmp(label, requester) != 0) return NULL;
     GBytes *bytes = NULL;
     g_mutex_lock(&g_blob_lock);
@@ -20505,15 +20552,7 @@ ns_window_websocket_ctor(JSContext *ctx, JSValueConst this_val,
         .on_error  = ns_js_ws_on_error,
         .busy      = ns_js_ws_busy,
     };
-    char *origin = NULL;
-    if (js && js->current_url &&
-        (g_ascii_strncasecmp(js->current_url, "http://",  7) == 0 ||
-         g_ascii_strncasecmp(js->current_url, "https://", 8) == 0))
-        origin = ns_url_origin_from(js->current_url);
-    if (!origin || !*origin) {
-        g_free(origin);
-        origin = g_strdup("null");
-    }
+    char *origin = js ? ns_js_caller_web_origin(js, ctx) : g_strdup("null");
     const char *const *protov = protos_terminated
         ? (const char *const *)protos_terminated->pdata : NULL;
     s->ws = ns_ws_new(target, origin, protov, &cbs, s);
@@ -20674,11 +20713,7 @@ ns_window_eventsource_ctor(JSContext *ctx, JSValueConst this_val,
     s->wrapper = obj;
     JS_SetOpaque(obj, s);
 
-    char *origin = NULL;
-    if (js && js->current_url &&
-        (g_ascii_strncasecmp(js->current_url, "http://", 7) == 0 ||
-         g_ascii_strncasecmp(js->current_url, "https://", 8) == 0))
-        origin = ns_url_origin_from(js->current_url);
+    char *origin = js ? ns_js_caller_web_origin(js, ctx) : NULL;
     s->origin = ns_url_origin_from(target);
 
     JS_SetPropertyStr(ctx, obj, "url",             JS_NewString(ctx, target));
@@ -43677,6 +43712,14 @@ ns_iframe_is_cross_origin(ns_js *js, const ns_node *iframe)
     }
     const char *frame_url = ns_element_get_attr(iframe, "data-nd-frame-url");
     if (!frame_url || !*frame_url) return FALSE;
+    /* An iframe in the page itself is compared with the page's origin;
+     * js->current_url is the running frame's URL while frame scripts run
+     * and must not decide this. */
+    gboolean nested = ns_js_node_frame(iframe->parent) != NULL;
+    if (!nested && js && js->document_origin) {
+        g_autofree char *fo = ns_url_origin_from(frame_url);
+        return !fo || g_ascii_strcasecmp(fo, js->document_origin) != 0;
+    }
     return !ns_js_urls_same_origin(frame_url, ns_js_node_doc_base(js, iframe));
 }
 
@@ -52162,11 +52205,22 @@ ns_document_set_title(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* The page's cookie accessor sits on the shared Document.prototype, so a
+ * frame can call it with any receiver.  Only the page's own document may
+ * be the receiver, and only the page or a same-origin frame the caller. */
 static gboolean
-ns_document_is_other_document(ns_js *js, JSValueConst this_val)
+ns_document_cookie_caller_allowed(ns_js *js, JSContext *ctx,
+                                  JSValueConst this_val)
 {
     const ns_node *node = ns_unwrap_element(this_val);
-    return js && node && js->main_document && node != js->main_document;
+    if (!node || (js->main_document && node != js->main_document))
+        return FALSE;
+    JSContext *main_ctx = js->main_realm_ctx ? js->main_realm_ctx : js->ctx;
+    JSContext *caller = JS_GetCallerRealmOrNull(ctx);
+    if (!caller || caller == main_ctx) return TRUE;
+    if (!js->document_origin) return FALSE;
+    g_autofree char *co = ns_js_caller_origin(js, ctx);
+    return co && g_ascii_strcasecmp(co, js->document_origin) == 0;
 }
 
 static const char ns_element_shapes_src[] =
@@ -52568,7 +52622,7 @@ static JSValue
 ns_document_get_cookie(JSContext *ctx, JSValueConst this_val)
 {
     ns_js *js = js_from_ctx(ctx);
-    if (!js || ns_document_is_other_document(js, this_val) ||
+    if (!js || !ns_document_cookie_caller_allowed(js, ctx, this_val) ||
         !ns_js_current_url_is_main_origin(js))
         return JS_NewString(ctx, "");
     ns_document_refresh_cookie(js);
@@ -52685,7 +52739,7 @@ static JSValue
 ns_document_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
     ns_js *js = js_from_ctx(ctx);
-    if (!js || ns_document_is_other_document(js, this_val) ||
+    if (!js || !ns_document_cookie_caller_allowed(js, ctx, this_val) ||
         !ns_js_current_url_is_main_origin(js))
         return JS_UNDEFINED;
     const char *s = JS_ToCString(ctx, val);
