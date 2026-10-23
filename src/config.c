@@ -268,16 +268,43 @@ static const struct { const char *env; const char *key; } env_value[] = {
     { "NS_GSK_RENDERER","gsk_renderer"},
 };
 
+/* The file's own value of each setting an environment variable
+ * overrides (key -> value as saved), so saving the settings writes those
+ * back rather than persisting the override. */
+static GHashTable *g_env_overridden;
+
+static char *cfg_field_format(const ns_config *c, const char *key);
+
+static void
+note_env_override(const ns_config *c, const char *key)
+{
+    if (!g_env_overridden)
+        g_env_overridden = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                                 g_free, g_free);
+    if (g_hash_table_contains(g_env_overridden, key)) return;
+    char *v = cfg_field_format(c, key);
+    if (v) g_hash_table_insert(g_env_overridden, g_strdup(key), v);
+}
+
 static void
 apply_env(ns_config *c)
 {
     for (gsize i = 0; i < G_N_ELEMENTS(env_disable); i++)
-        if (ns_env_flag(env_disable[i].env)) apply_pair(c, env_disable[i].key, "false");
+        if (ns_env_flag(env_disable[i].env)) {
+            note_env_override(c, env_disable[i].key);
+            apply_pair(c, env_disable[i].key, "false");
+        }
     for (gsize i = 0; i < G_N_ELEMENTS(env_value); i++) {
         const char *v = g_getenv(env_value[i].env);
-        if (v && *v) apply_pair(c, env_value[i].key, v);
+        if (v && *v) {
+            note_env_override(c, env_value[i].key);
+            apply_pair(c, env_value[i].key, v);
+        }
     }
-    if (ns_env_flag("NS_PRIVATE")) c->private_mode = TRUE;
+    if (ns_env_flag("NS_PRIVATE")) {
+        note_env_override(c, "private_mode");
+        c->private_mode = TRUE;
+    }
 }
 
 void
@@ -392,6 +419,39 @@ reduced_motion_name(ns_reduced_motion_pref p)
     return reduced_motion_names[p];
 }
 
+/* The value of setting key as the config file spells it. */
+static char *
+cfg_field_format(const ns_config *c, const char *key)
+{
+    for (gsize i = 0; i < G_N_ELEMENTS(cfg_fields); i++) {
+        const cfg_field *f = &cfg_fields[i];
+        if (strcmp(f->key, key) != 0) continue;
+        const void *slot = (const char *)c + f->offset;
+        switch (f->kind) {
+        case CFG_STRING: {
+            const char *v = *(const char *const *)slot;
+            GString *out = g_string_new(NULL);
+            for (const char *r = v ? v : ""; *r; r++)
+                if (*r != '\r' && *r != '\n') g_string_append_c(out, *r);
+            return g_string_free(out, FALSE);
+        }
+        case CFG_BOOL:
+            return g_strdup(*(const gboolean *)slot ? "true" : "false");
+        case CFG_INT:
+            return g_strdup_printf("%d", *(const int *)slot);
+        case CFG_REFERER:
+            return g_strdup(referer_policy_name(*(const ns_referer_policy *)slot));
+        case CFG_COOKIE:
+            return g_strdup(cookie_policy_name(*(const ns_cookie_policy *)slot));
+        case CFG_COLOR_SCHEME:
+            return g_strdup(color_scheme_name(*(const ns_color_scheme_pref *)slot));
+        case CFG_REDUCED_MOTION:
+            return g_strdup(reduced_motion_name(*(const ns_reduced_motion_pref *)slot));
+        }
+    }
+    return NULL;
+}
+
 gboolean
 ns_config_save(GError **error)
 {
@@ -414,42 +474,12 @@ ns_config_save(GError **error)
     GString *s = g_string_new(NULL);
     g_string_append(s, "# northstar configuration\n");
     for (gsize i = 0; i < G_N_ELEMENTS(cfg_fields); i++) {
-        const cfg_field *f = &cfg_fields[i];
-        const void *slot = (const char *)c + f->offset;
-        switch (f->kind) {
-        case CFG_STRING: {
-            const char *v = *(const char *const *)slot;
-            g_string_append_printf(s, "%s = ", f->key);
-            for (const char *r = v ? v : ""; *r; r++)
-                if (*r != '\r' && *r != '\n') g_string_append_c(s, *r);
-            g_string_append_c(s, '\n');
-            break;
-        }
-        case CFG_BOOL:
-            g_string_append_printf(s, "%s = %s\n", f->key,
-                                   *(const gboolean *)slot ? "true" : "false");
-            break;
-        case CFG_INT:
-            g_string_append_printf(s, "%s = %d\n", f->key,
-                                   *(const int *)slot);
-            break;
-        case CFG_REFERER:
-            g_string_append_printf(s, "%s = %s\n", f->key,
-                referer_policy_name(*(const ns_referer_policy *)slot));
-            break;
-        case CFG_COOKIE:
-            g_string_append_printf(s, "%s = %s\n", f->key,
-                cookie_policy_name(*(const ns_cookie_policy *)slot));
-            break;
-        case CFG_COLOR_SCHEME:
-            g_string_append_printf(s, "%s = %s\n", f->key,
-                color_scheme_name(*(const ns_color_scheme_pref *)slot));
-            break;
-        case CFG_REDUCED_MOTION:
-            g_string_append_printf(s, "%s = %s\n", f->key,
-                reduced_motion_name(*(const ns_reduced_motion_pref *)slot));
-            break;
-        }
+        const char *key = cfg_fields[i].key;
+        const char *file_value = g_env_overridden
+            ? g_hash_table_lookup(g_env_overridden, key) : NULL;
+        g_autofree char *v = file_value ? NULL : cfg_field_format(c, key);
+        g_string_append_printf(s, "%s = %s\n", key,
+                               file_value ? file_value : (v ? v : ""));
     }
     gboolean ok = g_file_set_contents(g_cfg_path, s->str, (gssize)s->len, error);
     if (ok) g_chmod(g_cfg_path, 0600);

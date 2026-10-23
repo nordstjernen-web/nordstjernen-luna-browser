@@ -9757,20 +9757,37 @@ ns_returns_resolved_empty_array(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, JS_NewArray(ctx));
 }
 
-static JSValue
-ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* Whether a Permissions-Policy style allow attribute ("camera; fullscreen
+ * 'none'", "camera https://a.example") delegates the feature: a directive
+ * naming it whose allowlist is not 'none'. */
+static gboolean
+ns_allow_attr_delegates(const char *allow, const char *feature)
 {
-    (void)this_val; (void)argc; (void)argv;
-    ns_js *js = js_from_ctx(ctx);
-    /* The page's camera decision covers its own documents.  A frame only
-     * shares it when every frame between it and the page is same-origin
-     * with the page or delegates the camera (allow="camera"); sandboxed
-     * frames never do. */
+    if (!allow) return FALSE;
+    gboolean granted = FALSE;
+    g_auto(GStrv) dirs = g_strsplit(allow, ";", -1);
+    for (char **d = dirs; *d && !granted; d++) {
+        g_auto(GStrv) toks = g_strsplit_set(g_strstrip(*d), " \t", -1);
+        if (!toks[0] || g_ascii_strcasecmp(toks[0], feature) != 0) continue;
+        granted = TRUE;
+        for (char **t = toks + 1; *t; t++)
+            if (g_ascii_strcasecmp(*t, "'none'") == 0) granted = FALSE;
+    }
+    return granted;
+}
+
+/* The page's camera decision covers its own documents.  A frame only
+ * shares it when every frame between it and the page is same-origin with
+ * the page or delegates the camera (allow="camera"); sandboxed frames, and
+ * callers the engine cannot place, never do. */
+static gboolean
+ns_cam_caller_may_use(ns_js *js, JSContext *ctx)
+{
+    if (!js) return FALSE;
     JSContext *caller = JS_GetCallerRealmOrNull(ctx);
-    if (js && ns_js_caller_unknown(js, caller))
-        return JS_NewString(ctx, "denied");
+    if (ns_js_caller_unknown(js, caller)) return FALSE;
     const ns_node *frame = NULL;
-    if (js && caller && js->frame_contexts) {
+    if (caller && js->frame_contexts) {
         GHashTableIter it;
         gpointer iframe, fctx;
         g_hash_table_iter_init(&it, js->frame_contexts);
@@ -9778,16 +9795,25 @@ ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
             if (fctx == caller) { frame = iframe; break; }
     }
     for (const ns_node *f = frame; f; f = ns_js_node_frame(f->parent)) {
-        if (ns_element_get_attr(f, "data-nd-frame-opaque"))
-            return JS_NewString(ctx, "denied");
+        if (ns_element_get_attr(f, "data-nd-frame-opaque")) return FALSE;
         const char *fu = ns_element_get_attr(f, "data-nd-frame-url");
         g_autofree char *fo = fu ? ns_url_origin_from(fu) : NULL;
         gboolean same = fo && js->document_origin &&
                         g_ascii_strcasecmp(fo, js->document_origin) == 0;
-        const char *allow = ns_element_get_attr(f, "allow");
-        if (!same && !(allow && strstr(allow, "camera")))
-            return JS_NewString(ctx, "denied");
+        if (!same &&
+            !ns_allow_attr_delegates(ns_element_get_attr(f, "allow"), "camera"))
+            return FALSE;
     }
+    return TRUE;
+}
+
+static JSValue
+ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    ns_js *js = js_from_ctx(ctx);
+    if (!ns_cam_caller_may_use(js, ctx))
+        return JS_NewString(ctx, "denied");
     int d = ns_camera_permission(js);
     if (d == 1)
         return JS_NewString(ctx, "granted");
@@ -9840,6 +9866,10 @@ static JSValue
 ns_cam_label(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
+    /* Device names are only for a caller that has been granted the camera. */
+    ns_js *js = js_from_ctx(ctx);
+    if (!ns_cam_caller_may_use(js, ctx) || !ns_camera_permission_granted(js))
+        return JS_NewString(ctx, "");
     GPtrArray *list = ns_camera_enumerate();
     const char *label = NULL;
     if (list->len > 0)
@@ -9855,11 +9885,28 @@ static JSValue
 ns_cam_enumerate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
+    /* Before the camera is granted a page learns only that one exists:
+     * a single entry with no id and no label, as other browsers do. */
+    ns_js *js = js_from_ctx(ctx);
+    gboolean granted = ns_cam_caller_may_use(js, ctx) &&
+                       ns_camera_permission_granted(js);
     GPtrArray *list = ns_camera_enumerate();
     JSValue arr = JS_NewArray(ctx);
     uint32_t n = 0;
+    if (!granted && list->len > 0) {
+        JSValue dev = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, dev, "deviceId", JS_NewString(ctx, ""));
+        JS_SetPropertyStr(ctx, dev, "groupId", JS_NewString(ctx, ""));
+        JS_SetPropertyStr(ctx, dev, "kind", JS_NewString(ctx, "videoinput"));
+        JS_SetPropertyStr(ctx, dev, "label", JS_NewString(ctx, ""));
+        JS_SetPropertyUint32(ctx, arr, n++, dev);
+    }
     for (guint i = 0; i < list->len; i++) {
         ns_camera_info *info = g_ptr_array_index(list, i);
+        if (!granted) {
+            ns_camera_info_free(info);
+            continue;
+        }
         JSValue dev = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, dev, "deviceId", JS_NewString(ctx, info->device));
         JS_SetPropertyStr(ctx, dev, "groupId", JS_NewString(ctx, info->device));
@@ -19323,8 +19370,12 @@ ns_window_url_revoke_object(JSContext *ctx, JSValueConst this_val,
     if (js && js->blob_urls && argc >= 1) {
         const char *url = JS_ToCString(ctx, argv[0]);
         if (url) {
+            /* Only the realm that created a blob URL may revoke it. */
+            g_autofree char *caller = ns_js_caller_origin(js, ctx);
             g_mutex_lock(&g_blob_lock);
-            g_hash_table_remove(js->blob_urls, url);
+            ns_blob_entry *e = g_hash_table_lookup(js->blob_urls, url);
+            if (e && g_strcmp0(e->creator, caller) == 0)
+                g_hash_table_remove(js->blob_urls, url);
             g_mutex_unlock(&g_blob_lock);
             JS_FreeCString(ctx, url);
         }
@@ -23316,6 +23367,12 @@ ns_sw_start_registration(JSContext *ctx, JSValueConst container, ns_js *js,
     host->url = g_strdup(abs_url);
     host->base_url = g_strdup(js->current_url ? js->current_url : abs_url);
     host->name = g_strdup("");
+    /* The worker's own response policy is not read; it runs under that of
+     * the document that registered it rather than under none at all. */
+    {
+        JSContext *rc = JS_GetCallerRealmOrNull(ctx);
+        host->csp = ns_csp_copy(ns_js_realm_csp(js, rc ? rc : ctx));
+    }
     host->is_service_worker = TRUE;
     g_atomic_int_set(&host->sw_controls_client, !fire_update);
     host->scope = g_strdup(scope);
@@ -57822,15 +57879,19 @@ ns_js_apply_meta_csp(ns_js *js, const ns_node *doc)
     ns_js_frame_collect_meta_csp(js, doc, 0);
 }
 
+/* A frame document's policy: its response header and its own <meta>
+ * policies, on top of the embedder's policy for documents that inherit it
+ * (srcdoc, about:blank and blob: frames). */
 static void
-ns_js_frame_register_csp(ns_js *js, ns_node *content_doc, const char *header)
+ns_js_frame_register_csp(ns_js *js, ns_node *content_doc, const char *header,
+                         const ns_csp *inherited)
 {
     if (!js || !content_doc) return;
     if (!js->doc_csp)
         js->doc_csp = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
                                             (GDestroyNotify)ns_csp_free);
     ns_csp *outer = js->csp;
-    js->csp = NULL;
+    js->csp = inherited ? ns_csp_copy(inherited) : NULL;
     ns_js_add_csp_header(js, header);
     ns_js_apply_meta_csp(js, content_doc);
     ns_csp *frame_csp = js->csp;
@@ -57877,6 +57938,14 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
     } else if (src && *src && g_ascii_strncasecmp(src, "about:", 6) != 0 &&
                g_ascii_strncasecmp(src, "javascript:", 11) != 0) {
         abs_url = ns_url_resolve(origin, src);
+        /* Judge the resolved URL, not the attribute text (" about:..."
+         * resolves to about:): a frame never loads about:, javascript:
+         * or view-source: content from the network. */
+        if (abs_url &&
+            (g_ascii_strncasecmp(abs_url, "about:", 6) == 0 ||
+             g_ascii_strncasecmp(abs_url, "javascript:", 11) == 0 ||
+             g_ascii_strncasecmp(abs_url, "view-source:", 12) == 0))
+            g_clear_pointer(&abs_url, g_free);
         gboolean is_object = ns_node_is_element_named(iframe, "object");
         ns_csp_kind frame_kind = is_object ? NS_CSP_OBJECT : NS_CSP_FRAME;
         const ns_csp *frame_csp = ns_js_csp_for_node(js, iframe);
@@ -58185,8 +58254,14 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
         }
         ns_node *prev_frame_ctx = js->raf_frame_ctx;
         js->raf_frame_ctx = iframe;
-        if (resp)
-            ns_js_frame_register_csp(js, content_doc, resp->csp_header);
+        {
+            gboolean inherits = !resp ||
+                (abs_url && g_ascii_strncasecmp(abs_url, "blob:", 5) == 0);
+            ns_js_frame_register_csp(js, content_doc,
+                                     resp ? resp->csp_header : NULL,
+                                     inherits ? ns_js_csp_for_node(js, iframe)
+                                              : NULL);
+        }
         GHashTable *globals_before = ns_js_snapshot_globals(js);
         js->iframe_load_depth++;
         if (xhtml_suppress_scripts)

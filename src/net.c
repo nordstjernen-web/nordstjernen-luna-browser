@@ -6658,6 +6658,10 @@ ns_net_request_async(const char         *url,
                      gpointer            user_data)
 {
     g_return_if_fail(url != NULL);
+    /* Only a document load may go without a document: anything else with
+     * no top_url would be taken for a navigation, with its file: and
+     * browser about: access. */
+    if (!top_url && dest != NS_FETCH_DEST_DOCUMENT) top_url = "about:blank";
 
     gboolean navigation = g_navigation_fetch;
     g_navigation_fetch = 0;
@@ -6730,6 +6734,7 @@ ns_net_request_blocking(const char        *url,
                         GCancellable      *cancellable,
                         GError           **error)
 {
+    if (!top_url && dest != NS_FETCH_DEST_DOCUMENT) top_url = "about:blank";
     gboolean navigation = g_navigation_fetch;
     g_navigation_fetch = 0;
     gboolean gated = ns_request_is_gated(top_url, extra_headers, dest);

@@ -17,14 +17,12 @@ trap 'rc=$?; echo "nightly-distro-build($DISTRO): FAILED (exit $rc) at line $LIN
 install_apt() {
     apt-get update -qq
     apt-get install -y --no-install-recommends \
-        build-essential clang pkg-config ninja-build cmake git zip unzip curl \
-        python3-pip dpkg-dev patchelf ca-certificates \
+        build-essential clang pkg-config meson ninja-build cmake git zip unzip curl \
+        dpkg-dev patchelf ca-certificates \
         libgtk-4-dev libcurl4-openssl-dev libssl-dev libuchardet-dev libpsl-dev \
         libsqlite3-dev libseccomp-dev libavif-dev libsdl2-dev
     apt-get install -y --no-install-recommends \
         libfontconfig-dev libpango1.0-dev || true
-    pip3 install --break-system-packages --upgrade 'meson>=1.4' \
-        || pip3 install --upgrade 'meson>=1.4'
 }
 
 install_zypper() {

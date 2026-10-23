@@ -1204,10 +1204,10 @@ static gboolean
 browser_allows_navigation_url(ns_browser *b, const char *url)
 {
     if (!url) return TRUE;
-    /* A bare drive path ("c:/Users/..."), which browser_open_common would
-     * turn into a file: URL; only the user may open local paths. */
-    if (g_ascii_isalpha(url[0]) && url[1] == ':' &&
-        (url[2] == '/' || url[2] == '\\'))
+    /* A drive path ("c:/Users/...", or drive-relative "c:x/..."), which
+     * browser_open_common would turn into a file: URL; there is no
+     * one-letter URL scheme, and only the user may open local paths. */
+    if (g_ascii_isalpha(url[0]) && url[1] == ':')
         return b && b->base_url && g_str_has_prefix(b->base_url, "file:");
     /* The "continue anyway" link is only meaningful on the Safe Browsing
      * warning page; from anywhere else it would be a way to navigate with
@@ -1652,7 +1652,15 @@ browser_open_common(const char *url, int viewport_width, double viewport_height,
             g_free(resp->content_type);
             resp->content_type = g_strdup("text/html; charset=utf-8");
             g_free(resp->final_url);
-            resp->final_url = g_strdup(fetch_url);
+            /* A page that was refused a local or browser URL must not get
+             * an error document at that address: its retry link, a
+             * reload or history would then open it with no initiator. */
+            gboolean privileged = g_ascii_strncasecmp(fetch_url, "file:", 5) == 0 ||
+                g_ascii_strncasecmp(fetch_url, "view-source:", 12) == 0 ||
+                (g_ascii_strncasecmp(fetch_url, "about:", 6) == 0 &&
+                 !ns_about_url_is_public(fetch_url));
+            resp->final_url = g_strdup(referrer && *referrer && privileged
+                                       ? "about:blank" : fetch_url);
             if (tls_failure)
                 resp->security = NS_SEC_INVALID;
         }

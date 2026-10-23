@@ -21,6 +21,8 @@ void        ns_camera_info_free(ns_camera_info *info);
 typedef struct ns_js ns_js;
 
 int      ns_camera_permission(ns_js *js);
+/* Whether the camera is granted, without asking the user. */
+gboolean ns_camera_permission_granted(ns_js *js);
 gboolean ns_camera_has_pending_origin(void);
 char    *ns_camera_take_pending_origin(void);
 void     ns_camera_set_decision(const char *origin, int allow);

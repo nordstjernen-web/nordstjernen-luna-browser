@@ -67,8 +67,8 @@ ns_camera_set_decision(const char *origin, int allow)
 
 static int ns_camera_permission_locked(char *origin);
 
-int
-ns_camera_permission(ns_js *js)
+static char *
+ns_camera_key(ns_js *js)
 {
     const char *url = ns_js_current_url(js);
     char *origin = ns_url_origin_from(url);
@@ -79,6 +79,24 @@ ns_camera_permission(ns_js *js)
         gsize n = url ? strcspn(url, "#") : 0;
         origin = n ? g_strndup(url, n) : g_strdup("about:blank");
     }
+    return origin;
+}
+
+gboolean
+ns_camera_permission_granted(ns_js *js)
+{
+    g_autofree char *origin = ns_camera_key(js);
+    g_mutex_lock(&g_camera_lock);
+    gpointer v = g_camera_decisions
+        ? g_hash_table_lookup(g_camera_decisions, origin) : NULL;
+    g_mutex_unlock(&g_camera_lock);
+    return GPOINTER_TO_INT(v) == 1;
+}
+
+int
+ns_camera_permission(ns_js *js)
+{
+    char *origin = ns_camera_key(js);
     g_mutex_lock(&g_camera_lock);
     int r = ns_camera_permission_locked(origin);
     g_mutex_unlock(&g_camera_lock);
