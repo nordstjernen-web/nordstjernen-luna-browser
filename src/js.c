@@ -19068,6 +19068,7 @@ ns_window_close_watcher_ctor(JSContext *ctx, JSValueConst this_val,
 typedef struct {
     GBytes *bytes;
     char   *type;
+    char   *creator;  /* ns_js_caller_origin() of the creating realm */
 } ns_blob_entry;
 
 static void
@@ -19077,6 +19078,7 @@ ns_blob_entry_free(gpointer p)
     if (!e) return;
     if (e->bytes) g_bytes_unref(e->bytes);
     g_free(e->type);
+    g_free(e->creator);
     g_free(e);
 }
 
@@ -19190,7 +19192,11 @@ ns_window_url_create_object(JSContext *ctx, JSValueConst this_val,
     g_free(uuid);
 
     if (js && argc >= 1 && JS_IsObject(argv[0]))
-        ns_js_blob_store(js, url, ns_blob_entry_new_for_object(ctx, argv[0]));
+    {
+        ns_blob_entry *e = ns_blob_entry_new_for_object(ctx, argv[0]);
+        e->creator = ns_js_caller_origin(js, ctx);
+        ns_js_blob_store(js, url, e);
+    }
     JSValue ret = JS_NewString(ctx, url);
     g_free(url);
     return ret;
@@ -19208,14 +19214,20 @@ ns_window_url_update_object(JSContext *ctx, JSValueConst this_val,
     if (!url) return JS_FALSE;
     /* Only replace a blob URL this document created itself. */
     g_mutex_lock(&g_blob_lock);
-    gboolean own = g_str_has_prefix(url, "blob:") && js->blob_urls &&
-                   g_hash_table_contains(js->blob_urls, url);
+    g_autofree char *caller = ns_js_caller_origin(js, ctx);
+    ns_blob_entry *existing = g_str_has_prefix(url, "blob:") && js->blob_urls
+        ? g_hash_table_lookup(js->blob_urls, url) : NULL;
+    gboolean own = existing && g_strcmp0(existing->creator, caller) == 0;
     g_mutex_unlock(&g_blob_lock);
     if (!own) {
         JS_FreeCString(ctx, url);
         return JS_FALSE;
     }
-    ns_js_blob_store(js, url, ns_blob_entry_new_for_object(ctx, argv[1]));
+    {
+        ns_blob_entry *e = ns_blob_entry_new_for_object(ctx, argv[1]);
+        e->creator = ns_js_caller_origin(js, ctx);
+        ns_js_blob_store(js, url, e);
+    }
     ns_media_blob_updated(js, url);
     ns_js_note_layout_unscoped(js, G_STRFUNC);
     JS_FreeCString(ctx, url);
@@ -19260,6 +19272,12 @@ ns_js_blob_url_lookup(ns_js *js, JSContext *ctx, const char *url,
     g_mutex_lock(&g_blob_lock);
     ns_blob_entry *e = js->blob_urls
         ? g_hash_table_lookup(js->blob_urls, url) : NULL;
+    /* Opaque origins all label their blobs "null": tell them apart by the
+     * realm that created the blob, unique to each opaque frame. */
+    if (e && e->creator && g_str_has_prefix(e->creator, "null:")) {
+        g_autofree char *who = ns_js_caller_origin(js, ctx ? ctx : js->ctx);
+        if (g_strcmp0(who, e->creator) != 0) e = NULL;
+    }
     if (e) {
         if (out_type) *out_type = g_strdup(e->type);
         bytes = e->bytes ? g_bytes_ref(e->bytes) : NULL;

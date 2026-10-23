@@ -62,8 +62,16 @@ ns_security_downloads_dir(void)
     gsize home_len = home ? strlen(home) : 0;
     while (home_len > 1 && home[home_len - 1] == G_DIR_SEPARATOR)
         home_len--;
+    /* Not a hidden directory either (~/.config, ~/.ssh, ...): those hold
+     * other programs' configuration, which a writable grant would expose
+     * to the sandboxed process. */
     if (dl && *dl && home && strncmp(dl, home, home_len) == 0 &&
-        dl[home_len] == G_DIR_SEPARATOR && dl[home_len + 1] != '\0')
+        dl[home_len] == G_DIR_SEPARATOR && dl[home_len + 1] != '\0' &&
+        dl[home_len + 1] != '.' && !strstr(dl + home_len, "/.")
+#ifdef G_OS_UNIX
+        && dl_real
+#endif
+        )
         dir = g_strdup(dl);
     else if (home)
         dir = g_build_filename(home, "Downloads", NULL);
