@@ -47,6 +47,26 @@ directive_kind(const char *name)
     return NS_CSP_KIND_COUNT;
 }
 
+/* Keywords ('self', 'none', 'unsafe-inline', ...) and the 'nonce-' /
+ * 'shaNNN-' prefixes are ASCII case-insensitive; the nonce and hash values
+ * themselves are not.  Lower-case the keyword part once at parse time so
+ * every later comparison can stay exact. */
+static char *
+csp_normalize_source(const char *t)
+{
+    char *out = g_strdup(t);
+    if (out[0] != '\'') return out;
+    char *dash = NULL;
+    if (g_ascii_strncasecmp(out, "'nonce-", 7) == 0 ||
+        g_ascii_strncasecmp(out, "'sha256-", 8) == 0 ||
+        g_ascii_strncasecmp(out, "'sha384-", 8) == 0 ||
+        g_ascii_strncasecmp(out, "'sha512-", 8) == 0)
+        dash = strchr(out, '-');
+    for (char *c = out; *c && (!dash || c < dash); c++)
+        *c = g_ascii_tolower(*c);
+    return out;
+}
+
 static ns_csp_policy *
 policy_parse(const char *policy_text)
 {
@@ -65,7 +85,7 @@ policy_parse(const char *policy_text)
         for (int j = 1; toks[j]; j++) {
             char *t = g_strstrip(toks[j]);
             if (!*t) continue;
-            g_ptr_array_add(p->sources[k], g_strdup(t));
+            g_ptr_array_add(p->sources[k], csp_normalize_source(t));
         }
         g_strfreev(toks);
     }
@@ -269,6 +289,7 @@ source_matches(const char *src, const char *resource_url, const char *doc_url)
     else if (path_p)                            host_end = path_p;
 
     gsize host_len = (gsize)(host_end - src_host_start);
+    if (host_len == 0) return FALSE;
     gboolean host_ok;
     if (host_len >= 2 && strncmp(src_host_start, "*.", 2) == 0) {
         const char *suffix = src_host_start + 1;
@@ -461,6 +482,19 @@ policy_inline_script_allowed(const ns_csp_policy *p,
     if (list_has_token(list, "'strict-dynamic'")) return FALSE;
     if (list_has_nonce_or_hash(list)) return FALSE;
     return list_has_token(list, "'unsafe-inline'");
+}
+
+gboolean
+ns_csp_allows_eval(const ns_csp *csp)
+{
+    if (!csp) return TRUE;
+    for (guint i = 0; i < csp->policies->len; i++) {
+        const ns_csp_policy *p = g_ptr_array_index(csp->policies, i);
+        ns_csp_kind k = inline_script_kind(p);
+        if (k == NS_CSP_KIND_COUNT) continue;
+        if (!list_has_token(p->sources[k], "'unsafe-eval'")) return FALSE;
+    }
+    return TRUE;
 }
 
 gboolean

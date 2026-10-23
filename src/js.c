@@ -134,6 +134,7 @@ struct ns_worker_host {
     gint          sw_controls_client;
     gint          sw_claim_clients;
     char         *scope;
+    ns_csp       *csp;
     ns_js_log_cb  log_cb;
     gpointer      log_user_data;
 };
@@ -20517,7 +20518,8 @@ ns_window_eventsource_ctor(JSContext *ctx, JSValueConst this_val,
         .on_error   = ns_js_es_on_error,
         .busy       = ns_js_es_busy,
     };
-    s->es = ns_es_new(target, origin && *origin ? origin : "null", NULL, &cbs, s);
+    s->es = ns_es_new(target, origin && *origin ? origin : "null", NULL,
+                      ns_js_fetch_policy(js, NULL), &cbs, s);
     g_free(origin);
     g_free(target);
 
@@ -20593,6 +20595,7 @@ ns_worker_host_unref(ns_worker_host *host)
     g_free(host->origin);
     g_free(host->inline_script);
     g_free(host->scope);
+    if (host->csp) ns_csp_free(host->csp);
     g_free(host);
 }
 
@@ -21545,10 +21548,25 @@ ns_worker_import_scripts(JSContext *ctx, JSValueConst this_val,
         char *abs_url = ns_url_resolve(js->current_url ? js->current_url : host->url, raw);
         JS_FreeCString(ctx, raw);
         if (!abs_url) return JS_ThrowTypeError(ctx, "importScripts: invalid URL");
+        if (js->csp && !ns_csp_allows(js->csp, NS_CSP_SCRIPT, abs_url,
+                                      js->current_url)) {
+            g_free(abs_url);
+            return JS_ThrowTypeError(ctx,
+                "importScripts: refused by Content-Security-Policy");
+        }
         char *final_url = NULL;
         char *error = NULL;
         char *body = ns_worker_fetch_script(host, abs_url, TRUE, &final_url, &error);
         g_free(abs_url);
+        if (body && final_url && js->csp &&
+            !ns_csp_allows(js->csp, NS_CSP_SCRIPT, final_url,
+                           js->current_url)) {
+            g_free(body);
+            g_free(final_url);
+            g_free(error);
+            return JS_ThrowTypeError(ctx,
+                "importScripts: refused by Content-Security-Policy");
+        }
         if (!body) {
             JSValue ret = JS_ThrowTypeError(ctx, "importScripts: %s",
                                             error ? error : "load failed");
@@ -22277,6 +22295,10 @@ ns_worker_js_new(ns_worker_host *host)
     js->pristine_promise = JS_UNDEFINED;
     js->main_context = host->context;
     js->worker_host = host;
+    /* Dedicated workers are bound by the policy of the document that
+     * created them; without it every fetch/XHR/importScripts from a
+     * worker bypassed CSP. */
+    js->csp = ns_csp_copy(host->csp);
     js->partition_key = (host->origin && *host->origin)
         ? g_strdup(host->origin) : NULL;
     js->log_cb = ns_worker_log_cb;
@@ -22645,6 +22667,7 @@ ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     host->inline_script = inline_script;
     host->inline_script_len = inline_script_len;
     host->is_module = is_module;
+    host->csp = ns_csp_copy(js->csp);
     host->origin = ns_url_origin_from(host->base_url);
     if (!host->origin) host->origin = g_strdup("");
     host->log_cb = js->log_cb;
@@ -22925,6 +22948,24 @@ ns_sw_prepare_document(ns_js *js)
     JS_FreeValue(ctx, global);
 }
 
+/* Secure context for service workers: https, or loopback http. */
+gboolean
+ns_js_eval_allowed(JSContext *ctx)
+{
+    ns_js *js = js_from_ctx(ctx);
+    return !js || ns_csp_allows_eval(js->csp);
+}
+
+static gboolean
+ns_sw_url_is_secure(const char *url)
+{
+    if (!url) return FALSE;
+    if (g_ascii_strncasecmp(url, "https://", 8) == 0) return TRUE;
+    if (g_ascii_strncasecmp(url, "http://", 7) != 0) return FALSE;
+    g_autofree char *host = ns_url_host_from(url);
+    return host && ns_url_host_is_loopback(host);
+}
+
 static JSValue
 ns_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -22953,12 +22994,27 @@ ns_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
         }
         JS_FreeValue(ctx, sv);
     }
-    if (!scope) scope = ns_sw_default_scope(abs_url);
+    if (!ns_sw_url_is_secure(js->current_url) || !ns_sw_url_is_secure(abs_url)) {
+        g_free(abs_url);
+        g_free(scope);
+        return ns_sw_reject(ctx, "SecurityError",
+                            "service workers require a secure context");
+    }
+    g_autofree char *max_scope = ns_sw_default_scope(abs_url);
+    if (!scope) scope = g_strdup(max_scope);
     if (!ns_url_same_origin(abs_url, scope)) {
         g_free(abs_url);
         g_free(scope);
         return ns_sw_reject(ctx, "SecurityError",
                             "scope origin does not match the script URL");
+    }
+    /* Without Service-Worker-Allowed support, a worker may only control
+     * the directory its script lives in (and below). */
+    if (!max_scope || !g_str_has_prefix(scope, max_scope)) {
+        g_free(abs_url);
+        g_free(scope);
+        return ns_sw_reject(ctx, "SecurityError",
+                            "scope is not under the script's directory");
     }
 
     ns_worker_host policy = {0};
@@ -55415,6 +55471,24 @@ ns_js_run_script_element(ns_js *js, ns_node *n, const char *origin)
                     "nosniff blocked: script %s (Content-Type %s)", abs_url,
                     resp->content_type && *resp->content_type ?
                         resp->content_type : "(none)");
+                js->log_cb(line, js->log_user_data);
+                g_free(line);
+            }
+            ns_response_free(resp);
+            g_clear_error(&err);
+            g_free(abs_url);
+            ns_js_dispatch_resource_event(js, n, "error");
+            return;
+        }
+        if (resp && resp->final_url && strcmp(resp->final_url, abs_url) != 0 &&
+            script_csp &&
+            !ns_csp_allows_with_nonce(script_csp, NS_CSP_SCRIPT,
+                                      resp->final_url, origin, nonce,
+                                      parser_inserted)) {
+            if (js->log_cb) {
+                char *line = g_strdup_printf(
+                    "CSP blocked: script %s (redirected from %s)",
+                    resp->final_url, abs_url);
                 js->log_cb(line, js->log_user_data);
                 g_free(line);
             }

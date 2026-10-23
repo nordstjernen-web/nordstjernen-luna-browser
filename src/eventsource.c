@@ -17,6 +17,7 @@
 struct ns_es {
     char     *url;
     char     *origin;
+    ns_fetch_policy *policy;
     char     *last_event_id;
     gint64    reconnect_ms;
     GThread  *thread;
@@ -41,6 +42,7 @@ ns_es_destroy(ns_es *es)
 {
     g_free(es->url);
     g_free(es->origin);
+    ns_fetch_policy_unref(es->policy);
     g_free(es->last_event_id);
     g_mutex_clear(&es->lock);
     g_free(es);
@@ -153,6 +155,7 @@ typedef struct {
     gboolean    opened;
     gboolean    fatal;
     gboolean    is_event_stream;
+    char       *cur_url;
 } ns_es_parse;
 
 static void
@@ -269,6 +272,24 @@ ns_es_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
         }
         p->status = code;
         p->is_event_stream = FALSE;
+    } else if (p->status >= 300 && p->status < 400 && total > 9 &&
+               !g_ascii_strncasecmp(buffer, "Location:", 9)) {
+        /* curl follows the redirect after these headers; vet the target
+         * against mixed-content / connect-src first. */
+        g_autofree char *loc = g_strndup(buffer + 9, total - 9);
+        g_strstrip(loc);
+        char *next = ns_url_resolve(p->cur_url, loc);
+        ns_fetch_verdict v = next
+            ? ns_fetch_policy_check(p->es->policy, NS_FETCH_DEST_CONNECT,
+                                    NULL, next, NULL)
+            : NS_FETCH_BLOCKED_SCHEME;
+        if (!next || ns_fetch_verdict_blocks(v)) {
+            g_free(next);
+            p->fatal = TRUE;
+            return 0;
+        }
+        g_free(p->cur_url);
+        p->cur_url = next;
     } else if (total >= 13 &&
                !g_ascii_strncasecmp(buffer, "Content-Type:", 13)) {
         if (g_strstr_len(buffer, total, "text/event-stream"))
@@ -318,6 +339,7 @@ ns_es_connect_once(ns_es *es, gboolean *opened_out)
     p.line = g_byte_array_new();
     p.data = g_string_new(NULL);
     p.status = 0;
+    p.cur_url = g_strdup(es->url);
 
     curl_easy_setopt(curl, CURLOPT_URL, es->url);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, NS_USER_AGENT);
@@ -370,6 +392,7 @@ ns_es_connect_once(ns_es *es, gboolean *opened_out)
     g_byte_array_free(p.line, TRUE);
     g_string_free(p.data, TRUE);
     g_free(p.event_type);
+    g_free(p.cur_url);
     return !fatal;
 }
 
@@ -402,11 +425,13 @@ ns_es_worker(gpointer data)
 
 ns_es *
 ns_es_new(const char *url, const char *origin, const char *last_event_id,
+          ns_fetch_policy *policy,
           const ns_es_callbacks *cbs, gpointer user_data)
 {
     ns_es *es = g_new0(ns_es, 1);
     es->url = g_strdup(url);
     es->origin = g_strdup(origin);
+    es->policy = ns_fetch_policy_ref(policy);
     es->last_event_id = g_strdup(last_event_id ? last_event_id : "");
     es->reconnect_ms = 3000;
     es->refcount = 1;
