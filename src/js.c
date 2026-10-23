@@ -21578,11 +21578,26 @@ ns_worker_fetch_script(ns_worker_host *host, const char *url,
         "Accept: text/javascript, application/javascript, application/ecmascript, application/x-javascript, */*;q=0.8",
         NULL
     };
+    /* The worker script is held to worker-src, importScripts() to
+     * script-src, at every redirect hop -- with the worker's own policy. */
+    ns_fetch_destination dest = allow_cross_origin ? NS_FETCH_DEST_SCRIPT
+                                                   : NS_FETCH_DEST_WORKER;
+    ns_fetch_policy *policy = NULL;
+    if (host) {
+        ns_fetch_policy *base = ns_fetch_policy_new(host->base_url, host->csp);
+        if (dest == NS_FETCH_DEST_SCRIPT && host->csp &&
+            ns_csp_allows(host->csp, NS_CSP_SCRIPT, url, host->base_url)) {
+            policy = ns_fetch_policy_new_script_hops(base);
+            ns_fetch_policy_unref(base);
+        } else {
+            policy = base;
+        }
+    }
     ns_response *resp = ns_net_request_blocking(url, host ? host->base_url : NULL,
                                                 "GET", NULL, 0, NULL,
-                                                script_headers,
-                                                NS_FETCH_DEST_WORKER, NULL,
+                                                script_headers, dest, policy,
                                                 NULL, &err);
+    ns_fetch_policy_unref(policy);
     char *body = NULL;
     if (resp && resp->status == 200 && resp->body &&
         resp->body->len <= NS_WORKER_SCRIPT_BYTES_MAX) {

@@ -7,6 +7,8 @@
 
 #include <glib.h>
 
+#include "fetch_policy.h"
+
 typedef struct NsAudioContext NsAudioContext;
 
 typedef enum {
@@ -35,7 +37,10 @@ typedef struct {
 
 void ns_audio_set_silent(gboolean silent);
 
-NsAudioContext *ns_audio_context_new(const char *document_url);
+/* policy is the document's fetch policy (CSP media-src, mixed content);
+ * the context keeps a reference. */
+NsAudioContext *ns_audio_context_new(const char *document_url,
+                                     ns_fetch_policy *policy);
 void ns_audio_context_open(NsAudioContext *context, const char *token,
                            const char *url);
 void ns_audio_context_open_bytes(NsAudioContext *context, const char *token,

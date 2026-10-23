@@ -13,8 +13,9 @@ struct NsAudioContext {
 };
 
 void ns_audio_set_silent(gboolean silent) { (void)silent; }
-NsAudioContext *ns_audio_context_new(const char *document_url)
-{ (void)document_url; return g_new0(NsAudioContext, 1); }
+NsAudioContext *ns_audio_context_new(const char *document_url,
+                                     ns_fetch_policy *policy)
+{ (void)document_url; (void)policy; return g_new0(NsAudioContext, 1); }
 void ns_audio_context_open(NsAudioContext *context, const char *token,
                            const char *url)
 { (void)context; (void)token; (void)url; }
