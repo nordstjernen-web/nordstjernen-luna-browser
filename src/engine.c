@@ -232,8 +232,12 @@ fetch_css_bytes(const char *url, const char *top_url, GHashTable *cache,
     ns_response *resp = ns_engine_fetch_blocking_for(
         url, top_url, NS_FETCH_DEST_STYLE, NULL);
     GBytes *bytes = NULL;
+    /* The quirks-mode MIME leniency only applies to same-origin sheets;
+     * otherwise any cross-origin HTML/JSON response would be parsed (and
+     * its contents exposed) as CSS. */
     gboolean enforce_mime = strict_mime ||
-        (resp && ns_net_header_is_nosniff(resp->x_content_type_options));
+        (resp && ns_net_header_is_nosniff(resp->x_content_type_options)) ||
+        !top_url || !ns_url_same_origin(top_url, url);
     gboolean mime_ok = !enforce_mime || !resp ||
                        content_type_is_css(resp->content_type);
     if (resp && !resp->error && resp->status < 400 && mime_ok &&
