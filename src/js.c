@@ -19008,7 +19008,12 @@ ns_window_url_update_object(JSContext *ctx, JSValueConst this_val,
         return JS_FALSE;
     const char *url = JS_ToCString(ctx, argv[0]);
     if (!url) return JS_FALSE;
-    if (!g_str_has_prefix(url, "blob:")) {
+    /* Only replace a blob URL this document created itself. */
+    g_mutex_lock(&g_blob_lock);
+    gboolean own = g_str_has_prefix(url, "blob:") && js->blob_urls &&
+                   g_hash_table_contains(js->blob_urls, url);
+    g_mutex_unlock(&g_blob_lock);
+    if (!own) {
         JS_FreeCString(ctx, url);
         return JS_FALSE;
     }
@@ -57355,7 +57360,7 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
     if (srcdoc && *srcdoc) {
         decoded = g_strdup(srcdoc);
         abs_url = g_strdup(origin);
-    } else if (src && *src && !g_str_has_prefix(src, "about:") &&
+    } else if (src && *src && g_ascii_strncasecmp(src, "about:", 6) != 0 &&
                g_ascii_strncasecmp(src, "javascript:", 11) != 0) {
         abs_url = ns_url_resolve(origin, src);
         gboolean is_object = ns_node_is_element_named(iframe, "object");

@@ -70,6 +70,7 @@ typedef struct {
     wasm_module_t module;
     ns_wasm_linkage linkage;
     gboolean imports_linked;
+    gboolean instantiating;
 } ns_wasm_module;
 
 typedef struct {
@@ -1898,14 +1899,25 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
     wasm_module_t inst_module = mod->module;
     int32_t import_count = wasm_runtime_get_import_count(mod->module);
     g_rec_mutex_lock(&ns_wasm_instantiate_lock);
+    /* Import getters run JS while this module's globals are half linked;
+     * instantiating the same module from there would overwrite them. */
+    if (mod->instantiating) {
+        g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
+        ns_wasm_linkage_clear(rt, &linkage);
+        return JS_ThrowTypeError(ctx,
+            "WebAssembly.Instance: module is already being instantiated");
+    }
+    mod->instantiating = TRUE;
     if (import_count > 0) {
         if (!ns_wasm_bind_imports(ctx, inst_module, &linkage,
                                   import_object)) {
+            mod->instantiating = FALSE;
             g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
             ns_wasm_linkage_clear(rt, &linkage);
             return JS_EXCEPTION;
         }
         if (!ns_wasm_link_import_symbols(ctx, mod)) {
+            mod->instantiating = FALSE;
             g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
             ns_wasm_linkage_clear(rt, &linkage);
             return JS_EXCEPTION;
@@ -1914,6 +1926,7 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
 
     if (import_count == 0 &&
         !ns_wasm_bind_imports(ctx, inst_module, &linkage, import_object)) {
+        mod->instantiating = FALSE;
         g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
         ns_wasm_linkage_clear(rt, &linkage);
         return JS_EXCEPTION;
@@ -1931,6 +1944,7 @@ ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
     wasm_module_inst_t inst =
         wasm_runtime_instantiate(inst_module, NS_WASM_STACK_SIZE, 0, error_buf,
                                  sizeof(error_buf));
+    mod->instantiating = FALSE;
     g_rec_mutex_unlock(&ns_wasm_instantiate_lock);
     g_private_set(&ns_wasm_instantiating, NULL);
     if (!inst) {

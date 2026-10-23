@@ -1003,6 +1003,14 @@ browser_js_soft_navigate(const char *url, gboolean replace, gpointer user_data)
 {
     ns_browser *browser = user_data;
     if (!browser || !url) return;
+    /* history.pushState/replaceState and same-document navigations may
+     * only change the URL within the current origin; base_url also feeds
+     * the navigation privilege checks. */
+    if (browser->base_url && g_strcmp0(browser->base_url, url) != 0 &&
+        !ns_url_same_origin(browser->base_url, url) &&
+        !(g_str_has_prefix(browser->base_url, "file:") &&
+          g_str_has_prefix(url, "file:")))
+        return;
     gboolean has_fragment = FALSE;
     g_autofree char *fragment = browser_url_fragment(url, &has_fragment);
     ns_css_set_target_fragment(has_fragment && fragment && *fragment
@@ -1204,6 +1212,10 @@ browser_allows_navigation_url(ns_browser *b, const char *url)
     if (g_str_has_prefix(url, "about:"))
         return ns_about_url_is_public(url) ||
                (b && ns_about_url_is_chrome(b->base_url));
+    /* view-source: can wrap file: and chrome about: URLs. */
+    if (g_ascii_strncasecmp(url, "view-source:", 12) == 0)
+        return b && (ns_about_url_is_chrome(b->base_url) ||
+                     g_str_has_prefix(b->base_url, "view-source:"));
     if (!g_str_has_prefix(url, "file:")) return TRUE;
     return b && b->base_url && g_str_has_prefix(b->base_url, "file:");
 }

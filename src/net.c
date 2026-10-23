@@ -6461,6 +6461,14 @@ ns_net_blob_origin_allowed(const char *url, const char *top_url)
     return blob_origin && top_origin && strcmp(blob_origin, top_origin) == 0;
 }
 
+GBytes *
+ns_net_resolve_blob_for(const char *url, const char *top_url, char **out_type)
+{
+    if (out_type) *out_type = NULL;
+    if (!url || !ns_net_blob_origin_allowed(url, top_url)) return NULL;
+    return ns_net_resolve_blob(url, out_type);
+}
+
 static gboolean
 ns_net_complete_blob(const char *url, const char *top_url,
                      GCancellable *cancellable,
