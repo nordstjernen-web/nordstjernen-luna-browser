@@ -38,7 +38,7 @@ allow-list are trusted.
 - Bugs in third-party libraries (libcurl, GTK 4, GLib, lexbor, QuickJS,
   Wuffs, …). Report upstream; we update when fixes ship.
 - Features we deliberately don't implement: WebGL, WebGPU, WebRTC,
-  adaptive streaming, EME/DRM, JIT, and "AI" web APIs.
+  EME/DRM, JIT, and "AI" web APIs.
 - CPU-level side channels (Spectre-class).
 - Attacks that already require local code execution as the same user.
 - The gaps listed under *Known gaps* below, which are known and tracked.
@@ -81,20 +81,24 @@ WAMR's fast interpreter — so the engine never needs executable memory it
 creates itself. On Linux the kernel enforces that wherever page content
 is parsed and run: the engine thread installs a second seccomp filter on
 itself, inherited by every thread it starts (media decoding, audio,
-workers), that refuses an anonymous executable `mmap` and any
-`mprotect`/`pkey_mprotect` adding `PROT_EXEC` with `EACCES`, and headless
-and tooling runs install it for the whole process. The GUI's main thread
-is left out because GPU drivers such as Mesa's llvmpipe compile shaders
-to machine code there. Headless runs on Windows refuse dynamic code too
-(see *Windows process mitigations*); the Windows and macOS GUIs do not.
-A file-backed executable mapping is still allowed, since shared
-libraries are loaded that way, so code written to a `memfd` can still be
-mapped executable.
+workers), that refuses an anonymous or shared executable `mmap` and any
+`mprotect`/`pkey_mprotect` adding `PROT_EXEC` with `EACCES`, and denies
+`memfd_create`, `memfd_secret` and `remap_file_pages`; download threads
+install the same filter, and headless and tooling runs install it for
+the whole process. The GUI's main thread is left out because GPU drivers
+such as Mesa's llvmpipe compile shaders to machine code there. Headless
+runs on Windows refuse dynamic code too (see *Windows process
+mitigations*); the Windows and macOS GUIs do not. A private file-backed
+executable mapping is still allowed, since shared libraries are loaded
+that way, so code written to a file in a writable directory can still be
+mapped executable; and because the filter is per thread, it is a
+hardening measure rather than a boundary between threads of one process.
 
 On glibc, `mallopt(M_PERTURB)` fills freed and freshly allocated heap
-memory with a pattern (`src/security.c`), so a use-after-free or an
-uninitialised read sees garbage instead of stale data; the
-`harden_allocator` setting (`NS_NO_HARDEN_ALLOC`) turns it off.
+memory with a pattern (`src/security.c`), in the GUI and in headless runs,
+so a use-after-free or an uninitialised read sees garbage instead of
+stale data; the `harden_allocator` setting (`NS_NO_HARDEN_ALLOC`) turns
+it off.
 
 ### Privilege drop (`src/security.c`)
 
@@ -145,15 +149,25 @@ unconfined.
     tree itself, the nearest directory holding a `meson.build` up to
     three levels above the executable, is readable too). `/dev/shm` and
     `/dev/dri` are read-only in headless mode.
-  - *Read + write:* the per-user runtime directory (which holds the
-    Wayland socket), the browser's own state under
+  - *Read only:* the per-user runtime directory (which holds the
+    Wayland socket), apart from its `dconf` subdirectory, which is
+    writable.
+  - *Read + write:* the browser's own state under
     `~/.config/northstar`, `~/.local/share/northstar` and
-    `~/.cache/northstar`, the download directory when its path starts
-    with `$HOME`, `/dev/null`, `/dev/shm` in GUI mode, the GPU device
+    `~/.cache/northstar`, the download directory (the XDG download
+    directory when it lies strictly below `$HOME` after resolving
+    symlinks, otherwise `~/Downloads`), `/dev/null`, `/dev/shm` in GUI
+    mode, the GPU device
     nodes `/dev/dri` and `/dev/nvidia*` in GUI mode (GTK's OpenGL and
     Vulkan drivers open them to draw the window), `/dev/snd` and any
     `/dev/video0`–`/dev/video63` node that exists, and the output
     directory of a `--dump=png:`, `pdf:` or `print:` run.
+
+  Landlock governs opening paths, not connecting to UNIX sockets that
+  already exist, so the session bus and other per-user sockets in the
+  runtime directory stay reachable. Unpacked extensions are loaded from
+  `~/.local/share/northstar-extensions`, which is outside the writable
+  profile directory.
 
   The rest of `$HOME` — `~/.ssh`, `~/.aws`, `~/.netrc`, shell history —
   is **not** reachable, also when `$XAUTHORITY` is `~/.Xauthority`. One
@@ -196,28 +210,38 @@ unconfined.
   from memory, so nothing is written to disk. The engine has already
   checked the source against `media-src` before the command is sent. The
   mixer decodes MP3 (vendored minimp3), MP2 (vendored
-  pl_mpeg) and, when `opusfile`/`vorbisfile` are present, Ogg
-  Opus/Vorbis, and outputs through SDL2. On Linux the worker inherits the
+  pl_mpeg), AAC-LC (an in-tree decoder, `src/audio/aac.c`, for MP4
+  audio), Opus in MP4/WebM when libopus is present, and, when
+  `opusfile`/`vorbisfile` are
+  present, Ogg Opus/Vorbis, and outputs through SDL2. On Linux the worker inherits the
   browser's Landlock + seccomp restrictions, but codec memory corruption
   is not isolated from the browser address space. Script-supplied media
   bytes (a `MediaSource` buffer, a `blob:` URL) stay in process: the
   engine resolves them to bytes and queues those to the same worker.
-- **Video.** `<video>` decodes MPEG-1 (`video/mpeg`) and nothing else,
-  through the same vendored pl_mpeg that supplies the MP2 audio decoder
-  (`src/video.c`). This is a real codec attack surface, in the browser
-  process, with no isolation from it — pl_mpeg is ordinary C, not a
-  memory-safe decoder like Wuffs. It is deliberately a small one: one
-  decoder for one format, no demuxer beyond MPEG-1 Program Stream, no
-  adaptive streaming and no DRM. Frames are decoded up front rather than
-  streamed, bounded by `NS_VIDEO_MAX_DIMENSION` (4096 pixels a side),
-  `NS_VIDEO_MAX_FRAMES` (4096) and `NS_VIDEO_MAX_TOTAL_BYTES` (256 MB of
-  decoded pixels), so a crafted clip cannot drive unbounded allocation; a
-  longer one is truncated.
+- **Video.** `<video>` decodes MPEG-1 through the vendored pl_mpeg, and
+  — when the libraries are present at build time — AV1 (libdav1d), VP9
+  (libvpx) and H.264 (OpenH264). The containers are demuxed in-tree: an
+  ISO-BMFF/MP4 (including fragmented MP4) demuxer (`src/mp4.c`), a
+  WebM/Matroska demuxer (`src/webm.c`) and Media Source Extensions
+  (`src/mse.c`, `src/js_mse.c`). All of it is ordinary C parsing
+  attacker-controlled bytes in the browser process, with no isolation
+  from it. Decoding is streamed with a bounded decode-ahead window
+  (`src/video.c`: a few frames and at most 48 MB of decoded pixels);
+  MPEG-1 frames are capped at 4096 pixels a side and the shared YUV
+  conversion path at 8192 (`NS_YUV_MAX_DIMENSION`). There is no DRM.
 
 `NS_NO_SANDBOX=1` disables both Landlock and seccomp (and the macOS
-profile); `NS_NO_SECCOMP=1` disables seccomp alone. Both act on the
-variable being set at all, whatever its value. Don't use them in normal
-operation.
+profile); `NS_NO_SECCOMP=1` disables seccomp alone. These and the other
+boolean switches count as unset when empty or `0`, `false`, `no` or
+`off`. Don't use them in normal operation. Other environment variables
+that change security-relevant behaviour, all documented in
+`docs/building.md`: `NS_HTTP_PROXY`/`NS_HTTPS_PROXY`/`NS_NO_PROXY` and
+`NS_DOH_URL` (where traffic and DNS go), `NS_USER_AGENT`, `NS_PRIVATE`,
+`NS_EXTENSIONS_DIR` (extra unpacked-extension directories),
+`NS_SAFEBROWSING_LIST` (an extra blocklist, added to the bundled one),
+`NS_LOG_FILE` and `NS_FRAME_DUMP` (write logs / rendered frames to disk).
+`NS_EARLY_JS_FILE` and `NS_CAMERA_ALLOW` are test hooks honoured only
+by headless/tooling runs.
 
 ### macOS sandbox
 
@@ -365,19 +389,27 @@ worker use the same check.
   drops any `user:password@` part of the authority. A look-alike
   internationalised domain therefore never displays as the Latin name it
   imitates.
-- Service-worker registrations and interception are restricted to the
-  script's origin; a worker cannot control an unrelated origin. The
-  `Service-Worker-Allowed` path restriction on scope is not enforced.
+- Service workers can only be registered from a secure context (https,
+  or http on loopback), and registrations and interception are restricted
+  to the script's origin, with a scope under the script's directory. The
+  `Service-Worker-Allowed` header, which would widen that, is not
+  supported.
 - WebExtensions are explicitly installed local code, not capabilities
-  granted to web pages. Packaged-resource paths are canonicalized beneath
-  the extension root before loading, and extension storage is separated by
-  extension identity.
+  granted to web pages. Packaged-resource paths are resolved beneath the
+  extension root before loading (with symlinks resolved on Unix; on
+  Windows the check is lexical), and extension storage is separated by
+  extension identity. Content scripts run in the page's main world —
+  there are no isolated worlds — so a page that has already run can
+  tamper with the JavaScript environment a `document_idle` content script
+  sees.
 - Safe browsing (`src/safebrowsing.c`) checks a top-level navigation's
   host against a local SHA-256 blocklist (the bundled
-  `safebrowsing.list`, a user list in the config directory, or
-  `NS_SAFEBROWSING_LIST`) and shows an interstitial. It is a warning, not
-  a boundary: the interstitial's continue link is an ordinary special URL
-  that a page could also link to.
+  `safebrowsing.list`, plus a user list in the config directory or
+  `NS_SAFEBROWSING_LIST`) and shows an interstitial. The bundled list
+  only holds a few test entries and nothing updates it, so in practice it
+  protects only against hosts a user or distributor lists themselves. The
+  interstitial's continue link is honoured only from the interstitial
+  itself, and only to continue to the blocked http(s) page.
 - Downloads are marked with their origin — the `com.apple.quarantine`
   attribute on macOS, `user.xdg.origin.url` on Linux, and a
   `Zone.Identifier` stream on Windows — and an `<a download>` link starts
@@ -386,9 +418,13 @@ worker use the same check.
 ### On-disk state
 
 Config, cookies, cache, HSTS, Alt-Svc, bookmarks, history,
-service-worker registrations, and WebExtension local storage live under
-the application data directories with owner-only permissions (`0700`
-directories, `0600` files on Unix). On Windows the HTTP cache directory
+service-worker registrations, IndexedDB, the bytecode cache and
+WebExtension local storage live under the application data directories,
+which are created `0700` on Unix (a directory that already exists keeps
+its mode). Most files the browser writes itself are `0600`; files
+created by libcurl (cookie jars, HSTS, Alt-Svc), SQLite (IndexedDB) or
+GLib key files (service-worker registrations) get the process umask and
+are protected by the directory mode. On Windows the HTTP cache directory
 gets an explicit owner-only ACL; the other files inherit the user
 profile's default ACL. Service-worker registrations are keyed by origin
 and scope and are not persisted in private mode. Extension storage is
@@ -425,7 +461,8 @@ never embed attacker-controlled bytes and no path-traversal is possible.
   Decoded image and video dimensions are clamped before any
   `width × height` multiplication, so a crafted dimension cannot
   integer-overflow a bounds check or allocation. `filter: blur()`
-  likewise clamps its radius before building the convolution window.
+  likewise clamps its radius (to 512 px, 256 for box shadows) before
+  building the convolution window.
 
 ### JavaScript
 
@@ -519,7 +556,11 @@ containment mechanism.
 
 Network cookies live in libcurl's per-site cookie jar on disk. They
 are parsed, scoped, and re-sent by libcurl, honouring `HttpOnly`,
-`Secure`, `SameSite`, `Path`, `Domain`, and expiry. At navigation the
+`Secure`, `Path`, `Domain`, and expiry. libcurl does not implement
+`SameSite`; the browser treats every cookie as `SameSite=Lax`, so a
+cross-site initiator only gets cookies sent on safe (GET/HEAD) top-level
+navigations, and third-party requests get none under the default
+`cookie_policy`. At navigation the
 non-`HttpOnly` cookies for the document's origin are read back out of
 the jar (`ns_net_cookies_for_js`) and seeded into `document.cookie`,
 and the `document.cookie` setter writes back into that same per-site
@@ -578,7 +619,8 @@ The `document.cookie` setter:
   not consulted for script writes.
 - **`style-src` for parser-inserted stylesheets and stylesheet SRI are
   not enforced**, as described under *Origin isolation*.
-- **In-process codecs.** MPEG-1 video, MP2/MP3/Ogg audio, AVIF (when
+- **In-process codecs.** The MP4 and WebM demuxers, MSE, MPEG-1 video,
+  AV1/VP9/H.264 (when built), MP2/MP3/AAC/Opus/Vorbis audio, AVIF (when
   built) and WebAssembly are ordinary C parsing attacker-controlled bytes
   in the browser process (see *Media*). They are bounded, but nothing
   stands between them and the rest of the process.
