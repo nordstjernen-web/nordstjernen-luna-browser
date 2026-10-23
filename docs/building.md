@@ -362,7 +362,7 @@ Others the browser reads:
 | `NS_LOG_FILE`, `NS_NO_LOG_FILE` | Mirror the debug event log to a file (on by default only on Windows). |
 | `NS_CAMERA_ALLOW` | Grant every camera request without asking. Headless/test runs only; ignored by the interactive browser. |
 | `NS_EARLY_JS_FILE` | Script file evaluated before each page's own scripts. Headless/test runs only; ignored by the interactive browser. |
-| `NS_FRAME_DUMP` | Directory to write every 30th rendered frame to as PNG (debugging). |
+| `NS_FRAME_DUMP` | Directory to write every 30th rendered frame to as PNG (debugging; headless and tooling runs only). |
 | `NS_FORCE_HTTP3` | Use HTTP/3 directly instead of waiting for Alt-Svc. |
 | `NS_PANGO_SHAPE_CACHE` | `0` turns the ns-pango caches off; `verify` checks every cached shape against a fresh one. |
 | `NS_HEADLESS_LEGACY` | Send every headless run through the direct engine path. |

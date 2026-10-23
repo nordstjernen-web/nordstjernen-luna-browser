@@ -374,8 +374,12 @@ ns_proc_mode_wanted(int argc, char **argv)
     return TRUE;
 }
 
+/* Output files named on the command line are opened now, before the
+ * sandbox, instead of granting write access to their whole directory
+ * (which for --screenshot=~/x.png would be all of $HOME) while untrusted
+ * pages render. */
 static void
-ns_add_screenshot_writable_dirs(int argc, char **argv)
+ns_preopen_screenshot_outputs(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
         const char *p = NULL;
@@ -389,11 +393,15 @@ ns_add_screenshot_writable_dirs(int argc, char **argv)
         }
         if (!p || !*p || *p == '-') continue;
         char *dir = g_path_get_dirname(p);
-        if (dir && *dir) {
-            g_mkdir_with_parents(dir, 0700);
-            ns_security_add_writable_dir(dir);
-        }
+        if (dir && *dir) g_mkdir_with_parents(dir, 0700);
         g_free(dir);
+        if (!ns_engine_preopen_output(p))
+            g_printerr("northstar: cannot write to %s\n", p);
+        /* Headless --dump captures also write a "-initial" render. */
+        if (g_str_has_prefix(argv[i], "--dump=")) {
+            g_autofree char *initial = ns_engine_suffix_before_ext(p, "-initial");
+            ns_engine_preopen_output(initial);
+        }
     }
 }
 
@@ -526,7 +534,7 @@ main(int argc, char **argv)
     }
 
     ns_security_win32_mitigations_init(proc_mode);
-    ns_add_screenshot_writable_dirs(argc, argv);
+    ns_preopen_screenshot_outputs(argc, argv);
     ns_ext_migrate_default_dir();
     /* The trace file comes from the user's own command line; open it now
      * rather than granting its whole directory inside the sandbox. */
