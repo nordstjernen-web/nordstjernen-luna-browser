@@ -208,6 +208,8 @@ ns_es_process_line(ns_es_parse *p, const char *line)
         g_free(p->event_type);
         p->event_type = *value ? g_strdup(value) : NULL;
     } else if (!strcmp(field, "id")) {
+        /* The id is echoed back as a request header on reconnect. */
+        if (strpbrk(value, "\r\n")) return;
         g_mutex_lock(&p->es->lock);
         g_free(p->es->last_event_id);
         p->es->last_event_id = g_strdup(value);
@@ -375,7 +377,8 @@ ns_es_connect_once(ns_es *es, gboolean *opened_out)
         g_free(h);
     }
     g_mutex_lock(&es->lock);
-    if (es->last_event_id && *es->last_event_id) {
+    if (es->last_event_id && *es->last_event_id &&
+        !strpbrk(es->last_event_id, "\r\n")) {
         char *h = g_strconcat("Last-Event-ID: ", es->last_event_id, NULL);
         hdrs = curl_slist_append(hdrs, h);
         g_free(h);
