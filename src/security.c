@@ -8,10 +8,11 @@
 #endif
 #include "security.h"
 
-/* Where downloads are saved, and the one place in $HOME the sandbox lets
- * the browser write: the XDG download directory if it lies strictly
- * below $HOME (an XDG_DOWNLOAD_DIR of $HOME itself, or outside it,
- * would widen that grant), otherwise ~/Downloads. */
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
 gboolean
 ns_env_flag(const char *name)
 {
@@ -39,13 +40,25 @@ ns_security_tool_mode(void)
     return ns_tool_mode;
 }
 
+/* Where downloads are saved, and the one place in $HOME the sandbox lets
+ * the browser write: the XDG download directory if it lies strictly
+ * below $HOME (an XDG_DOWNLOAD_DIR of $HOME itself, or outside it,
+ * would widen that grant), otherwise ~/Downloads. */
 const char *
 ns_security_downloads_dir(void)
 {
     static char *dir;
     if (dir) return dir;
+#ifdef G_OS_UNIX
+    char *home_real = g_get_home_dir() ? realpath(g_get_home_dir(), NULL) : NULL;
+    const char *dl_raw = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+    char *dl_real = dl_raw && *dl_raw ? realpath(dl_raw, NULL) : NULL;
+    const char *home = home_real ? home_real : g_get_home_dir();
+    const char *dl = dl_real ? dl_real : dl_raw;
+#else
     const char *home = g_get_home_dir();
     const char *dl = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+#endif
     gsize home_len = home ? strlen(home) : 0;
     while (home_len > 1 && home[home_len - 1] == G_DIR_SEPARATOR)
         home_len--;
@@ -54,12 +67,12 @@ ns_security_downloads_dir(void)
         dir = g_strdup(dl);
     else if (home)
         dir = g_build_filename(home, "Downloads", NULL);
+#ifdef G_OS_UNIX
+    free(home_real);
+    free(dl_real);
+#endif
     return dir;
 }
-
-#include <stddef.h>
-#include <stdio.h>
-#include <string.h>
 
 
 #ifndef G_OS_WIN32

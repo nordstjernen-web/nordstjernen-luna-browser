@@ -485,6 +485,29 @@ policy_inline_script_allowed(const ns_csp_policy *p,
 }
 
 gboolean
+ns_csp_allows_import(const ns_csp *csp, const char *resource_url,
+                     const char *document_url)
+{
+    if (!csp || !resource_url) return TRUE;
+    for (guint i = 0; i < csp->policies->len; i++) {
+        const ns_csp_policy *p = g_ptr_array_index(csp->policies, i);
+        ns_csp_kind k = inline_script_kind(p);
+        if (k == NS_CSP_KIND_COUNT) continue;
+        /* Imported modules inherit the importing script's nonce, and
+         * 'strict-dynamic' trusts what trusted scripts load; neither can
+         * be told apart here, so such policies are left to the check on
+         * the top-level script. */
+        if (list_has_nonce_or_hash(p->sources[k]) ||
+            list_has_token(p->sources[k], "'strict-dynamic'"))
+            continue;
+        if (!policy_allows_with_nonce(p, NS_CSP_SCRIPT, resource_url,
+                                      document_url, NULL, FALSE))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+gboolean
 ns_csp_allows_eval(const ns_csp *csp)
 {
     if (!csp) return TRUE;

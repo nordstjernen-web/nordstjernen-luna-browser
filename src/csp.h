@@ -54,6 +54,10 @@ gboolean ns_csp_inline_event_handler_allowed(const ns_csp *csp);
 /* FALSE when script-src / default-src is set without 'unsafe-eval'. */
 gboolean ns_csp_allows_eval(const ns_csp *csp);
 
+/* script-src for a module imported by another script. */
+gboolean ns_csp_allows_import(const ns_csp *csp, const char *resource_url,
+                              const char *document_url);
+
 
 G_END_DECLS
 
