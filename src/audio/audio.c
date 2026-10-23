@@ -75,6 +75,7 @@ struct NsAudioContext {
     gint          destroyed;
     GMutex        lock;
     char         *document_url;
+    ns_fetch_policy *policy;
     GCancellable *cancel;
     GHashTable   *failures;
 };
@@ -748,7 +749,7 @@ fetch_audio_bytes(NsAudioContext *context, const char *url,
     GError *err = NULL;
     ns_response *resp = ns_net_request_blocking(
         url, document_url, "GET", NULL, 0, NULL, NULL, NS_FETCH_DEST_MEDIA,
-        NULL, cancel, &err);
+        context ? context->policy : NULL, cancel, &err);
     if (cancel) g_object_unref(cancel);
     GBytes *bytes = NULL;
     if (resp && !resp->error && resp->status >= 200 && resp->status < 300 &&
@@ -985,6 +986,7 @@ context_free(NsAudioContext *context)
     g_clear_object(&context->cancel);
     g_clear_pointer(&context->failures, g_hash_table_destroy);
     g_free(context->document_url);
+    ns_fetch_policy_unref(context->policy);
     g_mutex_clear(&context->lock);
     g_free(context);
 }
@@ -1141,9 +1143,10 @@ ns_audio_set_silent(gboolean silent)
 }
 
 NsAudioContext *
-ns_audio_context_new(const char *document_url)
+ns_audio_context_new(const char *document_url, ns_fetch_policy *policy)
 {
     NsAudioContext *context = g_new0(NsAudioContext, 1);
+    context->policy = ns_fetch_policy_ref(policy);
     g_mutex_init(&context->lock);
     context->cancel = g_cancellable_new();
     context->failures = g_hash_table_new_full(g_str_hash, g_str_equal,

@@ -163,7 +163,8 @@ static NsAudioContext *
 media_audio_context(ns_js *js)
 {
     if (!js->audio_context)
-        js->audio_context = ns_audio_context_new(js->current_url);
+        js->audio_context = ns_audio_context_new(js->current_url,
+                                                 ns_js_fetch_policy(js, NULL));
     return js->audio_context;
 }
 
