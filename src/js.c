@@ -55891,11 +55891,18 @@ ns_js_run_script_element(ns_js *js, ns_node *n, const char *origin)
         }
         GError *err = NULL;
         gboolean loaded = FALSE;
+        /* A script admitted by its URL must stay within script-src at
+         * every redirect hop, not only at the final URL. */
+        ns_fetch_policy *script_policy =
+            script_csp && ns_csp_allows(script_csp, NS_CSP_SCRIPT, abs_url,
+                                        origin)
+                ? ns_fetch_policy_new_script_hops(ns_js_fetch_policy(js, n))
+                : ns_fetch_policy_ref(ns_js_fetch_policy(js, n));
         ns_response *resp =
             ns_js_fetch_resource(js, abs_url, origin,
                                  ns_net_accept_headers_for(NS_FETCH_DEST_SCRIPT),
-                                 NS_FETCH_DEST_SCRIPT,
-                                 ns_js_fetch_policy(js, n), &err);
+                                 NS_FETCH_DEST_SCRIPT, script_policy, &err);
+        ns_fetch_policy_unref(script_policy);
         if (resp && ns_net_header_is_nosniff(resp->x_content_type_options) &&
             !content_type_is_javascript(resp->content_type)) {
             if (js->log_cb) {
@@ -57742,7 +57749,7 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
             GError *err = NULL;
             resp = ns_js_fetch_resource(
                 js, abs_url, origin, NULL,
-                is_object ? NS_FETCH_DEST_DEFAULT : NS_FETCH_DEST_FRAME,
+                is_object ? NS_FETCH_DEST_OBJECT : NS_FETCH_DEST_FRAME,
                 ns_js_fetch_policy(js, iframe), &err);
             if (resp && resp->final_url && *resp->final_url &&
                 strcmp(resp->final_url, abs_url) != 0) {

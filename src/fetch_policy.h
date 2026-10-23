@@ -23,6 +23,7 @@ typedef enum {
     NS_FETCH_DEST_WORKER,
     NS_FETCH_DEST_CONNECT,
     NS_FETCH_DEST_DOCUMENT,
+    NS_FETCH_DEST_OBJECT,
 } ns_fetch_destination;
 
 typedef enum {
@@ -40,6 +41,10 @@ ns_fetch_policy *ns_fetch_policy_new(const char *document_url,
 ns_fetch_policy *ns_fetch_policy_ref(ns_fetch_policy *policy);
 void             ns_fetch_policy_unref(ns_fetch_policy *policy);
 const char      *ns_fetch_policy_document_url(const ns_fetch_policy *policy);
+/* A copy of policy that also holds script loads to script-src at every
+ * hop, for a script the page's policy admitted by its URL (one admitted
+ * by a nonce or 'strict-dynamic' may be redirected anywhere). */
+ns_fetch_policy *ns_fetch_policy_new_script_hops(const ns_fetch_policy *policy);
 
 ns_fetch_verdict ns_fetch_policy_check(const ns_fetch_policy *policy,
                                        ns_fetch_destination dest,

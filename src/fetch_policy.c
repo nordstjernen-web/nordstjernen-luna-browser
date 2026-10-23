@@ -13,6 +13,7 @@ struct ns_fetch_policy {
     gatomicrefcount rc;
     char           *document_url;
     ns_csp         *csp;
+    gboolean        check_scripts;
 };
 
 ns_fetch_policy *
@@ -23,6 +24,16 @@ ns_fetch_policy_new(const char *document_url, const ns_csp *csp)
     policy->document_url = g_strdup(document_url);
     policy->csp = csp ? ns_csp_copy(csp) : NULL;
     return policy;
+}
+
+ns_fetch_policy *
+ns_fetch_policy_new_script_hops(const ns_fetch_policy *policy)
+{
+    if (!policy) return NULL;
+    ns_fetch_policy *copy = ns_fetch_policy_new(policy->document_url,
+                                                policy->csp);
+    copy->check_scripts = TRUE;
+    return copy;
 }
 
 ns_fetch_policy *
@@ -60,6 +71,7 @@ ns_fetch_destination_name(ns_fetch_destination dest)
     case NS_FETCH_DEST_WORKER:   return "worker";
     case NS_FETCH_DEST_CONNECT:  return "connection";
     case NS_FETCH_DEST_DOCUMENT: return "document";
+    case NS_FETCH_DEST_OBJECT:   return "object";
     default:                     return "resource";
     }
 }
@@ -77,6 +89,7 @@ destination_csp_kind(ns_fetch_destination dest)
     case NS_FETCH_DEST_CONNECT: return NS_CSP_CONNECT;
     case NS_FETCH_DEST_WORKER:  return NS_CSP_WORKER;
     case NS_FETCH_DEST_FRAME:   return NS_CSP_FRAME;
+    case NS_FETCH_DEST_OBJECT:  return NS_CSP_OBJECT;
     default:                    return NS_CSP_KIND_COUNT;
     }
 }
@@ -92,6 +105,8 @@ destination_csp_directive(ns_fetch_destination dest)
     case NS_FETCH_DEST_CONNECT: return "connect-src";
     case NS_FETCH_DEST_WORKER:  return "worker-src";
     case NS_FETCH_DEST_FRAME:   return "frame-src";
+    case NS_FETCH_DEST_OBJECT:  return "object-src";
+    case NS_FETCH_DEST_SCRIPT:  return "script-src";
     default:                    return "default-src";
     }
 }
@@ -152,6 +167,8 @@ ns_fetch_policy_check(const ns_fetch_policy *policy, ns_fetch_destination dest,
     }
 
     ns_csp_kind kind = destination_csp_kind(dest);
+    if (dest == NS_FETCH_DEST_SCRIPT && policy && policy->check_scripts)
+        kind = NS_CSP_SCRIPT;
     if (policy && policy->csp && kind != NS_CSP_KIND_COUNT &&
         !ns_csp_allows(policy->csp, kind, upgraded ? upgraded : url,
                        document_url)) {
