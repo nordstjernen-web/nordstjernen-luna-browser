@@ -2,7 +2,7 @@
 set -e
 
 if [ "$1" = configure ]; then
-    update-alternatives --install /usr/bin/internet-browser internet-browser \
+    update-alternatives --install /usr/bin/open-internet-browser open-internet-browser \
         /usr/bin/northstar 50
 fi
 

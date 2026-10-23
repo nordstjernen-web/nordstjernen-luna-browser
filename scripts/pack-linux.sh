@@ -108,7 +108,7 @@ For Linux distros without modern GTK 4, use the AppImage
 ## Install on user path
 
     install -Dm755 northstar ~/.local/bin/northstar
-    ln -sf northstar ~/.local/bin/internet-browser
+    ln -sf northstar ~/.local/bin/open-internet-browser
     install -Dm644 data/icons/hicolor/scalable/apps/northstar.svg \\
         ~/.local/share/icons/hicolor/scalable/apps/northstar.svg
 

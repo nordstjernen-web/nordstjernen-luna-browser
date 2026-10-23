@@ -187,7 +187,7 @@ EOF
 cp "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/postrm"
 cat >> "$PKGROOT/DEBIAN/postinst" <<'EOF'
 if [ "$1" = configure ]; then
-    update-alternatives --install /usr/bin/internet-browser internet-browser \
+    update-alternatives --install /usr/bin/open-internet-browser open-internet-browser \
         /usr/bin/northstar 50
 fi
 EOF
@@ -195,7 +195,7 @@ cat > "$PKGROOT/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
 if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
-    update-alternatives --remove internet-browser /usr/bin/northstar
+    update-alternatives --remove open-internet-browser /usr/bin/northstar
 fi
 EOF
 chmod 755 "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/postrm" \

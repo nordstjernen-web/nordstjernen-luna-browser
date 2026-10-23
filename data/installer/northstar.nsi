@@ -29,7 +29,7 @@ SetCompressor /SOLID lzma
 !define APP_SMIKEY "Software\Clients\StartMenuInternet\Northstar"
 !define APP_PROGID "NorthstarHTML"
 !define APP_CLASSKEY "Software\Classes\${APP_PROGID}"
-!define APP_PATHKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\internet-browser.exe"
+!define APP_PATHKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\open-internet-browser.exe"
 
 Name "${APP_NAME} ${VERSION}"
 OutFile "${OUTFILE}"
