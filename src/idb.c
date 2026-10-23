@@ -1110,16 +1110,89 @@ static JSCFunction *const ns_idb_backend_fns[] = {
     ns_idb_backend_delete_database, ns_idb_backend_databases,
 };
 
+#define NS_IDB_MAX_ARG_ITEMS (1u << 20)
+
+/* A copy of a backend argument that converting cannot run page code on:
+ * primitives as they are, arrays as fresh arrays, other objects as
+ * prototype-less objects of their own enumerable properties, functions as
+ * their source text.  Whatever getters, toString or valueOf the page
+ * planted run here, before the lock is taken. */
+static JSValue
+ns_idb_plain_copy(JSContext *ctx, JSValueConst v, int depth)
+{
+    if (!JS_IsObject(v)) return JS_DupValue(ctx, v);
+    if (depth > 8) return JS_NULL;
+    if (JS_IsFunction(ctx, v)) return JS_ToString(ctx, v);
+    if (JS_IsArray(v)) {
+        JSValue lenv = JS_GetPropertyStr(ctx, v, "length");
+        uint32_t n = 0;
+        int bad = JS_IsException(lenv) || JS_ToUint32(ctx, &n, lenv) < 0;
+        JS_FreeValue(ctx, lenv);
+        if (bad) return JS_EXCEPTION;
+        if (n > NS_IDB_MAX_ARG_ITEMS)
+            return JS_ThrowRangeError(ctx, "IndexedDB argument is too large");
+        JSValue out = JS_NewArray(ctx);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, v, i);
+            JSValue c = JS_IsException(e) ? JS_EXCEPTION
+                                          : ns_idb_plain_copy(ctx, e, depth + 1);
+            JS_FreeValue(ctx, e);
+            if (JS_IsException(c)) {
+                JS_FreeValue(ctx, out);
+                return JS_EXCEPTION;
+            }
+            JS_DefinePropertyValueUint32(ctx, out, i, c, JS_PROP_C_W_E);
+        }
+        return out;
+    }
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, v,
+                               JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0)
+        return JS_EXCEPTION;
+    JSValue out = JS_NewObjectProto(ctx, JS_NULL);
+    for (uint32_t i = 0; i < n; i++) {
+        JSValue e = JS_GetProperty(ctx, v, tab[i].atom);
+        JSValue c = JS_IsException(e) ? JS_EXCEPTION
+                                      : ns_idb_plain_copy(ctx, e, depth + 1);
+        JS_FreeValue(ctx, e);
+        if (JS_IsException(c)) {
+            JS_FreeValue(ctx, out);
+            out = JS_EXCEPTION;
+            break;
+        }
+        JS_DefinePropertyValue(ctx, out, tab[i].atom, c, JS_PROP_C_W_E);
+    }
+    JS_FreePropertyEnum(ctx, tab, n);
+    return out;
+}
+
 static JSValue
 ns_idb_backend_call(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv, int magic)
 {
+    /* The backend holds g_idb_lock, which the worker threads share, so it
+     * must not run page code -- a getter that blocks on another thread
+     * would hang both, and one that re-enters the backend could open
+     * handles without end.  Give it arguments that cannot call back. */
+    JSValue *args = argc > 0 ? g_new0(JSValue, argc) : NULL;
+    for (int i = 0; i < argc; i++) {
+        args[i] = ns_idb_plain_copy(ctx, argv[i], 0);
+        if (JS_IsException(args[i])) {
+            for (int j = 0; j < i; j++) JS_FreeValue(ctx, args[j]);
+            g_free(args);
+            return JS_EXCEPTION;
+        }
+    }
     g_rec_mutex_lock(&g_idb_lock);
     g_idb_depth++;
-    JSValue r = ns_idb_backend_fns[magic](ctx, this_val, argc, argv);
+    JSValue r = ns_idb_backend_fns[magic](ctx, this_val, argc,
+                                          (JSValueConst *)args);
     if (--g_idb_depth == 0)
         ns_idb_release_pins();
     g_rec_mutex_unlock(&g_idb_lock);
+    for (int i = 0; i < argc; i++) JS_FreeValue(ctx, args[i]);
+    g_free(args);
     return r;
 }
 
