@@ -1654,6 +1654,21 @@ ns_node_root(const ns_node *n)
     return n;
 }
 
+/* Root of the node's own document tree.  Unlike ns_node_root(), stops at
+ * a document node: a frame's document hangs under its <iframe> element,
+ * and DOM lookups (getRootNode, label/form owners, id lookups) from inside
+ * the frame must not reach the embedding page. */
+const ns_node *
+ns_node_document_root(const ns_node *n)
+{
+    if (!n) return NULL;
+    int depth = 0;
+    while (n->parent && depth++ < NS_DOM_MAX_DEPTH &&
+           !(n->kind == NS_NODE_DOCUMENT && !(n->flags & NS_NODE_FRAGMENT)))
+        n = n->parent;
+    return n;
+}
+
 static ns_node *
 ns_node_find_first_element_depth(const ns_node *root, const char *tag, int depth)
 {
