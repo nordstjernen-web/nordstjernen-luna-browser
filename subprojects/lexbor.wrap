@@ -1,5 +1,6 @@
 [wrap-git]
+# v3.0.1, pinned to its commit so a moved tag cannot change the source.
 url = https://github.com/lexbor/lexbor.git
-revision = v3.0.1
+revision = 7e278c0188489bfce6b71ced0cc900cbb31e6244
 depth = 1
 diff_files = lexbor-conv-buffer-bound.patch
