@@ -15650,7 +15650,13 @@ ns_linked_css_text(JSContext *ctx, JSValueConst this_val,
     if (argc < 1) return JS_NewString(ctx, "");
     const char *url = JS_ToCString(ctx, argv[0]);
     if (!url) return JS_NewString(ctx, "");
-    char *text = ns_engine_linked_css_text(url);
+    /* The engine-wide stylesheet cache holds raw response bodies for every
+     * <link rel=stylesheet>, so only hand back same-origin sheets: a
+     * cross-origin sheet's rules are not readable by the page (CSSOM). */
+    ns_js *js = js_from_ctx(ctx);
+    char *text = js && js->current_url &&
+                 ns_url_same_origin(js->current_url, url)
+        ? ns_engine_linked_css_text(url) : NULL;
     JS_FreeCString(ctx, url);
     JSValue r = JS_NewString(ctx, text ? text : "");
     g_free(text);
