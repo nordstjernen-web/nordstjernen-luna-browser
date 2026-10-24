@@ -47,6 +47,13 @@ Significant changes in each release:
   subtree twice, so 24 nested `min-width: min-content` blocks in a float
   took 10 seconds and a few more levels stalled the page for minutes.
   The measurement is now reused; layout results are unchanged.
+* `localStorage` keeps entries whose keys contain `=`, a line break or
+  leading or trailing spaces, an empty key, and values with lone
+  surrogates. The on-disk key file used storage keys as key-file keys:
+  such keys were refused with GLib criticals, and a key with a line
+  break corrupted the file, so the next session lost every entry of
+  the origin. Keys and values are now stored percent-escaped; existing
+  files still load.
 
 1.0.16:
 =======

@@ -2560,6 +2560,34 @@ ns_storage_path_for_origin(const char *origin)
     return g_build_filename(dir, file, NULL);
 }
 
+/* GKeyFile keys cannot be empty, contain '=' or line breaks, or start or
+ * end with a space, and its strings must be UTF-8. Storage keys and values
+ * can be any JS string, so the key file holds them percent-escaped: keys
+ * entirely, behind a "k:" prefix so the empty key has a name, values only
+ * for '%', control characters and bytes that are not UTF-8. */
+static char *
+ns_storage_file_key(const char *key)
+{
+    g_autofree char *escaped = g_uri_escape_string(key, NULL, TRUE);
+    return g_strconcat("k:", escaped, NULL);
+}
+
+/* The storage key a key-file key names, or NULL if it is not one. */
+static char *
+ns_storage_key_from_file(const char *file_key)
+{
+    if (!g_str_has_prefix(file_key, "k:")) return NULL;
+    return g_uri_unescape_string(file_key + 2, NULL);
+}
+
+#define NS_STORAGE_VALUE_PLAIN " !\"#$&'()*+,/:;<=>?@[\\]^`{|}"
+
+static char *
+ns_storage_file_value(const char *value)
+{
+    return g_uri_escape_string(value, NS_STORAGE_VALUE_PLAIN, TRUE);
+}
+
 /* Writes dirty localStorage to its per-origin key file with 0600 permissions. */
 static void
 ns_storage_flush(ns_js *js)
@@ -2576,8 +2604,11 @@ ns_storage_flush(ns_js *js)
         g_key_file_set_string(kf, "meta", "origin", js->local_storage_origin);
     GHashTableIter it; gpointer k, v;
     g_hash_table_iter_init(&it, js->local_storage);
-    while (g_hash_table_iter_next(&it, &k, &v))
-        g_key_file_set_string(kf, "storage", (const char *)k, (const char *)v);
+    while (g_hash_table_iter_next(&it, &k, &v)) {
+        g_autofree char *file_key = ns_storage_file_key((const char *)k);
+        g_autofree char *file_value = ns_storage_file_value((const char *)v);
+        g_key_file_set_string(kf, "items", file_key, file_value);
+    }
     gsize len = 0;
     char *data = g_key_file_to_data(kf, &len, NULL);
     if (data) {
@@ -2714,6 +2745,21 @@ ns_storage_load_for(ns_js *js, const char *new_url)
                 char *v = g_key_file_get_string(kf, "storage", keys[i], NULL);
                 if (v) g_hash_table_replace(js->local_storage,
                                             g_strdup(keys[i]), v);
+            }
+            g_strfreev(keys);
+        }
+        /* Files written before the escaped [items] group still load from
+         * [storage], and are rewritten in the new form at the next flush. */
+        keys = g_key_file_get_keys(kf, "items", &n, NULL);
+        if (keys) {
+            for (gsize i = 0; i < n; i++) {
+                char *key = ns_storage_key_from_file(keys[i]);
+                g_autofree char *file_value = key
+                    ? g_key_file_get_string(kf, "items", keys[i], NULL) : NULL;
+                char *v = file_value ? g_uri_unescape_string(file_value, NULL)
+                                     : NULL;
+                if (v) g_hash_table_replace(js->local_storage, key, v);
+                else g_free(key);
             }
             g_strfreev(keys);
         }
