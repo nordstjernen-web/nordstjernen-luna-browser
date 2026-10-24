@@ -31,6 +31,11 @@ Significant changes in each release:
   warning, and a form posted to a listed host sent its data. The
   navigation now stops at the hop that would reach the listed host,
   without contacting it, and shows the warning page.
+* Security: HSTS entries now expire at the end of the max-age the site
+  sent. The engine read curl's HSTS file without the expiry stamps, so a
+  host that once sent `Strict-Transport-Security` was forced to HTTPS,
+  and refused the certificate-warning override, for as long as its line
+  stayed in the file.
 
 1.0.16:
 =======
