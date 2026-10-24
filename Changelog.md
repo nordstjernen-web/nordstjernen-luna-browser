@@ -2,6 +2,17 @@ Changelog:
 =========
 Significant changes in each release:
 
+1.0.17:
+=======
+* Security: the bundled lexbor HTML tokenizer no longer writes past
+  its temporary buffer when a named character reference ends exactly
+  at the buffer's end. `&nGt;` and `&nLt;` decode to more bytes than
+  their names take, so 16379 bytes of text followed by `&nGt;x` (in
+  text, an attribute value or RCDATA) overflowed the heap. The patch
+  is `subprojects/packagefiles/lexbor-named-charref-bound.patch`.
+  Builds against a system lexbor need the same fix from their
+  distribution.
+
 1.0.16:
 =======
 * Text layout moved from the ns-pango subproject to web-text-lib,
