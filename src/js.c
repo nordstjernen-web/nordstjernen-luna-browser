@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — JavaScript engine binding (QuickJS).
+/* Nordstjernen Web Browser — the QuickJS-based JavaScript runtime and Web API bindings.
+ * Window, DOM, events, timers, fetch/XHR, workers and script loading; called by page and engine.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -64,6 +65,7 @@ static void ns_js_dispatch_hashchange(ns_js *js, const char *old_url,
                                       const char *new_url);
 static void ns_js_refresh_top_layer(ns_js *js);
 
+/* Maps curl phase timings on a response to Navigation Timing fields; zeroed when NULL. */
 ns_js_navigation_timing
 ns_js_navigation_timing_from_response(const ns_response *response)
 {
@@ -191,6 +193,7 @@ ns_js_note_user_activation(ns_js *js)
     js->user_ever_activated = TRUE;
 }
 
+/* True if a user activation happened within the last 5 seconds (HTML transient activation). */
 gboolean
 ns_js_has_transient_activation(ns_js *js)
 {
@@ -457,6 +460,7 @@ static const struct { const char *token; unsigned flag; } ns_sandbox_tokens[] = 
     { "allow-orientation-lock",                 NS_SANDBOX_ALLOW_ORIENTATION },
 };
 
+/* Parses an iframe sandbox attribute into NS_SANDBOX_* flags; always sets ACTIVE. */
 static unsigned
 ns_sandbox_parse_tokens(const char *val)
 {
@@ -480,6 +484,7 @@ ns_sandbox_parse_tokens(const char *val)
     return flags;
 }
 
+/* Intersects sandbox flags of all ancestor iframes; returns 0 when none are sandboxed. */
 static unsigned
 ns_iframe_effective_sandbox(const ns_node *node)
 {
@@ -496,6 +501,7 @@ ns_iframe_effective_sandbox(const ns_node *node)
     return any ? (flags | NS_SANDBOX_ACTIVE) : 0;
 }
 
+/* True when an enclosing sandboxed iframe lacks allow-forms. */
 static gboolean
 ns_node_sandbox_blocks_forms(const ns_node *node)
 {
@@ -503,6 +509,7 @@ ns_node_sandbox_blocks_forms(const ns_node *node)
     return (sb & NS_SANDBOX_ACTIVE) && !(sb & NS_SANDBOX_ALLOW_FORMS);
 }
 
+/* Legacy MediaQueryList.addListener: registers the callback as a "change" listener. */
 static JSValue
 ns_mql_addListener(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -514,6 +521,7 @@ ns_mql_addListener(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Legacy MediaQueryList.removeListener: removes a "change" listener. */
 static JSValue
 ns_mql_removeListener(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -525,6 +533,7 @@ ns_mql_removeListener(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Per-evaluation script time budget from config in microseconds, defaulting to 60 s. */
 static gint64
 ns_js_eval_budget_us(void)
 {
@@ -537,6 +546,7 @@ ns_js_eval_budget_us(void)
 
 #define NS_JS_MONITOR_LIMIT_US (60LL * 1000000LL)
 
+/* QuickJS interrupt check: halts on worker close, monitor deadline or eval budget expiry. */
 static int
 ns_js_interrupt(void *opaque)
 {
@@ -578,6 +588,7 @@ ns_js_in_pump(const ns_js *js)
     return js && js->in_pump;
 }
 
+/* Extends eval and monitor deadlines by time spent pumping a nested main loop. */
 static void
 ns_js_credit_pumped_time(ns_js *js, gint64 pump_start_us)
 {
@@ -607,6 +618,7 @@ ns_js_pumped_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
     if (pf->loop) g_main_loop_quit(pf->loop);
 }
 
+/* Synchronous GET; on the main thread pumps a nested loop so the budget isn't charged. */
 static ns_response *
 ns_js_fetch_resource(ns_js *js, const char *url, const char *top_url,
                      const char *const *headers, ns_fetch_destination dest,
@@ -640,6 +652,7 @@ typedef struct ns_budget_guard {
     gint64 saved;
 } ns_budget_guard;
 
+/* Starts a script budget scope, arming the monitor deadline for the outermost one. */
 static void
 ns_js_budget_push(ns_js *js, ns_budget_guard *g)
 {
@@ -653,6 +666,7 @@ ns_js_budget_push(ns_js *js, ns_budget_guard *g)
         js->eval_deadline_us = fresh;
 }
 
+/* Restores the saved eval deadline; clears the monitor deadline at outermost scope. */
 static void
 ns_js_budget_pop(ns_js *js, ns_budget_guard *g)
 {
@@ -701,6 +715,7 @@ typedef struct ns_raf_entry {
     ns_node *frame;
 } ns_raf_entry;
 
+/* Returns the iframe node owning a realm context, falling back to the current rAF frame. */
 static ns_node *
 ns_js_context_frame(ns_js *js, JSContext *ctx)
 {
@@ -725,6 +740,7 @@ ns_js_array_length(JSContext *ctx, JSValueConst arr)
     return len;
 }
 
+/* Reads obj[key] as a boolean; was_set reports whether it was defined. */
 gboolean
 ns_js_get_bool_prop(JSContext *ctx, JSValueConst obj, const char *key,
                     gboolean *was_set)
@@ -737,6 +753,7 @@ ns_js_get_bool_prop(JSContext *ctx, JSValueConst obj, const char *key,
     return truthy;
 }
 
+/* Reads obj[key] as int32, returning fallback when undefined or null. */
 static int32_t
 ns_js_get_int32_prop(JSContext *ctx, JSValueConst obj, const char *key,
                      int32_t fallback)
@@ -748,6 +765,7 @@ ns_js_get_int32_prop(JSContext *ctx, JSValueConst obj, const char *key,
     return r;
 }
 
+/* Reads obj[key] as a double, returning fallback when undefined or null. */
 static double
 ns_js_get_double_prop(JSContext *ctx, JSValueConst obj, const char *key,
                       double fallback)
@@ -759,6 +777,7 @@ ns_js_get_double_prop(JSContext *ctx, JSValueConst obj, const char *key,
     return r;
 }
 
+/* Returns a g_strdup copy of obj[key] if it is a string, else NULL; caller frees. */
 static char *
 ns_js_get_string_prop(JSContext *ctx, JSValueConst obj, const char *key)
 {
@@ -772,6 +791,7 @@ ns_js_get_string_prop(JSContext *ctx, JSValueConst obj, const char *key)
     return out;
 }
 
+/* Borrows the bytes of an ArrayBuffer or view; out_holder keeps the buffer alive. */
 static gboolean
 ns_js_bytes_view(JSContext *ctx, JSValueConst value, const uint8_t **out_data,
                  size_t *out_len, JSValue *out_holder)
@@ -840,6 +860,7 @@ ns_js_bytes_view(JSContext *ctx, JSValueConst value, const uint8_t **out_data,
     return TRUE;
 }
 
+/* NUL-terminated copy of a byte range, refusing bodies over NS_JS_BODY_BYTES_MAX. */
 static char *
 ns_js_copy_bytes(const uint8_t *data, gsize len)
 {
@@ -850,6 +871,7 @@ ns_js_copy_bytes(const uint8_t *data, gsize len)
     return out;
 }
 
+/* Extracts a request body from a string, buffer source or Blob as a new byte copy. */
 static char *
 ns_js_body_bytes(JSContext *ctx, JSValueConst value, gsize *out_len)
 {
@@ -890,6 +912,7 @@ ns_js_body_bytes(JSContext *ctx, JSValueConst value, gsize *out_len)
     return NULL;
 }
 
+/* Duck-types a FormData polyfill object by its _entries array and append/getAll. */
 static gboolean
 ns_js_value_is_form_data(JSContext *ctx, JSValueConst v)
 {
@@ -906,6 +929,7 @@ ns_js_value_is_form_data(JSContext *ctx, JSValueConst v)
     return ok;
 }
 
+/* Duck-types a URLSearchParams polyfill object by its _p array and append/getAll. */
 static gboolean
 ns_js_value_is_url_search_params(JSContext *ctx, JSValueConst v)
 {
@@ -922,6 +946,7 @@ ns_js_value_is_url_search_params(JSContext *ctx, JSValueConst v)
     return ok;
 }
 
+/* Encodes FormData as multipart/form-data with a fresh boundary; caller frees both outputs. */
 static char *
 ns_js_form_data_serialize(JSContext *ctx, JSValueConst fd,
                           gsize *out_len, char **out_content_type)
@@ -1009,6 +1034,7 @@ ns_js_form_data_serialize(JSContext *ctx, JSValueConst fd,
     return g_string_free(body, FALSE);
 }
 
+/* Serializes URLSearchParams via toString() as a urlencoded body; caller frees outputs. */
 static char *
 ns_js_usp_serialize(JSContext *ctx, JSValueConst usp,
                     gsize *out_len, char **out_content_type)
@@ -1034,6 +1060,7 @@ ns_js_usp_serialize(JSContext *ctx, JSValueConst usp,
     return out;
 }
 
+/* Rejects with an Error, splitting a "NameError: msg" prefix into name; frees resolvers. */
 void
 ns_js_promise_reject(JSContext *ctx, JSValue resolvers[2], const char *message)
 {
@@ -1060,6 +1087,7 @@ ns_js_promise_reject(JSContext *ctx, JSValue resolvers[2], const char *message)
     JS_FreeValue(ctx, resolvers[1]);
 }
 
+/* True if the element's tag matches any name in a NULL-terminated list, case-insensitively. */
 static gboolean
 ns_node_name_is_any_of(const ns_node *n, const char *const *tags)
 {
@@ -1069,6 +1097,7 @@ ns_node_name_is_any_of(const ns_node *n, const char *const *tags)
     return FALSE;
 }
 
+/* True if the node is in the main document or the current document tree. */
 static gboolean
 ns_js_node_in_page(const ns_js *js, const ns_node *node)
 {
@@ -1080,6 +1109,7 @@ ns_js_node_in_page(const ns_js *js, const ns_node *node)
     return FALSE;
 }
 
+/* Destroys a GSource by id on the engine's main context. */
 static void
 ns_js_source_remove(ns_js *js, guint id)
 {
@@ -1090,6 +1120,7 @@ ns_js_source_remove(ns_js *js, guint id)
     if (source) g_source_destroy(source);
 }
 
+/* Frees a timer record, its callback, code and extra args, and removes its GSource. */
 static void
 ns_timer_free(gpointer data)
 {
@@ -1151,6 +1182,7 @@ ns_microtask_drain_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Schedules an idle drain of pending QuickJS jobs if none is queued. */
 static void
 ns_schedule_microtask_drain(ns_js *js)
 {
@@ -1161,6 +1193,7 @@ ns_schedule_microtask_drain(ns_js *js)
         ns_js_attach_idle(js, ns_microtask_drain_idle, js);
 }
 
+/* Runs pending jobs in a time/job-bounded slice, rescheduling leftovers; logs errors. */
 void
 ns_drain_microtasks(ns_js *js)
 {
@@ -1226,6 +1259,7 @@ static void ns_storage_flush(ns_js *js);
 static void ns_storage_schedule_flush(ns_js *js);
 static gboolean ns_timer_fire(gpointer data);
 
+/* Fires up to 8 overdue zero-delay timeouts in id order when no script is on the stack. */
 static void
 ns_js_run_due_timers(ns_js *js)
 {
@@ -1292,6 +1326,7 @@ ns_message_task_free(ns_message_task *t)
     g_free(t);
 }
 
+/* Cancels the message-task source and frees all queued message tasks. */
 static void
 ns_message_tasks_clear(ns_js *js)
 {
@@ -1307,6 +1342,7 @@ ns_message_tasks_clear(ns_js *js)
 
 static gboolean ns_message_tasks_run(gpointer data);
 
+/* Arms a timeout source to run queued message tasks unless one is pending or running. */
 static void
 ns_message_tasks_schedule(ns_js *js, guint delay_ms, int priority)
 {
@@ -1320,6 +1356,7 @@ ns_message_tasks_schedule(ns_js *js, guint delay_ms, int priority)
     g_source_unref(source);
 }
 
+/* Queues a job (e.g. postMessage delivery) to run as a separate task with duped args. */
 static void
 ns_queue_message_task(JSContext *ctx, JSJobFunc *run, int argc,
                       JSValueConst *argv)
@@ -1339,6 +1376,7 @@ ns_queue_message_task(JSContext *ctx, JSJobFunc *run, int argc,
 
 static void ns_drain_mutations(ns_js *js);
 
+/* Runs the currently queued message tasks, draining microtasks after each one. */
 static gboolean
 ns_message_tasks_run(gpointer data)
 {
@@ -1370,6 +1408,7 @@ ns_message_tasks_run(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Drains microtasks, notifies the host of DOM mutation, schedules storage flush and timers. */
 static void
 ns_drain_mutations(ns_js *js)
 {
@@ -1381,6 +1420,7 @@ ns_drain_mutations(ns_js *js)
     ns_js_run_due_timers(js);
 }
 
+/* navigator.hardwareConcurrency: processor count clamped to 1..32. */
 static int
 ns_nav_hardware_concurrency(void)
 {
@@ -1390,6 +1430,7 @@ ns_nav_hardware_concurrency(void)
     return n;
 }
 
+/* navigator.deviceMemory: total RAM rounded up to a power-of-two GiB, capped at 4. */
 static int
 ns_nav_device_memory(void)
 {
@@ -1406,6 +1447,7 @@ ns_nav_device_memory(void)
     return 4;
 }
 
+/* Screen size and available work area; uses Win32 system metrics when available. */
 static void
 ns_nav_screen_metrics(int *width, int *height,
                       int *avail_width, int *avail_height,
@@ -1434,6 +1476,7 @@ ns_nav_screen_metrics(int *width, int *height,
 #endif
 }
 
+/* IdleDeadline.timeRemaining() returning the stashed __tr value (default 50 ms). */
 static JSValue
 ns_idle_deadline_time_remaining(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -1448,6 +1491,7 @@ ns_idle_deadline_time_remaining(JSContext *ctx, JSValueConst this_val,
 
 static gboolean ns_timer_fire_impl(gpointer data);
 
+/* Timer GSource callback; wraps ns_timer_fire_impl with a trace event when tracing. */
 static gboolean
 ns_timer_fire(gpointer data)
 {
@@ -1477,6 +1521,7 @@ ns_timer_fire(gpointer data)
     return keep;
 }
 
+/* Runs a timer/idle callback in its frame's realm, then reschedules or removes it. */
 static gboolean
 ns_timer_fire_impl(gpointer data)
 {
@@ -1612,6 +1657,7 @@ ns_timer_fire_impl(gpointer data)
     return G_SOURCE_CONTINUE;
 }
 
+/* True when the timer's this-window has a document no longer in the page. */
 static gboolean
 ns_timer_this_is_detached_window(ns_js *js, JSContext *ctx,
                                  JSValueConst this_val)
@@ -1630,6 +1676,7 @@ ns_timer_this_is_detached_window(ns_js *js, JSContext *ctx,
     return TRUE;
 }
 
+/* setTimeout/setInterval: applies HTML nesting clamp and eval CSP; returns timer id. */
 static JSValue
 ns_js_setTimeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                  int is_interval)
@@ -1695,6 +1742,7 @@ ns_js_setInterval_wrap(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return ns_js_setTimeout(ctx, this_val, argc, argv, 1);
 }
 
+/* clearTimeout/clearInterval: cancels and removes the timer by id. */
 static JSValue
 ns_js_clearTimer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1787,6 +1835,7 @@ ns_style_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     if (b) JS_MarkValue(rt, b->element, mark_func);
 }
 
+/* Refreshes a CSSStyleDeclaration's cached cssText if the style attribute changed. */
 static ns_style_back *
 ns_style_sync(JSContext *ctx, JSValueConst style, ns_node **out_node)
 {
@@ -1805,6 +1854,7 @@ ns_style_sync(JSContext *ctx, JSValueConst style, ns_node **out_node)
     return back;
 }
 
+/* Writes normalized cssText to the style attribute (recorded) unless unchanged or forced. */
 static void
 ns_style_store(JSContext *ctx, JSValueConst style, const char *css_text,
                gboolean force)
@@ -1825,6 +1875,7 @@ ns_style_store(JSContext *ctx, JSValueConst style, const char *css_text,
     back->attr_gen = node->attr_gen;
 }
 
+/* Cached cssText with url() values resolved against the base URL; caller frees. */
 static char *
 ns_style_mutation_text(const ns_style_back *back)
 {
@@ -1832,6 +1883,7 @@ ns_style_mutation_text(const ns_style_back *back)
                                         back ? back->base_url : NULL);
 }
 
+/* Maps a CSSOM camelCase name to a CSS property (webkitX to -webkit-x); caller frees. */
 static char *
 camel_to_kebab(const char *s)
 {
@@ -1861,6 +1913,7 @@ camel_to_kebab(const char *s)
     return g_string_free(out, FALSE);
 }
 
+/* True for CSSStyleDeclaration members that must not be treated as properties. */
 static gboolean
 ns_style_is_prototype_name(const char *name)
 {
@@ -1874,6 +1927,7 @@ ns_style_is_prototype_name(const char *name)
     return FALSE;
 }
 
+/* Exotic getter: index gives property names, camelCase names give canonical values. */
 static int
 ns_style_get_own_property(JSContext *ctx, JSPropertyDescriptor *desc,
                           JSValueConst obj, JSAtom prop)
@@ -1950,6 +2004,7 @@ ns_style_get_length(JSContext *ctx, JSValueConst this_val)
     return JS_NewUint32(ctx, back ? ns_inline_style_length(back->css_text) : 0);
 }
 
+/* Exotic setter: assigns cssText or one property, ignoring invalid declarations. */
 static int
 ns_style_set_property(JSContext *ctx, JSValueConst obj, JSAtom prop,
                       JSValueConst val, JSValueConst receiver, int flags)
@@ -2028,6 +2083,7 @@ ns_token_list_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 
 static GPtrArray *ns_tlist_set_parse(const char *cls);
 
+/* DOMTokenList indexed access: returns the Nth unique token of the backing attribute. */
 static int
 ns_tlist_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
                  JSValueConst obj, JSAtom prop)
@@ -2068,6 +2124,7 @@ static JSClassDef ns_token_list_class = {
     .exotic     = &ns_token_list_exotic,
 };
 
+/* Returns the element behind a DOMTokenList and its attribute name (default "class"). */
 static ns_node *
 ns_tlist_node(JSValueConst this_val, const char **out_attr)
 {
@@ -2076,6 +2133,7 @@ ns_tlist_node(JSValueConst this_val, const char **out_attr)
     return b ? ns_unwrap_element_mut(b->element) : NULL;
 }
 
+/* Finds an exact token in a whitespace-separated list, returning its span. */
 static gboolean
 class_attr_contains(const char *cls, const char *token, gsize tlen,
                     const char **out_start, gsize *out_len)
@@ -2096,6 +2154,7 @@ class_attr_contains(const char *cls, const char *token, gsize tlen,
     return FALSE;
 }
 
+/* DOMTokenList token check: throws SyntaxError if empty, InvalidCharacterError on spaces. */
 static int
 ns_tlist_validate(JSContext *ctx, const char *token)
 {
@@ -2114,6 +2173,7 @@ ns_tlist_validate(JSContext *ctx, const char *token)
     return 0;
 }
 
+/* Parses an attribute into an ordered set of unique tokens; caller frees the array. */
 static GPtrArray *
 ns_tlist_set_parse(const char *cls)
 {
@@ -2144,6 +2204,7 @@ ns_tlist_set_index(GPtrArray *set, const char *token)
     return -1;
 }
 
+/* DOMTokenList update steps: writes the serialized set unless attr absent and set empty. */
 static void
 ns_tlist_set_update(JSContext *ctx, ns_node *n, const char *attr,
                     GPtrArray *set)
@@ -2158,6 +2219,7 @@ ns_tlist_set_update(JSContext *ctx, ns_node *n, const char *attr,
     g_string_free(s, TRUE);
 }
 
+/* Converts and validates all arguments as tokens; returns NULL with exception on failure. */
 static GPtrArray *
 ns_tlist_collect_tokens(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -2175,6 +2237,7 @@ ns_tlist_collect_tokens(JSContext *ctx, int argc, JSValueConst *argv)
     return toks;
 }
 
+/* DOMTokenList.contains(). */
 static JSValue
 ns_tlist_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2189,6 +2252,7 @@ ns_tlist_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return has ? JS_TRUE : JS_FALSE;
 }
 
+/* DOMTokenList.add(): appends missing tokens and rewrites the attribute. */
 static JSValue
 ns_tlist_add(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2209,6 +2273,7 @@ ns_tlist_add(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return JS_UNDEFINED;
 }
 
+/* DOMTokenList.remove(): drops the given tokens and rewrites the attribute. */
 static JSValue
 ns_tlist_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2230,6 +2295,7 @@ ns_tlist_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return JS_UNDEFINED;
 }
 
+/* DOMTokenList.replace(): swaps a token in place, deduplicating; returns whether found. */
 static JSValue
 ns_tlist_replace(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -2295,6 +2361,7 @@ ns_tlist_replace(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* DOMTokenList.length: count of unique tokens. */
 static JSValue
 ns_tlist_get_length(JSContext *ctx, JSValueConst this_val)
 {
@@ -2307,6 +2374,7 @@ ns_tlist_get_length(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, count);
 }
 
+/* DOMTokenList.item(): Nth unique token or null. */
 static JSValue
 ns_tlist_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2323,6 +2391,7 @@ ns_tlist_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return ret;
 }
 
+/* DOMTokenList.supports() for link rel, hyperlink rel and iframe sandbox tokens. */
 static JSValue
 ns_tlist_supports(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2406,6 +2475,7 @@ ns_tlist_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return ns_tlist_get_value(ctx, this_val);
 }
 
+/* DOMTokenList.toggle() with optional force; returns whether the token is now present. */
 static JSValue
 ns_tlist_toggle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2472,6 +2542,7 @@ ns_tlist_toggle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return result ? JS_TRUE : JS_FALSE;
 }
 
+/* localStorage file path keyed by SHA-256 of the origin; NULL in private mode. */
 static char *
 ns_storage_path_for_origin(const char *origin)
 {
@@ -2489,6 +2560,7 @@ ns_storage_path_for_origin(const char *origin)
     return g_build_filename(dir, file, NULL);
 }
 
+/* Writes dirty localStorage to its per-origin key file with 0600 permissions. */
 static void
 ns_storage_flush(ns_js *js)
 {
@@ -2531,6 +2603,7 @@ ns_storage_flush_timer(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Debounces a localStorage flush to disk one second later. */
 static void
 ns_storage_schedule_flush(ns_js *js)
 {
@@ -2547,6 +2620,7 @@ ns_session_bucket_lookup(ns_js *js, const char *key)
     return g_hash_table_lookup(js->session_storage_buckets, key);
 }
 
+/* On navigation, saves sessionStorage and cookies under the old origin key and loads new. */
 static void
 ns_partition_apply(ns_js *js, const char *new_url)
 {
@@ -2608,6 +2682,7 @@ ns_partition_apply(ns_js *js, const char *new_url)
     js->partition_key = new_key;
 }
 
+/* Switches storage partitions for a new URL and loads that origin's localStorage file. */
 static void
 ns_storage_load_for(ns_js *js, const char *new_url)
 {
@@ -2651,6 +2726,7 @@ ns_storage_finalizer(JSRuntime *rt, JSValue val) { (void)rt; (void)val; }
 
 static void ns_storage_maybe_dirty(JSContext *ctx, GHashTable *store);
 
+/* True for Storage interface member names that are never exposed as stored keys. */
 static gboolean
 ns_storage_name_is_builtin(const char *name)
 {
@@ -2665,6 +2741,7 @@ ns_storage_name_is_builtin(const char *name)
 
 #define NS_STORAGE_QUOTA_BYTES (5u * 1024u * 1024u)
 
+/* Total byte length of all keys and values in a storage table. */
 static gsize
 ns_storage_bytes_used(GHashTable *store)
 {
@@ -2680,6 +2757,7 @@ ns_storage_bytes_used(GHashTable *store)
     return total;
 }
 
+/* True if setting key to value keeps the store within the 5 MiB quota. */
 static gboolean
 ns_storage_fits(GHashTable *store, const char *key, const char *value)
 {
@@ -2692,6 +2770,7 @@ ns_storage_fits(GHashTable *store, const char *key, const char *value)
     return ns_storage_bytes_used(store) + delta <= NS_STORAGE_QUOTA_BYTES;
 }
 
+/* Throws QuotaExceededError via its constructor, or a DOMException-like Error fallback. */
 static JSValue
 ns_throw_quota_exceeded_msg(JSContext *ctx, const char *message)
 {
@@ -2732,6 +2811,7 @@ ns_throw_quota_exceeded(JSContext *ctx)
     return ns_throw_quota_exceeded_msg(ctx, "Storage quota exceeded");
 }
 
+/* Throws a SyntaxError DOMException for an invalid selector string. */
 static JSValue
 ns_throw_selector_syntax_error(JSContext *ctx, const char *sel)
 {
@@ -2741,6 +2821,7 @@ ns_throw_selector_syntax_error(JSContext *ctx, const char *sel)
     return ret;
 }
 
+/* Parses and frees sel; returns the selector list or NULL after throwing SyntaxError. */
 static GPtrArray *
 ns_selector_list_take(JSContext *ctx, char *sel)
 {
@@ -2755,6 +2836,7 @@ ns_selector_list_take(JSContext *ctx, char *sel)
     return sels;
 }
 
+/* True if the prototype chain defines prop, so named storage access must yield. */
 static gboolean
 ns_storage_prop_shadowed_by_proto(JSContext *ctx, JSValueConst obj,
                                   JSAtom prop)
@@ -2766,6 +2848,7 @@ ns_storage_prop_shadowed_by_proto(JSContext *ctx, JSValueConst obj,
     return shadowed;
 }
 
+/* Storage named getter: exposes stored keys not shadowed by builtins or prototype. */
 static int
 ns_storage_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
                    JSValueConst obj, JSAtom prop)
@@ -2795,6 +2878,7 @@ static void ns_storage_fire_event(JSContext *ctx, JSValueConst storage_obj,
                                   const char *key, const char *oldv,
                                   const char *newv);
 
+/* Storage named setter: enforces quota, stores the value and queues a storage event. */
 static int
 ns_storage_set_prop(JSContext *ctx, JSValueConst obj, JSAtom prop,
                     JSValueConst val, JSValueConst receiver, int flags)
@@ -2829,6 +2913,7 @@ ns_storage_set_prop(JSContext *ctx, JSValueConst obj, JSAtom prop,
     return TRUE;
 }
 
+/* Storage named deleter: removes the key and queues a storage event. */
 static int
 ns_storage_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
@@ -2847,6 +2932,7 @@ ns_storage_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return TRUE;
 }
 
+/* defineProperty on Storage: plain values become items; accessors/symbols define normally. */
 static int
 ns_storage_define_own(JSContext *ctx, JSValueConst this_obj, JSAtom prop,
                       JSValueConst val, JSValueConst getter,
@@ -2881,6 +2967,7 @@ ns_storage_define_own(JSContext *ctx, JSValueConst this_obj, JSAtom prop,
     return TRUE;
 }
 
+/* Enumerates stored keys as own enumerable properties. */
 static int
 ns_storage_get_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
                          JSValueConst obj)
@@ -2921,6 +3008,7 @@ static JSClassDef ns_storage_class = {
     .exotic     = &ns_storage_exotic,
 };
 
+/* Storage.getItem(): value or null. */
 static JSValue
 ns_storage_getItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2937,6 +3025,7 @@ ns_storage_getItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return v ? JS_NewString(ctx, v) : JS_NULL;
 }
 
+/* Marks localStorage dirty for flushing when the mutated store is it. */
 static void
 ns_storage_maybe_dirty(JSContext *ctx, GHashTable *store)
 {
@@ -2964,6 +3053,7 @@ static JSValue ns_iframe_lookup_realm_doc(ns_js *js, const ns_node *iframe);
 static void ns_iframe_store_realm_window(ns_js *js, ns_node *iframe,
                                          JSValueConst window);
 
+/* Calls a frame's storage handler with the frame window as this, logging exceptions. */
 static void
 ns_storage_call_frame_handler(ns_js *js, JSValue fn, JSValueConst fwin,
                               JSValueConst ev)
@@ -3017,6 +3107,7 @@ ns_storage_event_in_realm(ns_js *js, JSContext *fctx, JSValueConst ev,
     return out;
 }
 
+/* Invokes a frame window's own onstorage data property, if any. */
 static void
 ns_storage_fire_frame_on_prop(ns_js *js, JSValueConst fwin, JSValueConst ev)
 {
@@ -3032,6 +3123,7 @@ ns_storage_fire_frame_on_prop(ns_js *js, JSValueConst fwin, JSValueConst ev)
     JS_FreeValue(js->ctx, desc.setter);
 }
 
+/* Compiles and runs a frame body's onstorage attribute in the frame's realm, CSP allowing. */
 static void
 ns_storage_fire_frame_body_handler(ns_js *js, JSValueConst fwin,
                                    const ns_node *body, JSValueConst ev)
@@ -3071,6 +3163,7 @@ ns_storage_frame_is_origin(const ns_node *frame, const char *origin)
     return fo && g_ascii_strcasecmp(fo, origin) == 0;
 }
 
+/* Walks subframes delivering a per-realm storage event to same-origin non-source frames. */
 static void
 ns_storage_deliver_frames(ns_js *js, ns_node *n, JSValueConst ev,
                           JSValueConst source_win, const char *origin,
@@ -3114,6 +3207,7 @@ typedef struct {
     char   *origin;
 } ns_pending_storage_event;
 
+/* Dispatches queued storage events to frames and the same-origin main window. */
 static void
 ns_storage_drain_deferred_events(ns_js *js)
 {
@@ -3152,6 +3246,7 @@ ns_storage_drain_deferred_events(ns_js *js)
     js->storage_events_draining = FALSE;
 }
 
+/* Discards all queued storage events without dispatching. */
 static void
 ns_storage_free_deferred_events(ns_js *js)
 {
@@ -3168,6 +3263,7 @@ ns_storage_free_deferred_events(ns_js *js)
     g_array_free(q, TRUE);
 }
 
+/* Builds a StorageEvent for a change and queues it for deferred delivery. */
 static void
 ns_storage_fire_event(JSContext *ctx, JSValueConst storage_obj,
                       const char *key, const char *oldv, const char *newv)
@@ -3216,6 +3312,7 @@ ns_storage_fire_event(JSContext *ctx, JSValueConst storage_obj,
     g_array_append_val(js->pending_storage_events, p);
 }
 
+/* Storage.setItem(): enforces quota, stores, and queues a storage event when changed. */
 static JSValue
 ns_storage_setItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -3248,6 +3345,7 @@ ns_storage_setItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* Storage.removeItem(): deletes the key and queues a storage event if it existed. */
 static JSValue
 ns_storage_removeItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -3268,6 +3366,7 @@ ns_storage_removeItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return JS_UNDEFINED;
 }
 
+/* Storage.clear(): empties a non-empty store and queues a null-key storage event. */
 static JSValue
 ns_storage_clear(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -3281,6 +3380,7 @@ ns_storage_clear(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return JS_UNDEFINED;
 }
 
+/* Storage.key(): Nth key in sorted key order, or null. */
 static JSValue
 ns_storage_key(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -3330,6 +3430,7 @@ static const JSCFunctionListEntry ns_tlist_proto_funcs[] = {
     JS_CGETSET_DEF("value",  ns_tlist_get_value, ns_tlist_set_value),
 };
 
+/* CSSStyleDeclaration.cssText getter: serialized inline style with -0 normalized. */
 static JSValue
 ns_style_get_cssText(JSContext *ctx, JSValueConst this_val)
 {
@@ -3353,6 +3454,7 @@ ns_style_set_cssText(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* getPropertyValue(): specified value in canonical form, without !important. */
 static JSValue
 ns_style_getPropertyValue(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -3373,6 +3475,7 @@ ns_style_getPropertyValue(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* setProperty(): validates name/value/priority and rewrites the style attribute. */
 static JSValue
 ns_style_setProperty(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -3408,6 +3511,7 @@ ns_style_setProperty(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* removeProperty(): clears a declaration (or all) and returns its old value. */
 static JSValue
 ns_style_removeProperty(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -3438,6 +3542,7 @@ ns_get_null(JSContext *ctx, JSValueConst this_val)
     return JS_NULL;
 }
 
+/* CSSStyleDeclaration.item(): property name at index via the exotic getter, or "". */
 static JSValue
 ns_style_item(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -3451,6 +3556,7 @@ ns_style_item(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, "");
 }
 
+/* getPropertyPriority(): "important" if the declaration carries !important. */
 static JSValue
 ns_style_getPropertyPriority(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -3466,6 +3572,7 @@ ns_style_getPropertyPriority(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, important ? "important" : "");
 }
 
+/* Calls a named method on the style object if callable; returns its result. */
 static JSValue
 ns_style_call_own(JSContext *ctx, JSValueConst this_val, const char *method,
                   int argc, JSValueConst *argv)
@@ -3480,6 +3587,7 @@ ns_style_call_own(JSContext *ctx, JSValueConst this_val, const char *method,
     return r;
 }
 
+/* cssFloat getter, routed through getPropertyValue("float"). */
 static JSValue
 ns_style_get_cssFloat(JSContext *ctx, JSValueConst this_val)
 {
@@ -3490,6 +3598,7 @@ ns_style_get_cssFloat(JSContext *ctx, JSValueConst this_val)
     return r;
 }
 
+/* cssFloat setter, routed through setProperty("float", value). */
 static JSValue
 ns_style_set_cssFloat(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -3513,6 +3622,7 @@ static const JSCFunctionListEntry ns_style_proto_funcs[] = {
     JS_CFUNC_DEF("getPropertyPriority", 1, ns_style_getPropertyPriority),
 };
 
+/* Clears the node's back-pointer to its JS wrapper when the wrapper is collected. */
 static void
 ns_element_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -3549,6 +3659,7 @@ ns_listener_is_tombstoned(const ns_listener *l)
     return !l || l->type == NULL;
 }
 
+/* Marks a listener dead by freeing its type; swept later outside dispatch. */
 static void
 ns_listener_tombstone(JSContext *ctx, ns_listener *l)
 {
@@ -3566,6 +3677,7 @@ ns_listeners_for(ns_js *js, const ns_node *target)
     return g_hash_table_lookup(js->listeners_by_target, target);
 }
 
+/* Adds a listener to the global list and the per-target index. */
 static void
 ns_listener_register(ns_js *js, ns_listener *l)
 {
@@ -3582,6 +3694,7 @@ ns_listener_register(ns_js *js, ns_listener *l)
     g_ptr_array_add(own, l);
 }
 
+/* Removes a listener from the per-target index, dropping empty buckets. */
 static void
 ns_listener_unregister(ns_js *js, ns_listener *l)
 {
@@ -3592,6 +3705,7 @@ ns_listener_unregister(ns_js *js, ns_listener *l)
         g_hash_table_remove(js->listeners_by_target, l->target);
 }
 
+/* Tombstones every listener registered on a target node. */
 static void
 ns_listeners_tombstone_target(ns_js *js, const ns_node *target)
 {
@@ -3600,6 +3714,7 @@ ns_listeners_tombstone_target(ns_js *js, const ns_node *target)
         ns_listener_tombstone(js->ctx, g_ptr_array_index(own, i));
 }
 
+/* True if the listener's AbortSignal reports aborted. */
 static gboolean
 ns_listener_signal_aborted(ns_js *js, const ns_listener *l)
 {
@@ -3614,6 +3729,7 @@ ns_listener_signal_aborted(ns_js *js, const ns_listener *l)
     return aborted;
 }
 
+/* Frees tombstoned listeners when no dispatch or snapshot is in progress. */
 static void
 ns_listeners_sweep(ns_js *js)
 {
@@ -3638,6 +3754,7 @@ ns_listeners_sweep(ns_js *js)
 
 static void ns_mut_scrub_node(ns_js *js, ns_node *n);
 
+/* Node teardown hook: detaches the JS wrapper and drops all per-node JS state. */
 static void
 ns_invalidate_wrapper(ns_node *n)
 {
@@ -3688,6 +3805,7 @@ ns_cmp_tag_name(const void *a, const void *b)
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
+/* True for HTML tags whose interface is plain HTMLElement (sorted bsearch). */
 static gboolean
 ns_html_tag_has_plain_interface(const char *lower_name)
 {
@@ -3704,6 +3822,7 @@ ns_html_tag_has_plain_interface(const char *lower_name)
                    ns_cmp_tag_name) != NULL;
 }
 
+/* Picks the JS prototype for a node from its kind, namespace and tag name. */
 static JSValue
 ns_node_kind_proto(ns_js *js, const ns_node *node)
 {
@@ -3757,6 +3876,7 @@ static const char *const ns_body_window_reflected_handlers[] = {
     "onunhandledrejection", "onunload",
 };
 
+/* True unless the body belongs to a foreign document without a window. */
 static gboolean
 ns_body_has_browsing_context(JSContext *ctx, JSValueConst this_val)
 {
@@ -3766,6 +3886,7 @@ ns_body_has_browsing_context(JSContext *ctx, JSValueConst this_val)
     return !foreign;
 }
 
+/* Getter for body/frameset window-reflected handlers: reads the window's onX. */
 static JSValue
 ns_body_reflected_get(JSContext *ctx, JSValueConst this_val, int argc,
                       JSValueConst *argv, int magic, JSValueConst *func_data)
@@ -3780,6 +3901,7 @@ ns_body_reflected_get(JSContext *ctx, JSValueConst this_val, int argc,
     return v;
 }
 
+/* Setter for body/frameset window-reflected handlers: sets window onX or null. */
 static JSValue
 ns_body_reflected_set(JSContext *ctx, JSValueConst this_val, int argc,
                       JSValueConst *argv, int magic, JSValueConst *func_data)
@@ -3798,6 +3920,7 @@ ns_body_reflected_set(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* True for on* names that body/frameset forward to the Window. */
 static gboolean
 ns_name_is_body_reflected_handler(const char *name)
 {
@@ -3808,6 +3931,7 @@ ns_name_is_body_reflected_handler(const char *name)
     return FALSE;
 }
 
+/* Compiles handler source as function(event){...} in the given realm. */
 static JSValue
 ns_compile_inline_handler(JSContext *ctx, const char *body)
 {
@@ -3820,6 +3944,7 @@ ns_compile_inline_handler(JSContext *ctx, const char *body)
     return fn;
 }
 
+/* Forwards a body/frameset on* content attribute to the matching Window handler. */
 static void
 ns_body_forward_content_handler(JSContext *ctx, const ns_node *n,
                                 const char *name, const char *code)
@@ -3838,6 +3963,7 @@ ns_body_forward_content_handler(JSContext *ctx, const ns_node *n,
     JS_FreeValue(ctx, global);
 }
 
+/* Defines window-forwarding on* accessors on a body/frameset wrapper. */
 static void
 ns_install_body_reflected_handlers(JSContext *ctx, JSValueConst wrapper)
 {
@@ -3856,6 +3982,7 @@ ns_install_body_reflected_handlers(JSContext *ctx, JSValueConst wrapper)
     }
 }
 
+/* Returns the cached or a new JS wrapper for a node (new reference). */
 JSValue
 ns_make_element(JSContext *ctx, const ns_node *cnode)
 {
@@ -3925,6 +4052,7 @@ ns_node_is_frame_element(const ns_node *n)
             g_ascii_strcasecmp(n->name, "frame") == 0);
 }
 
+/* Finds the Nth iframe/frame in tree order, not descending into frames. */
 static const ns_node *
 ns_frame_at_index(const ns_node *n, uint32_t *index, int depth)
 {
@@ -3940,6 +4068,7 @@ ns_frame_at_index(const ns_node *n, uint32_t *index, int depth)
     return NULL;
 }
 
+/* True if the frame's nearest ancestor document context is doc (no frame between). */
 static gboolean
 ns_frame_is_child_of(const ns_node *doc, const ns_node *frame)
 {
@@ -3950,6 +4079,7 @@ ns_frame_is_child_of(const ns_node *doc, const ns_node *frame)
     return FALSE;
 }
 
+/* Tree walk for the first iframe/frame whose name attribute matches. */
 static const ns_node *
 ns_frame_named_walk(const ns_node *n, const char *name, int depth)
 {
@@ -3966,6 +4096,7 @@ ns_frame_named_walk(const ns_node *n, const char *name, int depth)
     return NULL;
 }
 
+/* First child frame named name, using the tag index when available. */
 static const ns_node *
 ns_frame_named(const ns_node *doc, const char *name)
 {
@@ -3988,6 +4119,7 @@ ns_frame_named(const ns_node *doc, const char *name)
     return first;
 }
 
+/* Counts iframe/frame elements in a document, not descending into frames. */
 static uint32_t
 ns_frame_count(const ns_node *n, int depth)
 {
@@ -3998,6 +4130,7 @@ ns_frame_count(const ns_node *n, int depth)
     return count;
 }
 
+/* contentWindow of a frame element. */
 static JSValue
 ns_frame_window(JSContext *ctx, const ns_node *frame)
 {
@@ -4008,6 +4141,7 @@ ns_frame_window(JSContext *ctx, const ns_node *frame)
     return win;
 }
 
+/* Resolves a window[key] key to a child frame by index or name. */
 static const ns_node *
 ns_window_child_frame_for(const ns_node *doc, const char *key)
 {
@@ -4018,6 +4152,7 @@ ns_window_child_frame_for(const ns_node *doc, const char *key)
     return *key ? ns_frame_named(doc, key) : NULL;
 }
 
+/* Native helper returning the child frame window for an index or name key. */
 static JSValue
 ns_window_child_frame(JSContext *ctx, JSValueConst this_val, int argc,
                       JSValueConst *argv)
@@ -4042,6 +4177,7 @@ ns_window_named_fill(JSPropertyDescriptor *desc, JSValue value, int flags)
     desc->setter = JS_UNDEFINED;
 }
 
+/* Document backing a WindowProperties object: the page or a live iframe's document. */
 static const ns_node *
 ns_window_named_document(ns_js *js, JSValueConst obj)
 {
@@ -4052,6 +4188,7 @@ ns_window_named_document(ns_js *js, JSValueConst obj)
     return ns_iframe_document_node(iframe);
 }
 
+/* WindowProperties named getter: child frames by index/name, then elements by id. */
 static int
 ns_window_named_get(JSContext *ctx, JSPropertyDescriptor *desc,
                     JSValueConst obj, JSAtom prop)
@@ -4097,6 +4234,7 @@ ns_unwrap_element_mut(JSValueConst val)
     return JS_GetOpaque(val, ns_element_class_id);
 }
 
+/* Document node for a window object, falling back to iframe or current document. */
 static ns_node *
 ns_window_document_for(JSContext *ctx, JSValueConst window)
 {
@@ -4226,6 +4364,7 @@ static const ns_instof_def ns_instof_table[] = {
     { "HTMLUnknownElement",       NULL,                 NS_INSTOF_UNKNOWN },
 };
 
+/* OrdinaryHasInstance: walks value's prototype chain looking for ctor.prototype. */
 static JSValue
 ns_ctor_ordinary_has_instance(JSContext *ctx, JSValueConst ctor,
                               JSValueConst value)
@@ -4254,6 +4393,7 @@ ns_ctor_ordinary_has_instance(JSContext *ctx, JSValueConst ctor,
     return JS_FALSE;
 }
 
+/* Symbol.hasInstance for DOM interfaces: matches native nodes by kind and tag name. */
 static JSValue
 ns_ctor_hasInstance(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv, int magic)
@@ -4345,6 +4485,7 @@ ns_ctor_hasInstance(JSContext *ctx, JSValueConst this_val,
     return JS_FALSE;
 }
 
+/* Installs Symbol.hasInstance on every constructor in ns_instof_table. */
 static void
 ns_install_hasinstance(JSContext *ctx, JSValueConst global)
 {
@@ -4366,6 +4507,7 @@ ns_install_hasinstance(JSContext *ctx, JSValueConst global)
     JS_FreeAtom(ctx, hi_atom);
 }
 
+/* Uppercased prefix:name for prefixed elements, or undefined without a prefix. */
 static JSValue
 ns_element_qualified_upper(JSContext *ctx, const ns_node *n)
 {
@@ -4382,6 +4524,7 @@ ns_element_qualified_upper(JSContext *ctx, const ns_node *n)
 static gboolean ns_doc_wrapper_is_xml(JSContext *ctx, JSValueConst doc_val);
 static JSValue ns_element_get_ownerDocument(JSContext *ctx, JSValueConst this_val);
 
+/* Element.tagName: qualified name, uppercased only for HTML elements in HTML documents. */
 static JSValue
 ns_element_get_tagName(JSContext *ctx, JSValueConst this_val)
 {
@@ -4414,6 +4557,7 @@ ns_element_get_tagName(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* accessKeyLabel: the accesskey value when it is a single character, else "". */
 static JSValue
 ns_element_get_accessKeyLabel(JSContext *ctx, JSValueConst this_val)
 {
@@ -4424,6 +4568,7 @@ ns_element_get_accessKeyLabel(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, key);
 }
 
+/* Element.localName, stripping any prefix from namespaced foreign elements. */
 static JSValue
 ns_element_get_localName(JSContext *ctx, JSValueConst this_val)
 {
@@ -4437,6 +4582,7 @@ ns_element_get_localName(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, n->name);
 }
 
+/* Element.prefix from the stored namespace prefix or a prefixed foreign name. */
 static JSValue
 ns_element_get_prefix(JSContext *ctx, JSValueConst this_val)
 {
@@ -4533,6 +4679,7 @@ ns_enum_kw_eq(const char *v, gsize vlen, const char *kw)
     return vlen == klen && g_ascii_strncasecmp(v, kw, klen) == 0;
 }
 
+/* Enumerated attribute reflection: canonical keyword or missing/invalid default. */
 static const char *
 ns_enum_normalize_len(const char *attr, const char *v, gsize vlen)
 {
@@ -4555,6 +4702,7 @@ ns_enum_normalize(const char *attr, const char *v)
     return ns_enum_normalize_len(attr, v, v ? strlen(v) : 0);
 }
 
+/* Resolves a URL attribute value against the document base URL for reflection. */
 static JSValue
 ns_js_doc_url_string(JSContext *ctx, const char *v)
 {
@@ -4564,6 +4712,7 @@ ns_js_doc_url_string(JSContext *ctx, const char *v)
     return JS_NewString(ctx, resolved ? resolved : v);
 }
 
+/* Generic reflected attribute getter by table index; resolves URLs and enumerations. */
 static JSValue
 ns_element_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -4598,6 +4747,7 @@ ns_element_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewStringLen(ctx, v, v_len);
 }
 
+/* True for global/aria attributes reflected on every element, custom ones included. */
 static gboolean
 ns_reflected_attr_is_global(const char *name)
 {
@@ -4613,6 +4763,7 @@ ns_reflected_attr_is_global(const char *name)
     return FALSE;
 }
 
+/* True if the element name contains a hyphen. */
 static gboolean
 ns_node_is_custom_element(const ns_node *n)
 {
@@ -4620,6 +4771,7 @@ ns_node_is_custom_element(const ns_node *n)
            strchr(n->name, '-') != NULL;
 }
 
+/* True for elements whose IDL interface reflects a name attribute. */
 static gboolean
 ns_element_reflects_name_attr(const ns_node *n)
 {
@@ -4646,6 +4798,7 @@ ns_element_reflect_str_get(JSContext *ctx, JSValueConst this_val,
     return JS_NewStringLen(ctx, v, len);
 }
 
+/* Sets a string-reflected attribute, recording the mutation. */
 static JSValue
 ns_element_reflect_str_set(JSContext *ctx, JSValueConst this_val,
                           JSValueConst val, const char *attr)
@@ -4661,6 +4814,7 @@ ns_element_reflect_str_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* True for autofill field names from the HTML autocomplete grammar. */
 static gboolean
 ns_autocomplete_field_token(const char *s)
 {
@@ -4687,6 +4841,7 @@ ns_autocomplete_field_token(const char *s)
     return FALSE;
 }
 
+/* True for autofill contact tokens (home, work, mobile, fax, pager). */
 static gboolean
 ns_autocomplete_contact_token(const char *s)
 {
@@ -4695,6 +4850,7 @@ ns_autocomplete_contact_token(const char *s)
                  strcmp(s, "pager") == 0);
 }
 
+/* autocomplete IDL getter: returns the attribute only if it matches the autofill grammar. */
 static JSValue
 ns_element_get_autocomplete(JSContext *ctx, JSValueConst this_val)
 {
@@ -4773,6 +4929,7 @@ ns_element_set_autocomplete(JSContext *ctx, JSValueConst this_val,
     return ns_element_reflect_str_set(ctx, this_val, val, "autocomplete");
 }
 
+/* True for an img with explicit width and height, so src changes don't affect layout. */
 static gboolean
 ns_js_img_src_layout_neutral(const ns_node *n)
 {
@@ -4782,6 +4939,7 @@ ns_js_img_src_layout_neutral(const ns_node *n)
     return w && *w && h && *h;
 }
 
+/* Sets an attribute with mutation records and CE callbacks but only a repaint. */
 static void
 ns_js_set_attr_recorded_paint_only(ns_js *js, ns_node *n,
                                    const char *name, const char *value)
@@ -4800,6 +4958,7 @@ ns_js_set_attr_recorded_paint_only(ns_js *js, ns_node *n,
     g_free(old_copy);
 }
 
+/* True for legacy [LegacyNullToEmptyString] attributes, where null sets "". */
 static gboolean
 ns_reflect_null_is_empty(const ns_node *n, const char *attr)
 {
@@ -4824,6 +4983,7 @@ ns_reflect_null_is_empty(const ns_node *n, const char *attr)
     return FALSE;
 }
 
+/* Generic reflected attribute setter; also restarts img/iframe/object loads on change. */
 static JSValue
 ns_element_attr_setter(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
@@ -4873,6 +5033,7 @@ ns_element_attr_setter(JSContext *ctx, JSValueConst this_val, JSValueConst val, 
     return JS_UNDEFINED;
 }
 
+/* Canonical dir keyword (ltr, rtl, auto) for an attribute value, else "". */
 static const char *
 ns_dir_canonical_len(const char *v, gsize vlen)
 {
@@ -4906,6 +5067,7 @@ ns_element_set_dir(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* HTMLElement.translate: inherited translate=yes/no from the nearest ancestor. */
 static JSValue
 ns_element_get_translate(JSContext *ctx, JSValueConst this_val)
 {
@@ -4961,6 +5123,7 @@ static const ns_int_attr_def g_int_attrs[] = {
     { "scrolldelay", 85, 0,      G_MAXINT, NIT_ULONG },
 };
 
+/* HTML rules for parsing integers: optional sign and digits, clamped to 2^32-1. */
 static gboolean
 ns_html_parse_int(const char *s, gint64 *out)
 {
@@ -4985,6 +5148,7 @@ ns_html_parse_int(const char *s, gint64 *out)
 #define NS_HTML_MAXINT G_GINT64_CONSTANT(2147483647)
 #define NS_HTML_MININT G_GINT64_CONSTANT(-2147483648)
 
+/* True for size/cols/rows that are DOMString-reflected on hr, font and frameset. */
 static gboolean
 ns_int_attr_is_string(const char *elem, const char *attr)
 {
@@ -4996,6 +5160,7 @@ ns_int_attr_is_string(const char *elem, const char *attr)
     return FALSE;
 }
 
+/* Integer attribute reflection (long, limited, unsigned, clamped) with per-tag defaults. */
 static JSValue
 ns_element_int_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -5054,6 +5219,7 @@ ns_element_int_attr_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, (int32_t)parsed);
 }
 
+/* Integer attribute reflection setter; throws IndexSizeError for invalid limited values. */
 static JSValue
 ns_element_int_attr_setter(JSContext *ctx, JSValueConst this_val,
                            JSValueConst val, int magic)
@@ -5112,6 +5278,7 @@ ns_element_int_attr_setter(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Builds a minimal SVGLength-like object, parsing value and unit type. */
 static JSValue
 ns_make_svg_length(JSContext *ctx, const char *str)
 {
@@ -5142,6 +5309,7 @@ ns_make_svg_length(JSContext *ctx, const char *str)
     return o;
 }
 
+/* SVGAnimatedLength-like object with baseVal and animVal from data-nd-anim-* overrides. */
 static JSValue
 ns_make_svg_animated_length(JSContext *ctx, const ns_node *n, const char *attr)
 {
@@ -5183,6 +5351,7 @@ static JSValue ns_element_img_natural_width(JSContext *ctx,
 static JSValue ns_element_img_natural_height(JSContext *ctx,
                                              JSValueConst this_val);
 
+/* True for elements whose width/height reflect as DOMString. */
 static gboolean
 ns_dimension_is_string(const char *name)
 {
@@ -5196,6 +5365,7 @@ ns_dimension_is_string(const char *name)
     return FALSE;
 }
 
+/* width/height setter: string attribute for some elements, integer otherwise. */
 static JSValue
 ns_element_dimension_setter(JSContext *ctx, JSValueConst this_val,
                             JSValueConst val, int magic)
@@ -5213,6 +5383,7 @@ ns_element_dimension_setter(JSContext *ctx, JSValueConst this_val,
     return ns_element_int_attr_setter(ctx, this_val, val, magic);
 }
 
+/* width/height getter: SVG animated length, string, img layout size, or integer. */
 static JSValue
 ns_element_dimension_getter(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -5243,6 +5414,7 @@ ns_element_dimension_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return ns_element_int_attr_getter(ctx, this_val, magic);
 }
 
+/* SVG beginElement(): applies the animation's to value to the parent's anim override. */
 static JSValue
 ns_svg_beginElement(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -5270,6 +5442,7 @@ ns_returns_undefined(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* tabIndex: parsed attribute, else 0 for natively focusable elements and -1 otherwise. */
 static JSValue
 ns_element_get_tabIndex(JSContext *ctx, JSValueConst this_val)
 {
@@ -5380,6 +5553,7 @@ static const ns_enum_attr_def g_enum_attrs[] = {
     [NS_ENUM_ARIA_SORT]            = { "aria-sort",            kw_ariasort,     4, NULL,    "none",  TRUE },
 };
 
+/* Enumerated attribute reflection returning keyword, missing or invalid default (or null). */
 static JSValue
 ns_reflect_enum(JSContext *ctx, const ns_node *n, const ns_enum_attr_def *d)
 {
@@ -5402,6 +5576,7 @@ static const char *const ns_aria_string_attrs[] = {
     "aria-valuemax", "aria-valuemin", "aria-valuenow", "aria-valuetext",
 };
 
+/* ARIA string reflection getter; null when the attribute is absent. */
 static JSValue
 ns_element_aria_string_getter(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -5414,6 +5589,7 @@ ns_element_aria_string_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return v ? JS_NewStringLen(ctx, v, len) : JS_NULL;
 }
 
+/* ARIA string reflection setter; null or undefined removes the attribute. */
 static JSValue
 ns_element_aria_string_setter(JSContext *ctx, JSValueConst this_val,
                               JSValueConst val, int magic)
@@ -5438,6 +5614,7 @@ ns_element_enum_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return ns_reflect_enum(ctx, ns_unwrap_element(this_val), &g_enum_attrs[magic]);
 }
 
+/* Enumerated attribute setter; null removes the attribute for nullable ones. */
 static JSValue
 ns_element_enum_setter(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
@@ -5465,6 +5642,7 @@ static const char *const kw_input_types[] = {
 };
 static const char *const kw_button_types[] = { "submit", "reset", "button" };
 
+/* type IDL getter: input/button enumerations and fixed types for select, textarea etc. */
 static JSValue
 ns_element_get_type(JSContext *ctx, JSValueConst this_val)
 {
@@ -5501,6 +5679,7 @@ ns_element_get_type(JSContext *ctx, JSValueConst this_val)
     return v ? JS_NewStringLen(ctx, v, vlen) : JS_NewString(ctx, "");
 }
 
+/* Sets the type attribute and re-runs value sanitization for inputs. */
 static JSValue
 ns_element_set_type(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -5510,6 +5689,7 @@ ns_element_set_type(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return r;
 }
 
+/* Maps autocapitalize values to canonical states (none, sentences, words, characters). */
 static const char *
 ns_autocapitalize_canon(const char *raw)
 {
@@ -5523,6 +5703,7 @@ ns_autocapitalize_canon(const char *raw)
     return NULL;
 }
 
+/* True for form controls whose autocapitalize falls back to their form owner. */
 static gboolean
 ns_element_autocapitalize_inherits(const ns_node *n)
 {
@@ -5532,6 +5713,7 @@ ns_element_autocapitalize_inherits(const ns_node *n)
     return ns_node_name_is_any_of(n, tags);
 }
 
+/* autocapitalize getter: own state or the form owner's for form controls. */
 static JSValue
 ns_element_get_autocapitalize(JSContext *ctx, JSValueConst this_val)
 {
@@ -5583,6 +5765,7 @@ ns_element_set_spellcheck(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* True if the node is inside a template element or template contents. */
 static gboolean
 ns_node_in_template_content(const ns_node *n)
 {
@@ -5593,6 +5776,7 @@ ns_node_in_template_content(const ns_node *n)
     return FALSE;
 }
 
+/* htmlFor: DOMTokenList on output, string on label/script, undefined otherwise. */
 static JSValue
 ns_element_get_htmlFor(JSContext *ctx, JSValueConst this_val)
 {
@@ -5633,6 +5817,7 @@ ns_element_boolattr_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return ns_element_get_attr(n, kBoolAttrs[magic]) ? JS_TRUE : JS_FALSE;
 }
 
+/* Boolean attribute setter; toggling details open fires the toggle steps. */
 static JSValue
 ns_element_boolattr_setter(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
@@ -5650,6 +5835,7 @@ ns_element_boolattr_setter(JSContext *ctx, JSValueConst this_val, JSValueConst v
     return JS_UNDEFINED;
 }
 
+/* Default draggable state: true for img and for a with an href. */
 static gboolean
 ns_element_draggable_auto_default(const ns_node *n)
 {
@@ -5662,6 +5848,7 @@ ns_element_draggable_auto_default(const ns_node *n)
     return FALSE;
 }
 
+/* draggable getter: explicit true/false, else the element's default. */
 static JSValue
 ns_element_get_draggable(JSContext *ctx, JSValueConst this_val)
 {
@@ -5684,6 +5871,7 @@ ns_element_set_draggable(JSContext *ctx, JSValueConst this_val, JSValueConst val
     return JS_UNDEFINED;
 }
 
+/* contentEditable getter: true, false, plaintext-only or inherit. */
 static JSValue
 ns_element_get_contentEditable(JSContext *ctx, JSValueConst this_val)
 {
@@ -5699,6 +5887,7 @@ ns_element_get_contentEditable(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "inherit");
 }
 
+/* contentEditable setter; throws SyntaxError for unknown states. */
 static JSValue
 ns_element_set_contentEditable(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -5723,6 +5912,7 @@ ns_element_set_contentEditable(JSContext *ctx, JSValueConst this_val, JSValueCon
     return ret;
 }
 
+/* Node.textContent: null for documents/doctypes, data for text, else descendant text. */
 static JSValue
 ns_element_get_textContent(JSContext *ctx, JSValueConst this_val)
 {
@@ -5759,6 +5949,7 @@ typedef enum {
     NS_IT_WS_PRE_LINE
 } ns_inner_text_ws;
 
+/* True for elements never rendered for innerText purposes. */
 static gboolean
 ns_inner_text_skip_tag(const char *nm)
 {
@@ -5773,6 +5964,7 @@ ns_inner_text_skip_tag(const char *nm)
     return FALSE;
 }
 
+/* True for replaced elements (img, canvas, input) in innerText. */
 static gboolean
 ns_inner_text_is_replaced(const char *nm)
 {
@@ -5783,6 +5975,7 @@ ns_inner_text_is_replaced(const char *nm)
     return FALSE;
 }
 
+/* True if the element is a table cell by computed display or td/th tag. */
 static gboolean
 ns_inner_text_is_cell(const ns_style *s, const char *nm)
 {
@@ -5795,6 +5988,7 @@ ns_inner_text_is_cell(const ns_style *s, const char *nm)
                   g_ascii_strcasecmp(nm, "th") == 0);
 }
 
+/* True if a later sibling element is a table cell (for tab separators). */
 static gboolean
 ns_inner_text_has_following_cell(ns_js *js, const ns_node *n)
 {
@@ -5817,6 +6011,7 @@ ns_inner_text_is_all_ws(const char *s)
     return TRUE;
 }
 
+/* True for table-internal containers whose whitespace text is dropped. */
 static gboolean
 ns_inner_text_table_container(const ns_style *s, const char *nm)
 {
@@ -5837,6 +6032,7 @@ ns_inner_text_table_container(const ns_style *s, const char *nm)
     return FALSE;
 }
 
+/* True if the element is block-level by computed display or HTML default. */
 static gboolean
 ns_inner_text_is_block(const ns_style *s, const char *nm)
 {
@@ -5864,6 +6060,7 @@ ns_inner_text_is_block(const ns_style *s, const char *nm)
     return FALSE;
 }
 
+/* Whitespace handling mode from white-space or pre-like tags, else inherited. */
 static ns_inner_text_ws
 ns_inner_text_ws_mode(const ns_style *s, const char *nm, ns_inner_text_ws inherited)
 {
@@ -5887,6 +6084,7 @@ ns_inner_text_ws_mode(const ns_style *s, const char *nm, ns_inner_text_ws inheri
     return inherited;
 }
 
+/* Visibility from computed visibility, else inherited. */
 static gboolean
 ns_inner_text_visible(const ns_style *s, gboolean inherited)
 {
@@ -5903,6 +6101,7 @@ ns_inner_text_visible(const ns_style *s, gboolean inherited)
     return inherited;
 }
 
+/* Active text-transform keyword (uppercase, lowercase, capitalize) or NULL. */
 static const char *
 ns_inner_text_transform(const ns_style *s)
 {
@@ -5917,6 +6116,7 @@ ns_inner_text_transform(const ns_style *s)
     return NULL;
 }
 
+/* Emits pending required line breaks, dropping them at the start of output. */
 static void
 ns_inner_text_materialize_breaks(ns_inner_text_ctx *c)
 {
@@ -5931,6 +6131,7 @@ ns_inner_text_materialize_breaks(ns_inner_text_ctx *c)
     }
 }
 
+/* Requests at least count line breaks before the next content. */
 static void
 ns_inner_text_require_break(ns_inner_text_ctx *c, int count)
 {
@@ -5938,6 +6139,7 @@ ns_inner_text_require_break(ns_inner_text_ctx *c, int count)
     c->pending_space = FALSE;
 }
 
+/* Appends a character after flushing pending breaks and collapsed spaces. */
 static void
 ns_inner_text_emit_glyph(ns_inner_text_ctx *c, char ch)
 {
@@ -5951,6 +6153,7 @@ ns_inner_text_emit_glyph(ns_inner_text_ctx *c, char ch)
     c->have_text = TRUE;
 }
 
+/* Emits a hard newline (br or preserved newline). */
 static void
 ns_inner_text_forced_break(ns_inner_text_ctx *c)
 {
@@ -5961,6 +6164,7 @@ ns_inner_text_forced_break(ns_inner_text_ctx *c)
     c->have_text = TRUE;
 }
 
+/* Accounts for a replaced element as content without emitting text. */
 static void
 ns_inner_text_emit_replaced(ns_inner_text_ctx *c)
 {
@@ -5972,6 +6176,7 @@ ns_inner_text_emit_replaced(ns_inner_text_ctx *c)
     c->have_content = TRUE;
 }
 
+/* Emits a tab between table cells. */
 static void
 ns_inner_text_emit_tab(ns_inner_text_ctx *c)
 {
@@ -5982,6 +6187,7 @@ ns_inner_text_emit_tab(ns_inner_text_ctx *c)
     c->have_text = TRUE;
 }
 
+/* Applies text-transform to UTF-8 text; returns a new string or NULL. */
 static char *
 ns_inner_text_apply_transform(const char *src, const char *tt)
 {
@@ -6012,6 +6218,7 @@ ns_inner_text_apply_transform(const char *src, const char *tt)
     return NULL;
 }
 
+/* Emits a text node honoring whitespace mode and text-transform. */
 static void
 ns_inner_text_emit_text(ns_inner_text_ctx *c, const char *t,
                         ns_inner_text_ws ws, const char *tt)
@@ -6037,6 +6244,7 @@ ns_inner_text_emit_text(ns_inner_text_ctx *c, const char *t,
     g_free(xf);
 }
 
+/* True for flex and grid containers, whose children are blockified. */
 static gboolean
 ns_inner_text_blockifies_children(const ns_style *s)
 {
@@ -6044,6 +6252,7 @@ ns_inner_text_blockifies_children(const ns_style *s)
     return ns_display_is_flex_container(d) || ns_display_is_grid_container(d);
 }
 
+/* False for shadow roots and non-option children of select/optgroup. */
 static gboolean
 ns_inner_text_rendered_child(const ns_node *parent, const ns_node *child)
 {
@@ -6060,6 +6269,7 @@ ns_inner_text_rendered_child(const ns_node *parent, const ns_node *child)
     return TRUE;
 }
 
+/* Emits an atomic inline's collected text as one unit, or as replaced if empty. */
 static void
 ns_inner_text_emit_atomic(ns_inner_text_ctx *c, const char *inner)
 {
@@ -6076,6 +6286,7 @@ ns_inner_text_emit_atomic(ns_inner_text_ctx *c, const char *inner)
     c->have_text = TRUE;
 }
 
+/* True for SVG elements whose content is never rendered. */
 static gboolean
 ns_inner_text_svg_unrendered(const char *nm)
 {
@@ -6089,6 +6300,7 @@ ns_inner_text_svg_unrendered(const char *nm)
     return FALSE;
 }
 
+/* Collects text only from inside SVG text elements. */
 static void
 ns_inner_text_collect_svg(const ns_node *n, ns_inner_text_ctx *c,
                           gboolean in_text, const char *tt, int depth)
@@ -6117,6 +6329,7 @@ ns_inner_text_is_atomic_inline(const ns_style *s)
     return ns_display_is_atomic_inline(ns_css_display_of(s));
 }
 
+/* Collects children, honoring closed details and tab-separating table cells. */
 static void
 ns_inner_text_collect_children(ns_js *js, const ns_node *n, ns_inner_text_ctx *c,
                                ns_inner_text_ws child_ws, gboolean child_visible,
@@ -6145,6 +6358,7 @@ ns_inner_text_collect_children(ns_js *js, const ns_node *n, ns_inner_text_ctx *c
     }
 }
 
+/* Rendered-text walk implementing the HTML innerText getter algorithm. */
 static void
 ns_inner_text_collect(ns_js *js, const ns_node *n, ns_inner_text_ctx *c,
                       ns_inner_text_ws ws, gboolean visible, const char *tt,
@@ -6225,6 +6439,7 @@ ns_inner_text_collect(ns_js *js, const ns_node *n, ns_inner_text_ctx *c,
     if (!is_root && breaks) ns_inner_text_require_break(c, breaks);
 }
 
+/* True for non-HTML elements, where innerText/outerText are not exposed. */
 static gboolean
 ns_inner_outer_text_unsupported(const ns_node *n)
 {
@@ -6233,6 +6448,7 @@ ns_inner_outer_text_unsupported(const ns_node *n)
     return ns_node_is_element_named(n, "svg") || ns_node_is_element_named(n, "math");
 }
 
+/* innerText getter; flushes layout and falls back to textContent when not rendered. */
 static JSValue
 ns_element_get_innerText(JSContext *ctx, JSValueConst this_val)
 {
@@ -6259,6 +6475,7 @@ ns_element_get_innerText(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* text getter for option, a, script and title; undefined elsewhere. */
 static JSValue
 ns_element_get_text(JSContext *ctx, JSValueConst this_val)
 {
@@ -6285,6 +6502,7 @@ ns_element_get_text(JSContext *ctx, JSValueConst this_val)
     return JS_UNDEFINED;
 }
 
+/* text setter: sets textContent on supporting elements, else defines an expando. */
 static JSValue
 ns_element_set_text(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -6314,6 +6532,7 @@ static JSValue ns_radio_node_list_get_value(JSContext *ctx, JSValueConst this_va
 static JSValue ns_radio_node_list_set_value(JSContext *ctx, JSValueConst this_val,
                                             int argc, JSValueConst *argv);
 
+/* Length of a UTF-8 string in UTF-16 code units, as DOM string offsets use. */
 static glong
 ns_utf16_length(const char *s)
 {
@@ -6323,6 +6542,7 @@ ns_utf16_length(const char *s)
     return units;
 }
 
+/* Maps a UTF-16 code-unit offset to a UTF-8 pointer, never splitting a code point. */
 static const char *
 ns_utf16_offset_to_ptr(const char *s, glong offset)
 {
@@ -6343,6 +6563,7 @@ ns_cdata_uint_arg(JSContext *ctx, JSValueConst v, uint32_t *out)
     return JS_ToUint32(ctx, out, v) == 0;
 }
 
+/* Replaces a UTF-16 offset/count range of a node's text with new bytes. */
 static void
 ns_cdata_splice(ns_node *n, glong off_units, glong cnt_units,
                 const char *ins, gsize ins_len)
@@ -6360,6 +6581,7 @@ ns_cdata_splice(ns_node *n, glong off_units, glong cnt_units,
     ns_node_replace_text_owned(n, merged);
 }
 
+/* length getter shared by CharacterData (UTF-16 units), select and form. */
 static JSValue
 ns_element_get_text_length(JSContext *ctx, JSValueConst this_val)
 {
@@ -6378,6 +6600,7 @@ ns_element_get_text_length(JSContext *ctx, JSValueConst this_val)
     return JS_UNDEFINED;
 }
 
+/* CharacterData.substringData() in UTF-16 units; IndexSizeError past the end. */
 static JSValue
 ns_element_substring_data(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -6400,6 +6623,7 @@ ns_element_substring_data(JSContext *ctx, JSValueConst this_val,
     return JS_NewStringLen(ctx, start, (gsize)(end - start));
 }
 
+/* CharacterData.appendData(), queuing a characterData mutation record. */
 static JSValue
 ns_element_append_data(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -6420,6 +6644,7 @@ ns_element_append_data(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* CharacterData.deleteData() in UTF-16 units, with mutation record. */
 static JSValue
 ns_element_delete_data(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -6444,6 +6669,7 @@ ns_element_delete_data(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* CharacterData.insertData() in UTF-16 units, with mutation record. */
 static JSValue
 ns_element_insert_data(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -6471,6 +6697,7 @@ ns_element_insert_data(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* CharacterData.replaceData() in UTF-16 units, with mutation record. */
 static JSValue
 ns_element_replace_data(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -6500,6 +6727,7 @@ ns_element_replace_data(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Text.splitText(): truncates this node and inserts the tail as a new next sibling. */
 static JSValue
 ns_element_split_text(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -6538,6 +6766,7 @@ ns_element_split_text(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, tail);
 }
 
+/* Node.nodeValue: text for Text/Comment nodes, else null. */
 static JSValue
 ns_element_get_nodeValue(JSContext *ctx, JSValueConst this_val)
 {
@@ -6548,6 +6777,7 @@ ns_element_get_nodeValue(JSContext *ctx, JSValueConst this_val)
     return JS_NULL;
 }
 
+/* Text.wholeText: concatenation of this node's contiguous Text siblings. */
 static JSValue
 ns_element_get_wholeText(JSContext *ctx, JSValueConst this_val)
 {
@@ -6565,6 +6795,7 @@ ns_element_get_wholeText(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* Legacy replaceWholeText(): keeps this node with new text, removes adjacent Text nodes. */
 static JSValue
 ns_text_replaceWholeText(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -6605,6 +6836,7 @@ ns_text_replaceWholeText(JSContext *ctx, JSValueConst this_val,
     return result ? ns_make_element(ctx, result) : JS_NULL;
 }
 
+/* nodeValue setter for Text/Comment (null means ""), with mutation record. */
 static JSValue
 ns_element_set_nodeValue(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -6635,6 +6867,7 @@ ns_node_is_object_element(const ns_node *n)
            g_ascii_strcasecmp(n->name, "object") == 0;
 }
 
+/* data getter: resolved URL on object elements, else CharacterData data. */
 static JSValue
 ns_element_get_data(JSContext *ctx, JSValueConst this_val)
 {
@@ -6646,6 +6879,7 @@ ns_element_get_data(JSContext *ctx, JSValueConst this_val)
     return ns_element_get_nodeValue(ctx, this_val);
 }
 
+/* data setter: object data attribute (reloads), expando on elements, else text. */
 static JSValue
 ns_element_set_data(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -6694,6 +6928,7 @@ ns_element_set_className(JSContext *ctx, JSValueConst this_val, JSValueConst val
     return ns_element_reflect_str_set(ctx, this_val, val, "class");
 }
 
+/* Element.style: creates and caches the CSSStyleDeclaration wrapper. */
 static JSValue
 ns_element_get_style(JSContext *ctx, JSValueConst this_val)
 {
@@ -6713,6 +6948,7 @@ ns_element_get_style(JSContext *ctx, JSValueConst this_val)
     return obj;
 }
 
+/* [PutForwards] setter writing the stringified value to an attribute. */
 static JSValue
 ns_element_put_forwards_attr(JSContext *ctx, JSValueConst this_val,
                              JSValueConst val, const char *attr)
@@ -6745,6 +6981,7 @@ ns_element_set_relList(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return ns_element_put_forwards_attr(ctx, this_val, val, "rel");
 }
 
+/* Returns the per-element cached DOMTokenList for an attribute. */
 static JSValue
 ns_make_token_list(JSContext *ctx, JSValueConst element, const char *attr)
 {
@@ -6770,6 +7007,7 @@ ns_element_get_classList(JSContext *ctx, JSValueConst this_val)
     return ns_make_token_list(ctx, this_val, "class");
 }
 
+/* relList for HTML a/area/form/link and SVG a; undefined elsewhere. */
 static JSValue
 ns_element_get_relList(JSContext *ctx, JSValueConst this_val)
 {
@@ -6800,6 +7038,7 @@ ns_element_attr_setter_sandbox(JSContext *ctx, JSValueConst this_val,
     return ns_element_reflect_str_set(ctx, this_val, val, "sandbox");
 }
 
+/* iframe.sandbox DOMTokenList; undefined on other elements. */
 static JSValue
 ns_element_get_sandbox_list(JSContext *ctx, JSValueConst this_val)
 {
@@ -6810,6 +7049,7 @@ ns_element_get_sandbox_list(JSContext *ctx, JSValueConst this_val)
     return ns_make_token_list(ctx, this_val, "sandbox");
 }
 
+/* sizes: DOMTokenList on link, string on img/source, undefined elsewhere. */
 static JSValue
 ns_element_get_sizes_list(JSContext *ctx, JSValueConst this_val)
 {
@@ -6844,6 +7084,7 @@ ns_element_get_itemScope(JSContext *ctx, JSValueConst this_val)
     return JS_NewBool(ctx, n && microdata_has_itemscope(n));
 }
 
+/* itemScope setter toggling the itemscope boolean attribute. */
 static JSValue
 ns_element_set_itemScope(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -6895,6 +7136,7 @@ ns_element_get_itemRef(JSContext *ctx, JSValueConst this_val)
     return ns_make_token_list(ctx, this_val, "itemref");
 }
 
+/* Microdata URL property value resolved against the document URL. */
 static JSValue
 microdata_url_value(JSContext *ctx, const ns_node *n, const char *attr)
 {
@@ -6913,6 +7155,7 @@ microdata_url_value(JSContext *ctx, const ns_node *n, const char *attr)
     return JS_NewString(ctx, v);
 }
 
+/* Attribute holding a microdata property value for an element type, if any. */
 static const char *
 microdata_value_attr(const char *nm)
 {
@@ -6929,6 +7172,7 @@ microdata_value_attr(const char *nm)
     return NULL;
 }
 
+/* Microdata itemValue: element for items, URL/attribute value, or text content. */
 static JSValue
 microdata_item_value(JSContext *ctx, const ns_node *n)
 {
@@ -6961,6 +7205,7 @@ ns_element_get_itemValue(JSContext *ctx, JSValueConst this_val)
     return microdata_item_value(ctx, ns_unwrap_element(this_val));
 }
 
+/* itemValue setter; InvalidAccessError on items, else sets value attr or text. */
 static JSValue
 ns_element_set_itemValue(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -6984,6 +7229,7 @@ ns_element_set_itemValue(JSContext *ctx, JSValueConst this_val, JSValueConst val
     return ns_element_set_textContent(ctx, this_val, val);
 }
 
+/* Adds whitespace-separated tokens of value to a string set. */
 static void
 microdata_token_set_add(GHashTable *set, const char *value)
 {
@@ -6998,6 +7244,7 @@ microdata_token_set_add(GHashTable *set, const char *value)
     }
 }
 
+/* Microdata crawl: collects an item's properties via children and itemref. */
 static void
 microdata_build_propset(const ns_node *root, ns_node *doc, GHashTable *propset)
 {
@@ -7034,6 +7281,7 @@ microdata_build_propset(const ns_node *root, ns_node *doc, GHashTable *propset)
     g_hash_table_destroy(memory);
 }
 
+/* Appends property-set members in tree order. */
 static void
 microdata_collect_nodes_in_order(ns_node *n, GHashTable *propset, GPtrArray *out,
                                  int depth)
@@ -7045,6 +7293,7 @@ microdata_collect_nodes_in_order(ns_node *n, GHashTable *propset, GPtrArray *out
         microdata_collect_nodes_in_order(c, propset, out, depth + 1);
 }
 
+/* True if the element's itemprop tokens include name. */
 static gboolean
 microdata_itemprop_has(const ns_node *n, const char *name)
 {
@@ -7062,6 +7311,7 @@ microdata_itemprop_has(const ns_node *n, const char *name)
     return FALSE;
 }
 
+/* PropertyNodeList.getValues(): itemValue of each element. */
 static JSValue
 ns_property_nodelist_getValues(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -7078,6 +7328,7 @@ ns_property_nodelist_getValues(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Wraps an array as a NodeList with getValues(). */
 static JSValue
 ns_make_property_nodelist(JSContext *ctx, JSValue arr)
 {
@@ -7088,6 +7339,7 @@ ns_make_property_nodelist(JSContext *ctx, JSValue arr)
     return nl;
 }
 
+/* PropertyNodeList of collection elements whose itemprop includes name. */
 static JSValue
 ns_property_collection_named(JSContext *ctx, JSValueConst this_val,
                              const char *name)
@@ -7105,6 +7357,7 @@ ns_property_collection_named(JSContext *ctx, JSValueConst this_val,
     return ns_make_property_nodelist(ctx, arr);
 }
 
+/* HTMLPropertiesCollection.namedItem(). */
 static JSValue
 ns_property_collection_namedItem(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -7117,6 +7370,7 @@ ns_property_collection_namedItem(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* True for collection member names not shadowed by named properties. */
 static gboolean
 microdata_name_reserved(const char *s)
 {
@@ -7128,6 +7382,7 @@ microdata_name_reserved(const char *s)
     return FALSE;
 }
 
+/* Element.properties: microdata properties collection with names and namedItem. */
 static JSValue
 ns_element_get_properties(JSContext *ctx, JSValueConst this_val)
 {
@@ -7196,6 +7451,7 @@ ns_element_get_properties(JSContext *ctx, JSValueConst this_val)
     return coll;
 }
 
+/* True if the item's itemtype tokens contain all wanted types. */
 static gboolean
 microdata_item_matches_types(const ns_node *item, GHashTable *wanted)
 {
@@ -7214,6 +7470,7 @@ microdata_item_matches_types(const ns_node *item, GHashTable *wanted)
     return ok;
 }
 
+/* Collects top-level microdata items (itemscope without itemprop) matching types. */
 static void
 microdata_collect_top_items(ns_node *n, GHashTable *wanted, JSContext *ctx,
                             JSValue arr, uint32_t *idx, int depth)
@@ -7227,6 +7484,7 @@ microdata_collect_top_items(ns_node *n, GHashTable *wanted, JSContext *ctx,
         microdata_collect_top_items(c, wanted, ctx, arr, idx, depth + 1);
 }
 
+/* document.getItems(): top-level microdata items filtered by type tokens. */
 static JSValue
 ns_document_getItems(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -7251,6 +7509,7 @@ ns_document_getItems(JSContext *ctx, JSValueConst this_val,
     return ns_nodelist_from_array(ctx, arr);
 }
 
+/* innerHTML getter using HTML or XML serialization by document type. */
 static JSValue
 ns_element_get_innerHTML(JSContext *ctx, JSValueConst this_val)
 {
@@ -7264,6 +7523,7 @@ ns_element_get_innerHTML(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* getHTML(): serializes children with optional serializable or listed shadow roots. */
 static JSValue
 ns_element_getHTML(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -7310,6 +7570,7 @@ ns_js_record_child_change_arrays(ns_js *js, ns_node *parent,
                                  ns_node *previous_sibling,
                                  ns_node *next_sibling);
 
+/* Removes and frees all light children, updating the document indexes. */
 static void
 ns_element_clear_children(ns_node *n)
 {
@@ -7332,6 +7593,7 @@ ns_element_clear_children(ns_node *n)
     }
 }
 
+/* Parks a detached node in the orphan set, or frees it if there is no set. */
 static void
 ns_js_orphan_node(ns_js *js, ns_node *n)
 {
@@ -7343,6 +7605,7 @@ ns_js_orphan_node(ns_js *js, ns_node *n)
     }
 }
 
+/* Detaches all light children into the orphan set, updating indexes. */
 static void
 ns_js_clear_children(ns_js *js, ns_node *n)
 {
@@ -7364,6 +7627,7 @@ ns_js_clear_children(ns_js *js, ns_node *n)
     }
 }
 
+/* Drops pending image loads and listeners for a subtree being orphaned. */
 static void
 ns_js_orphan_prune_rec(ns_js *js, ns_node *n, int depth)
 {
@@ -7375,6 +7639,7 @@ ns_js_orphan_prune_rec(ns_js *js, ns_node *n, int depth)
         ns_js_orphan_prune_rec(js, c, depth + 1);
 }
 
+/* Detaches all light children as orphans after pruning their JS state. */
 static void
 ns_js_orphan_children(ns_js *js, ns_node *n)
 {
@@ -7397,6 +7662,7 @@ ns_js_orphan_children(ns_js *js, ns_node *n)
     }
 }
 
+/* First child that is not a shadow root. */
 static ns_node *
 ns_first_light_child(const ns_node *n)
 {
@@ -7405,6 +7671,7 @@ ns_first_light_child(const ns_node *n)
     return c;
 }
 
+/* DOM replace-all: swaps children for one node, emitting one childList record. */
 static void
 ns_element_replace_all_recorded(ns_js *js, ns_node *n, ns_node *added)
 {
@@ -7435,6 +7702,7 @@ ns_element_replace_all_recorded(ns_js *js, ns_node *n, ns_node *added)
     g_ptr_array_free(removed, FALSE);
 }
 
+/* Detaches light children into orphans and returns them; caller frees array. */
 static GPtrArray *
 ns_element_clear_children_collect(ns_js *js, ns_node *n)
 {
@@ -7453,6 +7721,7 @@ ns_element_clear_children_collect(ns_js *js, ns_node *n)
     return removed;
 }
 
+/* textContent setter: data for CharacterData, replace-all with one Text otherwise. */
 static JSValue
 ns_element_set_textContent(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -7481,6 +7750,7 @@ ns_element_set_textContent(JSContext *ctx, JSValueConst this_val, JSValueConst v
     return JS_UNDEFINED;
 }
 
+/* New Text node holding a copy of a byte span. */
 static ns_node *
 ns_text_node_from_span(const char *s, gsize len)
 {
@@ -7490,6 +7760,7 @@ ns_text_node_from_span(const char *s, gsize len)
     return ns_node_new_text_len(dup, (guint32)len);
 }
 
+/* innerText setter: replaces children with text runs separated by br elements. */
 static JSValue
 ns_element_set_innerText(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -7521,6 +7792,7 @@ ns_element_set_innerText(JSContext *ctx, JSValueConst this_val, JSValueConst val
     return JS_UNDEFINED;
 }
 
+/* Builds a fragment of Text and br nodes from text with line breaks. */
 static ns_node *
 ns_rendered_text_fragment_new(const char *s, size_t len)
 {
@@ -7544,6 +7816,7 @@ ns_rendered_text_fragment_new(const char *s, size_t len)
     return fragment;
 }
 
+/* Appends src's text to dst; FALSE if the result would overflow. */
 static gboolean
 ns_text_node_concat(ns_node *dst, const ns_node *src)
 {
@@ -7558,6 +7831,7 @@ ns_text_node_concat(ns_node *dst, const ns_node *src)
     return TRUE;
 }
 
+/* Merges a Text node with an adjacent next Text sibling, orphaning the latter. */
 static void
 ns_merge_with_next_text_node(ns_js *js, ns_node *n)
 {
@@ -7569,6 +7843,7 @@ ns_merge_with_next_text_node(ns_js *js, ns_node *n)
     ns_js_orphan_node(js, next);
 }
 
+/* outerText setter: replaces the element with text/br nodes and merges neighbors. */
 static JSValue
 ns_element_set_outerText(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -7621,6 +7896,7 @@ ns_element_set_outerText(JSContext *ctx, JSValueConst this_val, JSValueConst val
 #define NS_SCRIPT_ALREADY_STARTED "data-nd-script-already-started"
 #define NS_SCRIPT_EMPTY_SOURCE "data-nd-script-empty-source"
 
+/* Flags every script in a subtree as already started so it won't execute. */
 static void
 ns_mark_scripts_already_started_rec(ns_node *root, int depth)
 {
@@ -7638,6 +7914,7 @@ ns_mark_scripts_already_started(ns_node *root)
     ns_mark_scripts_already_started_rec(root, 0);
 }
 
+/* innerHTML/setHTMLUnsafe: fragment-parse, replace children, upgrade CEs, run scripts. */
 static JSValue
 ns_element_set_html_core(JSContext *ctx, JSValueConst this_val,
                          JSValueConst val, gboolean declarative)
@@ -7719,6 +7996,7 @@ ns_element_set_innerHTML(JSContext *ctx, JSValueConst this_val, JSValueConst val
     return ns_element_set_html_core(ctx, this_val, val, FALSE);
 }
 
+/* setHTMLUnsafe(): like innerHTML but honoring declarative shadow roots. */
 static JSValue
 ns_element_setHTMLUnsafe(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -7727,6 +8005,7 @@ ns_element_setHTMLUnsafe(JSContext *ctx, JSValueConst this_val,
     return ns_element_set_html_core(ctx, this_val, val, TRUE);
 }
 
+/* outerHTML getter using HTML or XML serialization. */
 static JSValue
 ns_element_get_outerHTML(JSContext *ctx, JSValueConst this_val)
 {
@@ -7739,6 +8018,7 @@ ns_element_get_outerHTML(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* XMLSerializer.serializeToString() for a node. */
 static JSValue
 ns_xml_serializeToString(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -7753,6 +8033,7 @@ ns_xml_serializeToString(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* XMLSerializer constructor returning an object with serializeToString. */
 static JSValue
 ns_xml_serializer_ctor(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -7763,6 +8044,7 @@ ns_xml_serializer_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* outerHTML setter: parses in the parent's context and replaces the element. */
 static JSValue
 ns_element_set_outerHTML(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -7817,6 +8099,7 @@ static JSValue
 ns_pre_insert_validity(JSContext *ctx, ns_node *parent, ns_node *node,
                        ns_node *child, gboolean child_is_null);
 
+/* Upgrades custom elements and runs scripts in newly inserted connected nodes. */
 static void
 ns_js_activate_inserted(ns_js *js, const ns_node *parent, GPtrArray *inserted)
 {
@@ -7830,6 +8113,7 @@ ns_js_activate_inserted(ns_js *js, const ns_node *parent, GPtrArray *inserted)
     }
 }
 
+/* ParentNode.replaceChildren(): validates, replaces all children, one mutation record. */
 static JSValue
 ns_element_replaceChildren(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -7968,6 +8252,7 @@ ns_element_replaceChildren(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* ASCII-lowercases an attribute name for HTML elements; *lowered_out is caller-freed. */
 static inline const char *
 ns_attr_name_normalize(const ns_node *n, const char *raw_name, char **lowered_out)
 {
@@ -7983,6 +8268,7 @@ ns_attr_name_normalize(const ns_node *n, const char *raw_name, char **lowered_ou
     return raw_name;
 }
 
+/* Element.getAttribute(), skipping internal data-nd-* attributes. */
 static JSValue
 ns_element_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -8007,6 +8293,7 @@ ns_element_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return val ? JS_NewStringLen(ctx, val, val_len) : JS_NULL;
 }
 
+/* Element.hasAttribute(), skipping internal data-nd-* attributes. */
 static JSValue
 ns_element_hasAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -8029,6 +8316,7 @@ ns_element_hasAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return found ? JS_TRUE : JS_FALSE;
 }
 
+/* Lazily interns atoms used when parsing listener options and events. */
 static void
 ns_listener_ensure_atoms(ns_js *js)
 {
@@ -8043,6 +8331,7 @@ ns_listener_ensure_atoms(ns_js *js)
     js->listener_atoms_set = 1;
 }
 
+/* Reads obj[atom] as a boolean; was_set reports whether it was defined. */
 static gboolean
 ns_get_bool_atom(JSContext *ctx, JSValueConst obj, JSAtom atom, gboolean *was_set)
 {
@@ -8054,6 +8343,7 @@ ns_get_bool_atom(JSContext *ctx, JSValueConst obj, JSAtom atom, gboolean *was_se
     return truthy;
 }
 
+/* Parses addEventListener options; strict_signal throws on a non-object signal. */
 static gboolean
 ns_listener_parse_options(JSContext *ctx, JSValueConst opts,
                           gboolean *capture, gboolean *once,
@@ -8106,6 +8396,7 @@ ns_listener_parse_options(JSContext *ctx, JSValueConst opts,
     return TRUE;
 }
 
+/* True if an AbortSignal object reports aborted. */
 static gboolean
 ns_signal_is_aborted(JSContext *ctx, JSValueConst signal)
 {
@@ -8116,6 +8407,7 @@ ns_signal_is_aborted(JSContext *ctx, JSValueConst signal)
     return already;
 }
 
+/* True for touch/wheel events that default to passive on root targets. */
 static gboolean
 ns_event_type_is_passive_default(const char *type)
 {
@@ -8127,6 +8419,7 @@ ns_event_type_is_passive_default(const char *type)
     return FALSE;
 }
 
+/* True for window, document, html or body targets (passive-by-default roots). */
 static gboolean
 ns_listener_target_is_passive_root(ns_js *js, const ns_node *target,
                                    gboolean window_level)
@@ -8140,6 +8433,7 @@ ns_listener_target_is_passive_root(ns_js *js, const ns_node *target,
     return target == html || target == body;
 }
 
+/* True (freeing args) when the callback is not callable/object or signal aborted. */
 static gboolean
 ns_listener_add_skipped(JSContext *ctx, JSValueConst callback,
                         const char *type, JSValue signal)
@@ -8152,6 +8446,7 @@ ns_listener_add_skipped(JSContext *ctx, JSValueConst callback,
     return TRUE;
 }
 
+/* addEventListener(): dedupes, applies passive defaults and registers the listener. */
 static JSValue
 ns_add_listener_impl(JSContext *ctx, ns_node *target, int argc,
                      JSValueConst *argv, gboolean window_level)
@@ -8220,6 +8515,7 @@ ns_element_addEventListener(JSContext *ctx, JSValueConst this_val,
                                 argv, FALSE);
 }
 
+/* removeEventListener(): tombstones the matching type/callback/capture listener. */
 static JSValue
 ns_remove_listener_impl(JSContext *ctx, ns_node *target, int argc,
                         JSValueConst *argv, gboolean window_level)
@@ -8260,6 +8556,7 @@ ns_element_removeEventListener(JSContext *ctx, JSValueConst this_val,
                                    argv, FALSE);
 }
 
+/* True if UTF-8 text has only code points up to U+00FF (a valid ByteString). */
 static gboolean
 ns_byte_string_fits(const char *string, size_t length)
 {
@@ -8279,6 +8576,7 @@ ns_byte_string_fits(const char *string, size_t length)
     return TRUE;
 }
 
+/* True if a header name is a non-empty HTTP token. */
 static gboolean
 ns_header_name_is_token_length(const char *name, size_t length)
 {
@@ -8304,6 +8602,7 @@ ns_header_name_is_token(const char *name)
     return name && ns_header_name_is_token_length(name, strlen(name));
 }
 
+/* True if a header value contains no CR, LF or NUL. */
 static gboolean
 ns_header_value_is_safe_length(const char *value, size_t length)
 {
@@ -8320,6 +8619,7 @@ ns_header_value_is_safe(const char *value)
     return value && ns_header_value_is_safe_length(value, strlen(value));
 }
 
+/* True for Fetch forbidden request headers, plus internal X-ND-* ones. */
 static gboolean
 ns_header_name_is_forbidden(const char *name)
 {
@@ -8365,6 +8665,7 @@ typedef struct ns_js_fetch_state {
     char         **fb_headers;
 } ns_js_fetch_state;
 
+/* Frees a fetch state, detaching its abort listener and settling handles. */
 static void
 ns_js_fetch_state_free(ns_js_fetch_state *st)
 {
@@ -8406,6 +8707,7 @@ ns_js_fetch_state_free(ns_js_fetch_state *st)
     g_free(st);
 }
 
+/* New AbortError DOMException, or an Error named AbortError as fallback. */
 static JSValue
 ns_make_abort_error(JSContext *ctx)
 {
@@ -8434,6 +8736,7 @@ ns_make_abort_error(JSContext *ctx)
     return exc;
 }
 
+/* Rejects with the signal's reason, or a fresh AbortError when it has none. */
 static void
 ns_fetch_reject_with_abort(JSContext *ctx, JSValue *reject,
                             JSValueConst signal)
@@ -8451,6 +8754,7 @@ ns_fetch_reject_with_abort(JSContext *ctx, JSValue *reject,
     JS_FreeValue(ctx, reason);
 }
 
+/* Abort listener: cancels the in-flight fetch by id and rejects its promise. */
 static JSValue
 ns_fetch_on_signal_abort(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv, int magic,
@@ -8481,6 +8785,7 @@ ns_fetch_credentials_mode(const char *mode)
     return "same-origin";
 }
 
+/* CORS check: allows same-origin, data/blob, and a matching Access-Control-Allow-Origin. */
 static gboolean
 cors_allows(const char *doc_url, const char *resp_url, const char *cors_header)
 {
@@ -8515,6 +8820,7 @@ typedef struct ns_js_fetch_delivery {
     GError            *err;
 } ns_js_fetch_delivery;
 
+/* Parses raw header lines into a lowercase-keyed init object, joining duplicates. */
 static void
 ns_headers_init_add_raw(JSContext *ctx, JSValueConst init, const char *raw)
 {
@@ -8585,6 +8891,7 @@ ns_js_caller_fetch_policy(ns_js *js, JSContext *ctx)
     return ns_js_fetch_policy(js, NULL);
 }
 
+/* Checks a URL against the caller's fetch policy; returns a logged refusal or NULL. */
 static char *
 ns_js_policy_refusal(ns_js *js, JSContext *ctx, ns_fetch_destination dest,
                      const char *url)
@@ -8612,6 +8919,7 @@ ns_js_worker_refusal(ns_js *js, JSContext *ctx, const char *url)
     return ns_js_policy_refusal(js, ctx, NS_FETCH_DEST_WORKER, url);
 }
 
+/* Settles a fetch() promise: CORS check, builds the Response, rejects on errors. */
 static void
 ns_on_js_fetch_deliver(ns_js_fetch_state *st, ns_response *resp, GError *err)
 {
@@ -8738,6 +9046,7 @@ ns_on_js_fetch_deliver(ns_js_fetch_state *st, ns_response *resp, GError *err)
     ns_js_fetch_state_free(st);
 }
 
+/* Idle delivery of a fetch result, deferring while a nested loop is pumping. */
 static gboolean
 ns_on_js_fetch_deliver_idle(gpointer user_data)
 {
@@ -8751,6 +9060,7 @@ ns_on_js_fetch_deliver_idle(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* Network completion callback; delivers now or defers when inside a pump. */
 static void
 ns_on_js_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -8769,6 +9079,7 @@ ns_on_js_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
     ns_on_js_fetch_deliver(st, resp, err);
 }
 
+/* Collects safe, non-forbidden request headers and Content-Type from a headers object. */
 static void
 ns_js_fetch_collect_headers(JSContext *ctx, JSValueConst headers,
                             GPtrArray *extras, char **content_type)
@@ -8829,6 +9140,7 @@ ns_js_fetch_collect_headers(JSContext *ctx, JSValueConst headers,
     JS_FreeValue(ctx, h_map);
 }
 
+/* Reads a Request/init body (buffer, FormData, URLSearchParams, Blob) and its type. */
 static void
 ns_js_fetch_read_body(JSContext *ctx, JSValueConst obj,
                       char **body, gsize *body_len, char **content_type)
@@ -8895,6 +9207,7 @@ ns_js_fetch_read_body(JSContext *ctx, JSValueConst obj,
     JS_FreeValue(ctx, v);
 }
 
+/* True if obj[name] is defined, swallowing getter exceptions. */
 static gboolean
 ns_js_fetch_has_prop(JSContext *ctx, JSValueConst obj, const char *name)
 {
@@ -8912,6 +9225,7 @@ static JSValue
 ns_js_fetch_for(JSContext *ctx, JSValueConst frame_url, int argc,
                 JSValueConst *argv);
 
+/* True if a Request/init carries a ReadableStream body and no buffered bytes. */
 static gboolean
 ns_fetch_body_is_stream(JSContext *ctx, JSValueConst obj, JSValue *out_stream)
 {
@@ -8953,6 +9267,7 @@ ns_fetch_body_is_stream(JSContext *ctx, JSValueConst obj, JSValue *out_stream)
     return is_stream;
 }
 
+/* Continuation after a stream body is drained: re-runs fetch or rejects. */
 static JSValue
 ns_fetch_stream_drained(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv, int magic, JSValue *data)
@@ -8980,6 +9295,7 @@ ns_fetch_stream_drained(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Reads a stream request body to an ArrayBuffer in JS, then performs the fetch. */
 static JSValue
 ns_fetch_defer_stream_body(JSContext *ctx, JSValueConst frame_url,
                            int argc, JSValueConst *argv,
@@ -9053,6 +9369,7 @@ ns_fetch_defer_stream_body(JSContext *ctx, JSValueConst frame_url,
     return promise;
 }
 
+/* Returns the frame base URL argument as a new string, or NULL if empty. */
 static char *
 ns_js_fetch_frame_url(JSContext *ctx, JSValueConst frame_url)
 {
@@ -9064,6 +9381,7 @@ ns_js_fetch_frame_url(JSContext *ctx, JSValueConst frame_url)
     return out;
 }
 
+/* fetch() core: builds the request, checks policy, routes blob:, service worker or net. */
 static JSValue
 ns_js_fetch_for(JSContext *ctx, JSValueConst frame_url, int argc,
                 JSValueConst *argv)
@@ -9341,6 +9659,7 @@ ns_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return ns_js_fetch_for(ctx, JS_UNDEFINED, argc, argv);
 }
 
+/* Frame-bound fetch: runs in the main realm with the frame URL as base. */
 static JSValue
 ns_js_frame_fetch(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv, int magic, JSValue *data)
@@ -9352,6 +9671,7 @@ ns_js_frame_fetch(JSContext *ctx, JSValueConst this_val, int argc,
     return ns_js_fetch_for(main_ctx, data[0], argc, argv);
 }
 
+/* Creates a fetch function bound to a frame's URL (about:blank if none). */
 static JSValue
 ns_js_frame_fetch_new(JSContext *ctx, const char *frame_url)
 {
@@ -9362,6 +9682,7 @@ ns_js_frame_fetch_new(JSContext *ctx, const char *frame_url)
     return fn;
 }
 
+/* Throws NotSupportedError for unimplemented Web Audio analysis APIs. */
 static JSValue
 ns_audio_analysis_throw(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -9380,6 +9701,7 @@ ns_audio_analysis_throw(JSContext *ctx, JSValueConst this_val,
     return JS_Throw(ctx, err);
 }
 
+/* Installs a native function on obj; __-prefixed names become non-enumerable. */
 void
 ns_bind_fn(JSContext *ctx, JSValueConst obj, const char *name,
            JSCFunction *fn, int argc)
@@ -9395,6 +9717,7 @@ ns_bind_fn(JSContext *ctx, JSValueConst obj, const char *name,
     }
 }
 
+/* Gives a plain object native addEventListener/removeEventListener. */
 static void
 ns_bind_event_target_listeners(JSContext *ctx, JSValueConst obj)
 {
@@ -9402,6 +9725,7 @@ ns_bind_event_target_listeners(JSContext *ctx, JSValueConst obj)
     ns_bind_fn(ctx, obj, "removeEventListener", ns_target_removeEventListener, 2);
 }
 
+/* Binds a native function only if obj has no property of that name. */
 static void
 ns_bind_fn_if_missing(JSContext *ctx, JSValueConst obj, const char *name,
                       JSCFunction *fn, int argc)
@@ -9413,6 +9737,7 @@ ns_bind_fn_if_missing(JSContext *ctx, JSValueConst obj, const char *name,
         ns_bind_fn(ctx, obj, name, fn, argc);
 }
 
+/* Binds a native function unless obj[name] is already callable. */
 void
 ns_bind_fn_if_not_callable(JSContext *ctx, JSValueConst obj, const char *name,
                            JSCFunction *fn, int argc)
@@ -9427,6 +9752,7 @@ ns_bind_fn_if_not_callable(JSContext *ctx, JSValueConst obj, const char *name,
 static void ns_set_tostring_tag(JSContext *ctx, JSValueConst obj,
                                 const char *tag);
 
+/* Creates a native constructor with a prototype carrying constructor and toStringTag. */
 static JSValue
 ns_make_ctor(JSContext *ctx, JSCFunction *fn, const char *name, int argc)
 {
@@ -9450,6 +9776,7 @@ ns_bind_ctor(JSContext *ctx, JSValueConst obj, const char *name,
 
 typedef struct ns_fn_def { const char *name; int argc; } ns_fn_def;
 
+/* Adds a native method to Ctor.prototype if not already present. */
 static void
 ns_bind_ctor_proto_fn(JSContext *ctx, JSValueConst global,
                       const char *ctor_name, const char *fn_name,
@@ -9463,6 +9790,7 @@ ns_bind_ctor_proto_fn(JSContext *ctx, JSValueConst global,
     JS_FreeValue(ctx, ctor);
 }
 
+/* Binds one native function under several names with given arities. */
 static void
 ns_bind_fns(JSContext *ctx, JSValueConst obj, JSCFunction *fn,
             const ns_fn_def *defs, gsize n)
@@ -9471,6 +9799,7 @@ ns_bind_fns(JSContext *ctx, JSValueConst obj, JSCFunction *fn,
         ns_bind_fn(ctx, obj, defs[i].name, fn, defs[i].argc);
 }
 
+/* Installs obj as a global namespace object with its own prototype and toStringTag. */
 static void
 ns_install_namespace_object(JSContext *ctx, JSValueConst global,
                             const char *name, JSValue obj,
@@ -9493,6 +9822,7 @@ ns_install_namespace_object(JSContext *ctx, JSValueConst global,
         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* Binds one native constructor function under several names. */
 static void
 ns_bind_ctors(JSContext *ctx, JSValueConst obj, JSCFunction *fn,
               const ns_fn_def *defs, gsize n)
@@ -9509,6 +9839,7 @@ ns_returns_empty_array(JSContext *ctx, JSValueConst this_val,
     return JS_NewArray(ctx);
 }
 
+/* Caches the dispatch path and closed shadow roots per entry on the event. */
 static void
 ns_event_ensure_composed_path(ns_js *js, JSValueConst this_val)
 {
@@ -9566,6 +9897,7 @@ ns_event_ensure_composed_path(ns_js *js, JSValueConst this_val)
                           event_closed_paths);
 }
 
+/* Event.composedPath(): path with nodes in closed shadow trees hidden per currentTarget. */
 static JSValue
 ns_event_composed_path(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -9655,6 +9987,7 @@ ns_event_composed_path(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 static void ns_js_emit(ns_js *js, const char *prefix, JSContext *ctx,
                        int argc, JSValueConst *argv);
 
+/* Native stub returning a promise resolved with undefined. */
 JSValue
 ns_returns_resolved_undefined(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -9670,6 +10003,7 @@ ns_returns_resolved_undefined(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* Returns a promise resolved with value, taking ownership of value. */
 static JSValue
 ns_promise_resolve_take(JSContext *ctx, JSValue value)
 {
@@ -9690,6 +10024,7 @@ ns_promise_resolve_take(JSContext *ctx, JSValue value)
 static void ns_js_resolve_when_fonts_loaded(JSContext *ctx, ns_js *js,
                                             JSValue resolve, JSValue value);
 
+/* FontFace.load(): marks loaded and resolves once pending fonts finish. */
 static JSValue
 ns_fontface_load(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -9707,6 +10042,7 @@ ns_fontface_load(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* FontFace constructor: family plus descriptor defaults, status and loaded promise. */
 static JSValue
 ns_window_fontface_ctor(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -9807,6 +10143,7 @@ ns_cam_caller_may_use(ns_js *js, JSContext *ctx)
     return TRUE;
 }
 
+/* Camera permission request: "granted", "denied" or "pending". */
 static JSValue
 ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -9822,6 +10159,7 @@ ns_cam_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return JS_NewString(ctx, "pending");
 }
 
+/* Borrows the bytes of a typed array argument. */
 static gboolean
 ns_audio_u8_buffer(JSContext *ctx, JSValueConst arg, uint8_t **data, size_t *len)
 {
@@ -9840,6 +10178,7 @@ ns_audio_u8_buffer(JSContext *ctx, JSValueConst arg, uint8_t **data, size_t *len
     return *data != NULL;
 }
 
+/* AnalyserNode.getByteTimeDomainData() stub filling silence (128). */
 static JSValue
 ns_audio_get_byte_time_domain(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -9851,6 +10190,7 @@ ns_audio_get_byte_time_domain(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* AnalyserNode.getByteFrequencyData() stub filling zeros. */
 static JSValue
 ns_audio_get_byte_frequency(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -9862,6 +10202,7 @@ ns_audio_get_byte_frequency(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Label of the first camera, only for callers granted camera access. */
 static JSValue
 ns_cam_label(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -9881,6 +10222,7 @@ ns_cam_label(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return r;
 }
 
+/* enumerateDevices() for cameras; one anonymous entry until permission is granted. */
 static JSValue
 ns_cam_enumerate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -9919,6 +10261,7 @@ ns_cam_enumerate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return arr;
 }
 
+/* StorageManager.estimate() stub: zero usage, 2 GiB quota. */
 static JSValue
 ns_storage_estimate(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -9940,6 +10283,7 @@ ns_returns_false(JSContext *ctx, JSValueConst this_val,
     return JS_FALSE;
 }
 
+/* navigator.getBattery() stub: always-full, charging BatteryManager. */
 static JSValue
 ns_navigator_get_battery(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -9960,6 +10304,7 @@ ns_navigator_get_battery(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, battery);
 }
 
+/* Throws an Error with name, message and code using DOMException.prototype. */
 JSValue
 ns_throw_dom_exception(JSContext *ctx, const char *name, int code,
                        const char *message)
@@ -9983,6 +10328,7 @@ ns_throw_dom_exception(JSContext *ctx, const char *name, int code,
     return JS_Throw(ctx, err);
 }
 
+/* Returns a promise rejected with an Error carrying the given name. */
 JSValue
 ns_promise_reject_dom(JSContext *ctx, const char *name, const char *message)
 {
@@ -10019,6 +10365,7 @@ ns_clipboard_reject_not_allowed(JSContext *ctx, JSValueConst this_val,
         "Read permission denied");
 }
 
+/* requestFullscreen() stub that always rejects. */
 static JSValue
 ns_element_requestFullscreen(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -10028,6 +10375,7 @@ ns_element_requestFullscreen(JSContext *ctx, JSValueConst this_val,
         "Fullscreen is not enabled in this document");
 }
 
+/* registerProtocolHandler scheme check: web+lowercase or the HTML safelist. */
 static gboolean
 ns_protocol_scheme_valid(const char *scheme)
 {
@@ -10051,6 +10399,7 @@ ns_protocol_scheme_valid(const char *scheme)
     return FALSE;
 }
 
+/* registerProtocolHandler(): validates scheme and %s URL; registers nothing. */
 static JSValue
 ns_navigator_register_protocol_handler(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv)
@@ -10083,6 +10432,7 @@ ns_navigator_register_protocol_handler(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* window.find(): whether the document text contains the string (optionally case-folded). */
 static JSValue
 ns_window_find(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -10115,6 +10465,7 @@ ns_window_find(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, found);
 }
 
+/* True when the configured UA or compat mode presents as Firefox. */
 static gboolean
 ns_compat_is_firefox(void)
 {
@@ -10131,6 +10482,7 @@ ns_compat_has_client_hints(const char *nav_ua)
     return ns_user_agent_has_client_hints(nav_ua);
 }
 
+/* Sets navigator.language and navigator.languages from network config. */
 static void
 ns_navigator_set_languages(JSContext *ctx, JSValueConst navigator)
 {
@@ -10145,6 +10497,7 @@ ns_navigator_set_languages(JSContext *ctx, JSValueConst navigator)
     g_strfreev(language_names);
 }
 
+/* User-Agent Client Hints brand list, with full versions if requested. */
 static JSValue
 ns_ua_client_hint_brands(JSContext *ctx, gboolean full_version)
 {
@@ -10162,6 +10515,7 @@ ns_ua_client_hint_brands(JSContext *ctx, gboolean full_version)
     return arr;
 }
 
+/* UA-CH formFactors array (Mobile or Desktop). */
 static JSValue
 ns_ua_client_hint_form_factors(JSContext *ctx)
 {
@@ -10171,6 +10525,7 @@ ns_ua_client_hint_form_factors(JSContext *ctx)
     return values;
 }
 
+/* UA-CH architecture from the build target (x86, arm or ""). */
 static const char *
 ns_ua_client_hint_architecture(void)
 {
@@ -10183,6 +10538,7 @@ ns_ua_client_hint_architecture(void)
 #endif
 }
 
+/* Fills one requested high-entropy UA-CH value on the result object. */
 static void
 ns_ua_set_requested_high_entropy_hint(JSContext *ctx, JSValueConst obj,
                                       const char *key)
@@ -10209,6 +10565,7 @@ ns_ua_set_requested_high_entropy_hint(JSContext *ctx, JSValueConst obj,
     }
 }
 
+/* NavigatorUAData.getHighEntropyValues(): low-entropy plus requested hints. */
 static JSValue
 ns_navigator_high_entropy_values(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -10248,6 +10605,7 @@ ns_microtask_job(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
 }
 
+/* Job invoking a geolocation error callback with PERMISSION_DENIED. */
 static JSValue
 ns_geolocation_error_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -10267,6 +10625,7 @@ ns_geolocation_error_job(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* getCurrentPosition(): always reports permission denied asynchronously. */
 static JSValue
 ns_geolocation_get_current_position(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -10279,6 +10638,7 @@ ns_geolocation_get_current_position(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* watchPosition(): reports denial asynchronously and returns watch id 1. */
 static JSValue
 ns_geolocation_watch_position(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -10287,6 +10647,7 @@ ns_geolocation_watch_position(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, 1);
 }
 
+/* queueMicrotask(): enqueues the callback as a QuickJS job. */
 static JSValue
 ns_window_queue_microtask(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -10299,6 +10660,7 @@ ns_window_queue_microtask(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Clipboard.writeText(): requires and consumes transient user activation. */
 static JSValue
 ns_clipboard_writeText(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -10336,6 +10698,7 @@ ns_clipboard_writeText(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* Installs a JS Clipboard.write() that writes text/plain items via writeText. */
 static void
 ns_clipboard_install_write(JSContext *ctx, JSValueConst clipboard)
 {
@@ -10374,6 +10737,7 @@ ns_clipboard_install_write(JSContext *ctx, JSValueConst clipboard)
     JS_FreeValue(ctx, fn);
 }
 
+/* Runs execCommand copy/cut (needs selection and activation), selectAll, unselect. */
 static gboolean
 ns_document_command_run(ns_js *js, const char *cmd)
 {
@@ -10396,6 +10760,7 @@ ns_document_command_run(ns_js *js, const char *cmd)
     return FALSE;
 }
 
+/* True for the execCommand commands this engine supports. */
 static gboolean
 ns_document_command_known(const char *cmd)
 {
@@ -10405,6 +10770,7 @@ ns_document_command_known(const char *cmd)
                    g_ascii_strcasecmp(cmd, "unselect") == 0);
 }
 
+/* document.execCommand() for the supported subset; returns success. */
 static JSValue
 ns_document_execCommand(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -10416,6 +10782,7 @@ ns_document_execCommand(JSContext *ctx, JSValueConst this_val,
     return ok ? JS_TRUE : JS_FALSE;
 }
 
+/* queryCommandSupported() for the supported command subset. */
 static JSValue
 ns_document_queryCommandSupported(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
@@ -10427,6 +10794,7 @@ ns_document_queryCommandSupported(JSContext *ctx, JSValueConst this_val,
     return ok ? JS_TRUE : JS_FALSE;
 }
 
+/* queryCommandEnabled(): copy/cut need a selection; others need a host callback. */
 static JSValue
 ns_document_queryCommandEnabled(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -10446,6 +10814,7 @@ ns_document_queryCommandEnabled(JSContext *ctx, JSValueConst this_val,
     return ok ? JS_TRUE : JS_FALSE;
 }
 
+/* Native stub returning a promise rejected with "not supported". */
 static JSValue
 ns_returns_rejected(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -10458,6 +10827,7 @@ ns_returns_rejected(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* permissions.query(): "prompt" PermissionStatus for known names, else rejects. */
 static JSValue
 ns_permissions_query(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -10507,6 +10877,7 @@ ns_permissions_query(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, status);
 }
 
+/* requestMediaKeySystemAccess() stub rejecting with NotSupportedError. */
 static JSValue
 ns_eme_request_access(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -10528,6 +10899,7 @@ ns_eme_request_access(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* MediaCapabilities check: file/MSE config with exactly one supported track. */
 static gboolean
 ns_media_config_supported(JSContext *ctx, JSValueConst config)
 {
@@ -10563,6 +10935,7 @@ ns_media_config_supported(JSContext *ctx, JSValueConst config)
     return supported;
 }
 
+/* Estimates smooth playback by comparing pixel rate with measured decode capacity. */
 static gboolean
 ns_media_config_smooth(JSContext *ctx, JSValueConst config)
 {
@@ -10601,6 +10974,7 @@ ns_media_config_smooth(JSContext *ctx, JSValueConst config)
     return w * h * fps <= capacity;
 }
 
+/* Resolves a MediaCapabilitiesInfo with supported/smooth flags. */
 static JSValue
 ns_media_capabilities_result(JSContext *ctx, int argc, JSValueConst *argv,
                              gboolean supported)
@@ -10624,6 +10998,7 @@ ns_media_capabilities_result(JSContext *ctx, int argc, JSValueConst *argv,
     return promise;
 }
 
+/* MediaCapabilities.decodingInfo(). */
 static JSValue
 ns_media_capabilities_decoding_info(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -10633,6 +11008,7 @@ ns_media_capabilities_decoding_info(JSContext *ctx, JSValueConst this_val,
         argc >= 1 && ns_media_config_supported(ctx, argv[0]));
 }
 
+/* MediaCapabilities.encodingInfo(): never supported. */
 static JSValue
 ns_media_capabilities_encoding_info(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -10641,6 +11017,7 @@ ns_media_capabilities_encoding_info(JSContext *ctx, JSValueConst this_val,
     return ns_media_capabilities_result(ctx, argc, argv, FALSE);
 }
 
+/* MediaSource.isTypeSupported() via the MSE media type table. */
 static JSValue
 ns_media_source_type_supported(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -10655,6 +11032,7 @@ ns_media_source_type_supported(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, ok);
 }
 
+/* setMediaKeys(): resolves for null, otherwise rejects since EME is unsupported. */
 static JSValue
 ns_media_set_media_keys(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -10691,6 +11069,7 @@ ns_audio_return_this(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* AudioNode.connect() stub: records this in the destination's _inputs. */
 static JSValue
 ns_audio_node_connect(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -10709,6 +11088,7 @@ ns_audio_node_connect(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* Stores a non-negative start/stop time on an audio node stub. */
 static JSValue
 ns_audio_node_schedule(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv, const char *field)
@@ -10735,6 +11115,7 @@ ns_audio_node_stop(JSContext *ctx, JSValueConst this_val,
     return ns_audio_node_schedule(ctx, this_val, argc, argv, "_stopTime");
 }
 
+/* AudioNode.disconnect() stub: removes this from the destination's _inputs. */
 static JSValue
 ns_audio_node_disconnect(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -10759,6 +11140,7 @@ ns_audio_node_disconnect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* AudioParam-like stub whose automation methods return this. */
 static JSValue
 ns_audio_make_param(JSContext *ctx, double value)
 {
@@ -10781,6 +11163,7 @@ ns_audio_make_param(JSContext *ctx, double value)
     return p;
 }
 
+/* Builds an inert AudioNode-like stub with params, methods and toStringTag by kind. */
 static JSValue
 ns_audio_make_node(JSContext *ctx, const char *kind)
 {
@@ -10850,6 +11233,7 @@ ns_audio_make_node(JSContext *ctx, const char *kind)
     return n;
 }
 
+/* BaseAudioContext.createX() stub; magic indexes the node kind table. */
 static JSValue
 ns_audio_create_node(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv, int magic)
@@ -10867,6 +11251,7 @@ ns_audio_create_node(JSContext *ctx, JSValueConst this_val,
     return ns_audio_make_node(ctx, kind);
 }
 
+/* AudioBuffer-like object with zeroed Float32Array channels. */
 static JSValue
 ns_audio_make_buffer(JSContext *ctx, uint32_t channels,
                      uint32_t length, double sample_rate)
@@ -10905,6 +11290,7 @@ ns_audio_make_buffer(JSContext *ctx, uint32_t channels,
     return b;
 }
 
+/* AudioBuffer.getChannelData(): stored channel array, or a fresh zeroed one. */
 static JSValue
 ns_audio_buffer_getChannelData(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -10940,6 +11326,7 @@ ns_audio_buffer_getChannelData(JSContext *ctx, JSValueConst this_val,
 #define NS_WEBAUDIO_MAX_CHANNELS 32
 #define NS_WEBAUDIO_MAX_SAMPLES  (UINT64_C(1) << 26)
 
+/* Validates AudioBuffer channel count, total samples and sample rate limits. */
 static gboolean
 ns_audio_buffer_shape_ok(int32_t channels, int32_t length, double sample_rate)
 {
@@ -10949,6 +11336,7 @@ ns_audio_buffer_shape_ok(int32_t channels, int32_t length, double sample_rate)
            sample_rate >= 3000.0 && sample_rate <= 768000.0;
 }
 
+/* createBuffer(); throws NotSupportedError for out-of-range shapes. */
 static JSValue
 ns_audio_createBuffer(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -10969,6 +11357,7 @@ ns_audio_createBuffer(JSContext *ctx, JSValueConst this_val,
     return b;
 }
 
+/* decodeAudioData() stub resolving (and calling back) with a 1-sample buffer. */
 static JSValue
 ns_audio_decodeAudioData(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -10982,6 +11371,7 @@ ns_audio_decodeAudioData(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, b);
 }
 
+/* Builds an AudioContext-like stub object with node factory methods. */
 static JSValue
 ns_audio_context_build(JSContext *ctx, double sample_rate)
 {
@@ -11045,6 +11435,7 @@ ns_audio_context_ctor(JSContext *ctx, JSValueConst this_val,
     return ns_audio_context_build(ctx, 44100.0);
 }
 
+/* OfflineAudioContext.startRendering(): renders the graph offline into a buffer. */
 static JSValue
 ns_offline_audio_startRendering(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -11108,6 +11499,7 @@ ns_offline_audio_startRendering(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, buf);
 }
 
+/* OfflineAudioContext constructor accepting options or positional arguments. */
 static JSValue
 ns_offline_audio_context_ctor(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -11144,6 +11536,7 @@ ns_offline_audio_context_ctor(JSContext *ctx, JSValueConst this_val,
     return a;
 }
 
+/* Rebuilds a JS-side _listeners array without entries marked _dead. */
 static void
 ns_listeners_compact_dead(JSContext *ctx, JSValueConst owner)
 {
@@ -11165,6 +11558,7 @@ ns_listeners_compact_dead(JSContext *ctx, JSValueConst owner)
     JS_FreeValue(ctx, live);
 }
 
+/* Returns Object.freeze(array), or a copy reference if freeze is unavailable. */
 static JSValue
 ns_freeze_array(JSContext *ctx, JSValueConst array)
 {
@@ -11186,6 +11580,7 @@ ns_freeze_array(JSContext *ctx, JSValueConst array)
 
 static void ns_event_define_cancel_bubble(JSContext *ctx, JSValueConst ev);
 
+/* True if a JS listener entry's signal is aborted. */
 static gboolean
 ns_target_entry_signal_aborted(JSContext *ctx, JSValueConst entry)
 {
@@ -11201,6 +11596,7 @@ ns_target_entry_signal_aborted(JSContext *ctx, JSValueConst entry)
     return aborted;
 }
 
+/* Marks once or aborted listener entries dead; returns whether aborted. */
 static gboolean
 ns_listener_entry_retire(JSContext *ctx, JSValueConst entry, gboolean *any_dead)
 {
@@ -11215,6 +11611,7 @@ ns_listener_entry_retire(JSContext *ctx, JSValueConst entry, gboolean *any_dead)
     return aborted;
 }
 
+/* Delivers a MessageEvent to a port's onmessage and message listeners. */
 static JSValue
 ns_port_deliver_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -11320,6 +11717,7 @@ ns_port_deliver_job(JSContext *ctx, int argc, JSValueConst *argv)
 static JSValue ns_window_structured_clone(JSContext *ctx, JSValueConst this_val,
                                           int argc, JSValueConst *argv);
 
+/* structuredClone(v) with an optional transfer list. */
 static JSValue
 ns_structured_clone_value(JSContext *ctx, JSValueConst v, JSValueConst transfer)
 {
@@ -11332,6 +11730,7 @@ ns_structured_clone_value(JSContext *ctx, JSValueConst v, JSValueConst transfer)
     return out;
 }
 
+/* Starts a MessagePort's message queue, scheduling delivery of queued messages. */
 static void
 ns_port_enable(JSContext *ctx, JSValueConst port)
 {
@@ -11365,6 +11764,7 @@ ns_port_enable(JSContext *ctx, JSValueConst port)
     JS_FreeValue(ctx, queue);
 }
 
+/* MessagePort.start(). */
 static JSValue
 ns_port_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -11373,6 +11773,7 @@ ns_port_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
+/* MessagePort.onmessage getter (null when unset). */
 static JSValue
 ns_port_onmessage_get(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -11383,6 +11784,7 @@ ns_port_onmessage_get(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* MessagePort.onmessage setter; implicitly starts the port. */
 static JSValue
 ns_port_onmessage_set(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -11396,6 +11798,7 @@ ns_port_onmessage_set(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_port_bridge_send(JSContext *ctx, JSValueConst port,
                                    guint64 id, JSValueConst data);
 
+/* Cross-thread bridge id of a port, or 0 for a local port. */
 static guint64
 ns_port_bridge_id(JSContext *ctx, JSValueConst port)
 {
@@ -11410,6 +11813,7 @@ ns_port_bridge_id(JSContext *ctx, JSValueConst port)
     return id;
 }
 
+/* Extracts MessagePort objects from a transfer list. */
 static JSValue
 ns_transfer_ports(JSContext *ctx, JSValueConst transfer)
 {
@@ -11429,6 +11833,7 @@ ns_transfer_ports(JSContext *ctx, JSValueConst transfer)
     return ports;
 }
 
+/* MessagePort.postMessage(): clones data and delivers or queues it on the entangled port. */
 static JSValue
 ns_port_post_message(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -11492,6 +11897,7 @@ ns_port_post_message(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* MessagePort.addEventListener() on a JS-side listener list, deduplicated. */
 static JSValue
 ns_port_add_event_listener(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -11551,6 +11957,7 @@ ns_port_add_event_listener(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* MessagePort.removeEventListener() for matching type and callback. */
 static JSValue
 ns_port_remove_event_listener(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -11598,6 +12005,7 @@ ns_port_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Creates a MessagePort object with its methods and onmessage accessor. */
 static JSValue
 ns_port_new(JSContext *ctx)
 {
@@ -11630,6 +12038,7 @@ ns_port_new(JSContext *ctx)
     return p;
 }
 
+/* MessageChannel constructor: two entangled MessagePorts. */
 static JSValue
 ns_window_message_channel(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -11671,6 +12080,7 @@ ns_frame_recorded_url(const ns_node *frame)
     return g_strdup(fu);
 }
 
+/* Origin recorded for a frame at load, "null" when opaque; caller frees. */
 static char *
 ns_frame_recorded_origin(const ns_node *frame)
 {
@@ -11680,6 +12090,7 @@ ns_frame_recorded_origin(const ns_node *frame)
     return o ? o : g_strdup("null");
 }
 
+/* Origin of a window: recorded document/frame origin, else its location.origin. */
 static char *
 ns_window_origin_of(JSContext *ctx, JSValueConst win)
 {
@@ -11712,6 +12123,7 @@ ns_window_origin_of(JSContext *ctx, JSValueConst win)
     return out;
 }
 
+/* URL of a window: recorded frame URL, else its location.href; caller frees. */
 static char *
 ns_window_url_of(JSContext *ctx, JSValueConst win)
 {
@@ -11738,6 +12150,7 @@ ns_window_url_of(JSContext *ctx, JSValueConst win)
 static JSValue ns_sc_run(JSContext *ctx, JSValueConst value,
                          GPtrArray *transfer_ports, gboolean ports_by_identity);
 
+/* Realm context whose global object is window, or NULL. */
 static JSContext *
 ns_js_window_realm(ns_js *js, JSValueConst window)
 {
@@ -11757,6 +12170,7 @@ ns_js_window_realm(ns_js *js, JSValueConst window)
     return hit ? main_ctx : NULL;
 }
 
+/* iframe whose realm global or outward proxy is window, or NULL. */
 static const ns_node *
 ns_js_frame_of_window(ns_js *js, JSValueConst window)
 {
@@ -11775,6 +12189,7 @@ ns_js_frame_of_window(ns_js *js, JSValueConst window)
     return NULL;
 }
 
+/* Maps a MessageEvent source to the window view the receiving realm may see. */
 static JSValue
 ns_message_source_seen_by(ns_js *js, JSContext *rctx, JSValueConst receiver,
                           JSValue source)
@@ -11828,6 +12243,7 @@ ns_message_source_seen_by(ns_js *js, JSContext *rctx, JSValueConst receiver,
     return source;
 }
 
+/* Re-creates a MessageEvent in the receiving realm, cloning data; messageerror on failure. */
 static JSValue
 ns_message_event_in_realm(JSContext *ctx, JSContext *rctx,
                           JSValueConst target, JSValueConst ev)
@@ -11869,6 +12285,7 @@ ns_message_event_in_realm(JSContext *ctx, JSContext *rctx,
     return out;
 }
 
+/* Message task delivering a postMessage event to its target window's realm. */
 static JSValue
 ns_window_post_message_deliver_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -11954,6 +12371,7 @@ ns_window_post_message_deliver_job(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* window.postMessage(): checks targetOrigin, clones data and queues delivery. */
 static JSValue
 ns_post_message_to_target(JSContext *ctx, JSValue target,
                           JSValueConst source_override,
@@ -12047,6 +12465,7 @@ ns_post_message_to_target(JSContext *ctx, JSValue target,
     return JS_UNDEFINED;
 }
 
+/* window.postMessage bound to a global; uses this or the bound window. */
 static JSValue
 ns_window_post_message_data(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv,
@@ -12058,6 +12477,7 @@ ns_window_post_message_data(JSContext *ctx, JSValueConst this_val,
     return ns_post_message_to_target(ctx, target, JS_UNDEFINED, argc, argv);
 }
 
+/* postMessage on an explicit this window (used by frame bootstraps). */
 static JSValue
 ns_window_post_message_this(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -12067,6 +12487,7 @@ ns_window_post_message_this(JSContext *ctx, JSValueConst this_val,
                                      JS_UNDEFINED, argc, argv);
 }
 
+/* Global of the realm owning the current document, approximating incumbent. */
 static JSValue
 ns_js_incumbent_window(ns_js *js)
 {
@@ -12081,6 +12502,7 @@ ns_js_incumbent_window(ns_js *js)
     return fctx ? JS_GetGlobalObject(fctx) : JS_UNDEFINED;
 }
 
+/* postMessage(target, source, ...) helper with an explicit source window. */
 static JSValue
 ns_window_post_message_from(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -12104,6 +12526,7 @@ ns_window_post_message_from(JSContext *ctx, JSValueConst this_val,
 
 static void ns_install_cross_window_maker(JSContext *ctx, JSValueConst global);
 
+/* Installs postMessage and the non-replaceable internal postMessage helpers. */
 static void
 ns_window_bind_post_message(JSContext *ctx, JSValueConst global)
 {
@@ -12141,6 +12564,7 @@ ns_bc_entry_free(ns_js *js, ns_bc_entry *e)
     g_free(e);
 }
 
+/* Frees all registered BroadcastChannel entries. */
 static void
 ns_broadcast_registry_clear(ns_js *js)
 {
@@ -12151,6 +12575,7 @@ ns_broadcast_registry_clear(ns_js *js)
     js->broadcast_channels = NULL;
 }
 
+/* Finds the registry entry for a BroadcastChannel object. */
 static ns_bc_entry *
 ns_broadcast_find(ns_js *js, JSValueConst obj, guint *out_index)
 {
@@ -12236,6 +12661,7 @@ ns_js_caller_document_url(ns_js *js, JSContext *ctx)
     return g_strdup(js->current_url);
 }
 
+/* BroadcastChannel.postMessage(): delivers to same-name same-origin channels. */
 static JSValue
 ns_broadcast_post_message(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -12288,6 +12714,7 @@ ns_broadcast_post_message(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* BroadcastChannel.close(): marks closed and drops it from the registry. */
 static JSValue
 ns_broadcast_close(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -12304,6 +12731,7 @@ ns_broadcast_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* BroadcastChannel constructor; registers the channel under the caller's origin. */
 static JSValue
 ns_window_broadcast_channel(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -12353,6 +12781,7 @@ ns_window_broadcast_channel(JSContext *ctx, JSValueConst this_val,
     return bc;
 }
 
+/* Notification.close(): marks closed and fires a close event. */
 static JSValue
 ns_notification_close(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -12363,6 +12792,7 @@ ns_notification_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Notification constructor stub with title, body and event target methods. */
 static JSValue
 ns_window_notification(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -12385,6 +12815,7 @@ ns_window_notification(JSContext *ctx, JSValueConst this_val,
     return n;
 }
 
+/* reportError(): reports as an uncaught exception at the caller's position. */
 static JSValue
 ns_window_report_error(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -12430,6 +12861,7 @@ typedef struct {
 
 static JSValue ns_sc_clone(ns_sc *s, JSValueConst v);
 
+/* instanceof check against a constructor, FALSE if it is missing. */
 static gboolean
 ns_sc_isa(JSContext *ctx, JSValueConst v, JSValueConst ctor)
 {
@@ -12444,6 +12876,7 @@ typedef struct {
 
 static ns_sc_builtin_classes ns_sc_classes;
 
+/* Learns a builtin's QuickJS class id by evaluating a sample expression. */
 static JSClassID
 ns_sc_class_of_eval(JSContext *ctx, const char *expr)
 {
@@ -12455,6 +12888,7 @@ ns_sc_class_of_eval(JSContext *ctx, const char *expr)
     return id;
 }
 
+/* Caches class ids of Date, RegExp, Map etc. once for structured clone. */
 static void
 ns_sc_learn_builtin_classes(JSContext *ctx)
 {
@@ -12473,6 +12907,7 @@ ns_sc_learn_builtin_classes(JSContext *ctx)
     g_once_init_leave(&learned, 1);
 }
 
+/* Class test by cached class id, falling back to instanceof. */
 static gboolean
 ns_sc_is_class(JSValueConst v, JSClassID id, JSContext *ctx, JSValueConst ctor)
 {
@@ -12480,6 +12915,7 @@ ns_sc_is_class(JSValueConst v, JSClassID id, JSContext *ctx, JSValueConst ctor)
     return ns_sc_isa(ctx, v, ctor);
 }
 
+/* Throws a DataCloneError DOMException. */
 static JSValue
 ns_sc_fail(JSContext *ctx)
 {
@@ -12489,6 +12925,7 @@ ns_sc_fail(JSContext *ctx)
 
 static gboolean ns_worker_transfer_is_port(JSContext *ctx, JSValueConst v);
 
+/* Turns a pending exception into a DataCloneError; passes other values through. */
 static JSValue
 ns_sc_fail_on_exception(JSContext *ctx, JSValue v)
 {
@@ -12497,6 +12934,7 @@ ns_sc_fail_on_exception(JSContext *ctx, JSValue v)
     return ns_sc_fail(ctx);
 }
 
+/* True if an ArrayBuffer reports detached. */
 static gboolean
 ns_sc_buffer_detached(JSContext *ctx, JSValueConst buffer)
 {
@@ -12506,6 +12944,7 @@ ns_sc_buffer_detached(JSContext *ctx, JSValueConst buffer)
     return detached;
 }
 
+/* Borrows ArrayBuffer bytes; FALSE only when access threw. */
 static gboolean
 ns_sc_buffer_bytes(JSContext *ctx, JSValueConst buffer, uint8_t **bytes,
                    size_t *size)
@@ -12516,6 +12955,7 @@ ns_sc_buffer_bytes(JSContext *ctx, JSValueConst buffer, uint8_t **bytes,
     return FALSE;
 }
 
+/* Clones an ArrayBuffer, preserving resizability and maxByteLength. */
 static JSValue
 ns_sc_copy_array_buffer(ns_sc *s, JSValueConst src)
 {
@@ -12553,6 +12993,7 @@ ns_sc_copy_array_buffer(ns_sc *s, JSValueConst src)
     return clone;
 }
 
+/* Structured-clone memory lookup: existing clone of an object, or undefined. */
 static JSValue
 ns_sc_memo_get(ns_sc *s, void *ptr)
 {
@@ -12563,6 +13004,7 @@ ns_sc_memo_get(ns_sc *s, void *ptr)
     return JS_UNDEFINED;
 }
 
+/* Records an object's clone in the structured-clone memory. */
 static void
 ns_sc_memo_put(ns_sc *s, void *ptr, JSValueConst clone)
 {
@@ -12570,6 +13012,7 @@ ns_sc_memo_put(ns_sc *s, void *ptr, JSValueConst clone)
     g_array_append_val(s->memo, p);
 }
 
+/* Clones Map entries or Set values via iteration into the target. */
 static gboolean
 ns_sc_iterate(ns_sc *s, JSValueConst src, const char *iter_method,
               JSValueConst target, JSValueConst add_fn, gboolean is_pair)
@@ -12617,6 +13060,7 @@ ns_sc_iterate(ns_sc *s, JSValueConst src, const char *iter_method,
     return ok;
 }
 
+/* HTML StructuredSerialize/Deserialize in one pass for supported value types. */
 static JSValue
 ns_sc_clone_value(ns_sc *s, JSValueConst v)
 {
@@ -12922,6 +13366,7 @@ ns_sc_clone_value(ns_sc *s, JSValueConst v)
     return clone;
 }
 
+/* Depth-limited structured clone step. */
 static JSValue
 ns_sc_clone(ns_sc *s, JSValueConst v)
 {
@@ -12932,6 +13377,7 @@ ns_sc_clone(ns_sc *s, JSValueConst v)
     return r;
 }
 
+/* Runs a structured clone in ctx with a fresh memory and constructor cache. */
 static JSValue
 ns_sc_run(JSContext *ctx, JSValueConst value, GPtrArray *transfer_ports,
           gboolean ports_by_identity)
@@ -12979,6 +13425,7 @@ ns_sc_run(JSContext *ctx, JSValueConst value, GPtrArray *transfer_ports,
     return out;
 }
 
+/* True for transferables passed by identity (ports, ImageBitmaps). */
 static gboolean
 ns_sc_transferred_in_place(JSContext *ctx, JSValueConst v)
 {
@@ -12992,6 +13439,7 @@ ns_sc_clone_with_transfer_ports(JSContext *ctx, JSValueConst value,
     return ns_sc_run(ctx, value, transfer_ports, FALSE);
 }
 
+/* structuredClone(): validates transfer list, clones, then detaches buffers. */
 static JSValue
 ns_window_structured_clone(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -13062,6 +13510,7 @@ ns_css_supports_decl(const char *prop, const char *value)
     return ns_css_supports_declaration(prop, value);
 }
 
+/* CSS.supports() for a property/value pair or a condition string. */
 static JSValue
 ns_css_supports(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -13083,6 +13532,7 @@ ns_css_supports(JSContext *ctx, JSValueConst this_val,
     return result ? JS_TRUE : JS_FALSE;
 }
 
+/* Validates @property descriptors: syntax, inherits and initial value. */
 static JSValue
 ns_css_property_rule_valid(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -13106,6 +13556,7 @@ ns_css_property_rule_valid(JSContext *ctx, JSValueConst this_val,
     return ok ? JS_TRUE : JS_FALSE;
 }
 
+/* CSS.registerProperty(); maps registration failures to DOMExceptions. */
 static JSValue
 ns_css_registerProperty(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -13169,6 +13620,7 @@ ns_css_registerProperty(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* CSS.escape() per CSSOM serialize-an-identifier. */
 static JSValue
 ns_css_escape(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -13224,6 +13676,7 @@ ns_css_escape(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* New DOMRect, or a plain object with rect fields as fallback. */
 static JSValue
 ns_make_dom_rect(JSContext *ctx, double x, double y, double w, double h)
 {
@@ -13256,6 +13709,7 @@ ns_make_dom_rect(JSContext *ctx, double x, double y, double w, double h)
     return r;
 }
 
+/* Range.getBoundingClientRect() from the host-reported selection rectangle. */
 static JSValue
 ns_range_get_bounding_client_rect(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
@@ -13270,6 +13724,7 @@ ns_range_get_bounding_client_rect(JSContext *ctx, JSValueConst this_val,
     return ns_make_dom_rect(ctx, x, y, w, h);
 }
 
+/* Range.getClientRects(): the selection rectangle, if any. */
 static JSValue
 ns_range_get_client_rects(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -13283,6 +13738,7 @@ ns_range_get_client_rects(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* Range.cloneContents() stub: fragment-like object with the selection text. */
 static JSValue
 ns_range_clone_contents(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -13327,6 +13783,7 @@ static JSValue ns_history_pushState(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_history_replaceState(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv);
 
+/* matchMedia(): MediaQueryList tracked for later change re-evaluation. */
 static JSValue
 ns_window_matchMedia(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -13356,6 +13813,7 @@ ns_window_matchMedia(JSContext *ctx, JSValueConst this_val,
     return mql;
 }
 
+/* Internal helper serializing a media query list. */
 static JSValue
 ns_window_nd_media_serialize(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -13369,6 +13827,7 @@ ns_window_nd_media_serialize(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Re-evaluates tracked MediaQueryLists and fires change on flips. */
 static void
 ns_js_media_queries_reeval(ns_js *js)
 {
@@ -13418,6 +13877,7 @@ static gboolean ns_js_dispatch_built_event(ns_js *js, const ns_node *target,
                                            gboolean *default_prevented);
 static void ns_nav_fire_currententrychange(ns_js *js, const char *nav_type);
 
+/* Lazily creates the session history list seeded with the current URL. */
 static void
 ns_history_ensure_stack(ns_js *js)
 {
@@ -13430,6 +13890,7 @@ ns_history_ensure_stack(ns_js *js)
     js->history_pos = 0;
 }
 
+/* Frees a history entry and its state. */
 static void
 ns_history_entry_pop_free(ns_js *js, ns_history_entry *e)
 {
@@ -13441,6 +13902,7 @@ ns_history_entry_pop_free(ns_js *js, ns_history_entry *e)
     g_free(e);
 }
 
+/* history.length. */
 static JSValue
 ns_history_get_length(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -13453,6 +13915,7 @@ ns_history_get_length(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, js->history_length);
 }
 
+/* pushState/replaceState: clones state, same-origin URL check, updates entries. */
 static JSValue
 ns_history_set_state_impl(JSContext *ctx, int argc, JSValueConst *argv,
                           gboolean replace)
@@ -13556,6 +14019,7 @@ ns_history_replaceState(JSContext *ctx, JSValueConst this_val,
     return ns_history_set_state_impl(ctx, argc, argv, TRUE);
 }
 
+/* Job dispatching popstate with the entry's state. */
 static JSValue
 ns_history_popstate_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -13569,6 +14033,7 @@ ns_history_popstate_job(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* history.go(delta) within same-document entries; queues popstate. */
 static JSValue
 ns_history_navigate(JSContext *ctx, int delta)
 {
@@ -13614,6 +14079,7 @@ ns_history_forward(JSContext *ctx, JSValueConst this_val,
     return ns_history_navigate(ctx, 1);
 }
 
+/* history.go(). */
 static JSValue
 ns_history_go(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -13624,6 +14090,7 @@ ns_history_go(JSContext *ctx, JSValueConst this_val,
     return ns_history_navigate(ctx, delta);
 }
 
+/* New unique 16-hex-digit Navigation API key; caller frees. */
 static char *
 ns_nav_key_new(ns_js *js)
 {
@@ -13631,6 +14098,7 @@ ns_nav_key_new(ns_js *js)
                            (gint64)(js ? ++js->nav_key_seq : 0));
 }
 
+/* NavigationHistoryEntry.getState(): structured clone of the stored state. */
 static JSValue
 ns_nav_entry_getState(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -13644,6 +14112,7 @@ ns_nav_entry_getState(JSContext *ctx, JSValueConst this_val,
     return JS_IsException(clone) ? JS_NULL : clone;
 }
 
+/* Builds a NavigationHistoryEntry for a history entry, assigning key/id lazily. */
 static JSValue
 ns_nav_make_entry(JSContext *ctx, ns_js *js, ns_history_entry *e, int index)
 {
@@ -13668,6 +14137,7 @@ ns_nav_make_entry(JSContext *ctx, ns_js *js, ns_history_entry *e, int index)
     return w;
 }
 
+/* navigation.currentEntry for the current history position. */
 static JSValue
 ns_nav_current_entry_value(JSContext *ctx, ns_js *js)
 {
@@ -13681,6 +14151,7 @@ ns_nav_current_entry_value(JSContext *ctx, ns_js *js)
         js->history_pos);
 }
 
+/* Fires currententrychange on the navigation object. */
 static void
 ns_nav_fire_currententrychange(ns_js *js, const char *nav_type)
 {
@@ -13695,6 +14166,7 @@ ns_nav_fire_currententrychange(ns_js *js, const char *nav_type)
     JS_FreeValue(ctx, ev);
 }
 
+/* Promise resolved or rejected with value (taken). */
 static JSValue
 ns_nav_settled_promise(JSContext *ctx, JSValue value, gboolean reject)
 {
@@ -13711,6 +14183,7 @@ ns_nav_settled_promise(JSContext *ctx, JSValue value, gboolean reject)
     return p;
 }
 
+/* Error object with the given DOMException-style name. */
 static JSValue
 ns_nav_dom_error(JSContext *ctx, const char *name, const char *msg)
 {
@@ -13720,6 +14193,7 @@ ns_nav_dom_error(JSContext *ctx, const char *name, const char *msg)
     return err;
 }
 
+/* NavigationResult object of committed/finished promises (taken). */
 static JSValue
 ns_nav_result(JSContext *ctx, JSValue committed, JSValue finished)
 {
@@ -13737,6 +14211,7 @@ ns_nav_get_current(JSContext *ctx, JSValueConst this_val,
     return ns_nav_current_entry_value(ctx, js_from_ctx(ctx));
 }
 
+/* navigation.entries(). */
 static JSValue
 ns_nav_entries(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -13753,6 +14228,7 @@ ns_nav_entries(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* navigation.canGoBack. */
 static JSValue
 ns_nav_can_go_back(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -13764,6 +14240,7 @@ ns_nav_can_go_back(JSContext *ctx, JSValueConst this_val,
     return js->history_pos > 0 ? JS_TRUE : JS_FALSE;
 }
 
+/* navigation.canGoForward. */
 static JSValue
 ns_nav_can_go_forward(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -13776,6 +14253,7 @@ ns_nav_can_go_forward(JSContext *ctx, JSValueConst this_val,
         ? JS_TRUE : JS_FALSE;
 }
 
+/* NavigateEvent.intercept(): marks intercepted and records the handler. */
 static JSValue
 ns_nav_event_intercept(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -13807,6 +14285,7 @@ ns_nav_event_intercept(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Settles navigation finished and fires navigatesuccess/navigateerror (magic=error). */
 static JSValue
 ns_nav_finish_cb(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv, int magic, JSValue *func_data)
@@ -13832,6 +14311,7 @@ ns_nav_finish_cb(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Runs intercept handlers, resolves committed, then finishes when all settle. */
 static JSValue
 ns_nav_run_intercept(JSContext *ctx, ns_js *js, JSValueConst ev,
                      JSValue committed, JSValue *finresolv)
@@ -13879,6 +14359,7 @@ ns_nav_run_intercept(JSContext *ctx, ns_js *js, JSValueConst ev,
     return JS_UNDEFINED;
 }
 
+/* navigation.navigate(): fires navigate; intercepted same-origin commits in-document. */
 static JSValue
 ns_nav_navigate(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -14035,6 +14516,7 @@ ns_nav_navigate(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* navigation.reload(): asks the host to reload the current URL. */
 static JSValue
 ns_nav_reload(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -14049,6 +14531,7 @@ ns_nav_reload(JSContext *ctx, JSValueConst this_val,
                          ns_nav_settled_promise(ctx, cur2, FALSE));
 }
 
+/* Traverses history by delta and returns a settled NavigationResult. */
 static JSValue
 ns_nav_traverse_delta(JSContext *ctx, ns_js *js, int delta)
 {
@@ -14074,6 +14557,7 @@ ns_nav_forward(JSContext *ctx, JSValueConst this_val,
     return ns_nav_traverse_delta(ctx, js_from_ctx(ctx), 1);
 }
 
+/* navigation.traverseTo(key); rejects with InvalidStateError for unknown keys. */
 static JSValue
 ns_nav_traverse_to(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -14108,6 +14592,7 @@ ns_nav_traverse_to(JSContext *ctx, JSValueConst this_val,
     return ns_nav_traverse_delta(ctx, js, target - js->history_pos);
 }
 
+/* navigation.updateCurrentEntry(): replaces the current entry's cloned state. */
 static JSValue
 ns_nav_update_current(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -14138,6 +14623,7 @@ ns_nav_update_current(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Creates the window.navigation object and stores it on js. */
 static JSValue
 ns_make_navigation(JSContext *ctx, ns_js *js)
 {
@@ -14174,6 +14660,7 @@ ns_make_navigation(JSContext *ctx, ns_js *js)
     return nav;
 }
 
+/* True for properties whose initial value is currentColor. */
 static gboolean
 ns_computed_prop_defaults_to_color(const char *name)
 {
@@ -14199,6 +14686,7 @@ ns_computed_initial_value(const char *name)
 static char *
 ns_computed_lookup(JSContext *ctx, const ns_node *n, const char *name);
 
+/* Serializes a four-side shorthand from computed longhands, collapsing equal sides. */
 static char *
 ns_computed_box_shorthand(JSContext *ctx, const ns_node *n,
                           const char *t, const char *r,
@@ -14223,6 +14711,7 @@ ns_computed_box_shorthand(JSContext *ctx, const ns_node *n,
     return out;
 }
 
+/* Splits a corner radius value into horizontal and vertical radii. */
 static void
 ns_radius_corner_axes(const char *value, char **horizontal, char **vertical)
 {
@@ -14232,6 +14721,7 @@ ns_radius_corner_axes(const char *value, char **horizontal, char **vertical)
     g_strfreev(parts);
 }
 
+/* Shortest 1-4 value serialization for one border-radius axis. */
 static char *
 ns_radius_axis_list(char *const corner[4])
 {
@@ -14247,6 +14737,7 @@ ns_radius_axis_list(char *const corner[4])
                            corner[3]);
 }
 
+/* Computed border-radius shorthand, with "/" when axes differ. */
 static char *
 ns_computed_radius_shorthand(JSContext *ctx, const ns_node *n)
 {
@@ -14270,6 +14761,7 @@ ns_computed_radius_shorthand(JSContext *ctx, const ns_node *n)
     return out;
 }
 
+/* Used margin/padding/border-width of a layout box side in px, or NULL. */
 static char *
 ns_computed_box_edge_px(const ns_box *b, const char *name)
 {
@@ -14296,6 +14788,7 @@ ns_computed_box_edge_px(const ns_box *b, const char *name)
     return g_strdup_printf("%gpx", v);
 }
 
+/* Resolved transform as matrix() or matrix3d(), or "none". */
 static char *
 ns_computed_transform_matrix(const ns_style *s, const ns_box *b)
 {
@@ -14327,6 +14820,7 @@ ns_computed_transform_matrix(const ns_style *s, const ns_box *b)
     return g_string_free(out, FALSE);
 }
 
+/* Computed font-size in px, defaulting to 16. */
 static double
 ns_computed_font_px(JSContext *ctx, const ns_node *n)
 {
@@ -14337,6 +14831,7 @@ ns_computed_font_px(JSContext *ctx, const ns_node *n)
     return v;
 }
 
+/* Computed position keyword of a box, defaulting to "static". */
 static const char *
 ns_box_position_keyword(const ns_box *b)
 {
@@ -14347,6 +14842,7 @@ ns_box_position_keyword(const ns_box *b)
     return "static";
 }
 
+/* True if an inset value is absent or auto. */
 static gboolean
 ns_inset_value_auto(const ns_css_value *v)
 {
@@ -14355,6 +14851,7 @@ ns_inset_value_auto(const ns_css_value *v)
            strcmp(v->u.keyword, "auto") == 0;
 }
 
+/* Resolves an inset length/calc to px against basis and font size. */
 static gboolean
 ns_inset_resolve_px(const ns_css_value *v, double basis, double font_px,
                     double *out)
@@ -14379,6 +14876,7 @@ ns_inset_resolve_px(const ns_css_value *v, double basis, double font_px,
     return FALSE;
 }
 
+/* True if a style establishes a containing block via transform or perspective. */
 static gboolean
 ns_inset_style_has_transform(const ns_style *s)
 {
@@ -14396,6 +14894,7 @@ ns_inset_style_has_transform(const ns_style *s)
     return FALSE;
 }
 
+/* True if any overflow axis is not visible or clip. */
 static gboolean
 ns_inset_style_scroll_container(const ns_style *s)
 {
@@ -14413,6 +14912,7 @@ ns_inset_style_scroll_container(const ns_style *s)
     return FALSE;
 }
 
+/* Physical side for the inline/block start given writing-mode and direction. */
 static const char *
 ns_inset_logical_start(const ns_style *style, gboolean vertical)
 {
@@ -14430,6 +14930,7 @@ ns_inset_logical_start(const ns_style *style, gboolean vertical)
     return vertical ? "top" : (rtl ? "right" : "left");
 }
 
+/* Containing block box for resolving insets by position type. */
 static const ns_box *
 ns_inset_containing_block(ns_js *js, const ns_node *n, const ns_box *b,
                           const char *pos)
@@ -14467,6 +14968,7 @@ ns_inset_containing_block(ns_js *js, const ns_node *n, const ns_box *b,
     return NULL;
 }
 
+/* CSSOM resolved value of top/right/bottom/left for positioned boxes. */
 static char *
 ns_computed_inset_px(JSContext *ctx, const ns_node *n, const ns_box *b,
                      const char *name)
@@ -14568,6 +15070,7 @@ ns_computed_inset_px(JSContext *ctx, const ns_node *n, const ns_box *b,
     return g_strdup_printf("%.6gpx", used);
 }
 
+/* Resolved line-height in px for numeric/relative values, or NULL. */
 static char *
 ns_computed_line_height_px(JSContext *ctx, const ns_node *n, const ns_style *s)
 {
@@ -14591,6 +15094,7 @@ ns_computed_line_height_px(JSContext *ctx, const ns_node *n, const ns_style *s)
     return NULL;
 }
 
+/* Property name for an animation/transition target enum. */
 static const char *
 ns_anim_target_property_name(ns_css_anim_target t)
 {
@@ -14604,6 +15108,7 @@ ns_anim_target_property_name(ns_css_anim_target t)
     }
 }
 
+/* Serializes one animation/transition longhand across all list entries. */
 static char *
 ns_computed_anim_longhand(const ns_css_anim_list *list, const char *sub)
 {
@@ -14658,6 +15163,7 @@ ns_computed_anim_longhand(const ns_css_anim_list *list, const char *sub)
     return g_string_free(out, FALSE);
 }
 
+/* Converts lengths in an animation-range list to computed px. */
 static char *
 ns_computed_range_list(ns_js *js, const ns_node *n, const char *text)
 {
@@ -14710,6 +15216,7 @@ ns_computed_range_list(ns_js *js, const ns_node *n, const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Computed value of animation/transition shorthands and longhands, with defaults. */
 static char *
 ns_computed_anim_lookup(ns_js *js, const ns_node *n, const char *name)
 {
@@ -14858,6 +15365,7 @@ ns_computed_anim_lookup(ns_js *js, const ns_node *n, const char *name)
     return NULL;
 }
 
+/* True for properties whose resolved value requires a layout flush. */
 static gboolean
 ns_computed_prop_needs_layout(const char *name)
 {
@@ -14875,6 +15383,7 @@ ns_computed_prop_needs_layout(const char *name)
            (g_str_has_prefix(name, "border") && strstr(name, "width") != NULL);
 }
 
+/* getComputedStyle core: resolved value of a property or shorthand; caller frees. */
 static char *
 ns_computed_lookup(JSContext *ctx, const ns_node *n, const char *name)
 {
@@ -15317,6 +15826,7 @@ ns_computed_lookup(JSContext *ctx, const ns_node *n, const char *name)
     return NULL;
 }
 
+/* Computed sub-style for a pseudo-element name, or NULL. */
 static const ns_style *
 ns_pseudo_substyle(const ns_style *s, const char *pseudo)
 {
@@ -15334,6 +15844,7 @@ ns_pseudo_substyle(const ns_style *s, const char *pseudo)
     return NULL;
 }
 
+/* Resolved value of a property on a pseudo-element style; caller frees. */
 static char *
 ns_computed_lookup_pseudo(JSContext *ctx, const ns_node *n,
                           const char *pseudo, const char *name)
@@ -15479,6 +15990,7 @@ static const char *const ns_css_computed_props[] = {
     "x", "y", "z-index",
 };
 
+/* Number of supported properties exposed by computed style (cached). */
 static int
 ns_css_computed_count(void)
 {
@@ -15491,6 +16003,7 @@ ns_css_computed_count(void)
     return cached_count;
 }
 
+/* Name of the Nth supported computed-style property. */
 static const char *
 ns_css_computed_name(int index)
 {
@@ -15502,6 +16015,7 @@ ns_css_computed_name(int index)
     return NULL;
 }
 
+/* CSSStyleDeclaration.item() for computed styles, custom properties last. */
 static JSValue
 ns_computed_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -15537,6 +16051,7 @@ ns_computed_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return result;
 }
 
+/* Computed style getPropertyValue(), honoring pseudo-element and empty states. */
 static JSValue
 ns_computed_getPropertyValue(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -15565,6 +16080,7 @@ ns_computed_getPropertyValue(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Parses a getComputedStyle pseudo argument into a lowercase unescaped name. */
 static char *
 ns_cssom_pseudo_name(const char *raw, size_t length, int *colon_count)
 {
@@ -15617,6 +16133,7 @@ ns_cssom_pseudo_name(const char *raw, size_t length, int *colon_count)
     return g_string_free(name, FALSE);
 }
 
+/* True for pseudo-elements getComputedStyle supports; new ones need "::". */
 static gboolean
 ns_cssom_pseudo_supported(const char *name, int colon_count)
 {
@@ -15643,6 +16160,7 @@ ns_returns_empty_string(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, "");
 }
 
+/* Throws NoModificationAllowedError for writes to computed styles. */
 static JSValue
 ns_computed_readonly(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -15652,6 +16170,7 @@ ns_computed_readonly(JSContext *ctx, JSValueConst this_val,
                                   "Computed styles are read-only.");
 }
 
+/* Internal helper: whether a CSS property name is supported. */
 static JSValue
 ns_css_supported_property(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -15665,6 +16184,7 @@ ns_css_supported_property(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, ok);
 }
 
+/* Canonical serialization of a container query condition, or null. */
 static JSValue
 ns_container_query_canonical(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -15681,6 +16201,7 @@ ns_container_query_canonical(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Parses an animation key: CSS property id, "@N" animation index, -1 or -2 on error. */
 static int
 ns_anim_prop_arg(JSContext *ctx, JSValueConst v)
 {
@@ -15700,6 +16221,7 @@ ns_anim_prop_arg(JSContext *ctx, JSValueConst v)
     return prop;
 }
 
+/* Converts engine animation state into a plain JS object. */
 static JSValue
 ns_anim_info_to_js(JSContext *ctx, const ns_anim_info *info)
 {
@@ -15731,6 +16253,7 @@ typedef struct {
     guint      n;
 } ns_anim_list_ctx;
 
+/* Visitor appending one animation's info (with its element) to a JS array. */
 static void
 ns_anim_list_visit(const ns_anim_info *info, gpointer user)
 {
@@ -15740,6 +16263,7 @@ ns_anim_list_visit(const ns_anim_info *info, gpointer user)
     JS_SetPropertyUint32(lc->ctx, lc->arr, lc->n++, o);
 }
 
+/* Internal: lists running animations, optionally for one element. */
 static JSValue
 ns_anim_list_native(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -15758,6 +16282,7 @@ ns_anim_list_native(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* Internal: animation info for an element and property/index. */
 static JSValue
 ns_anim_query_native(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -15774,6 +16299,7 @@ ns_anim_query_native(JSContext *ctx, JSValueConst this_val,
     return ns_anim_info_to_js(ctx, &info);
 }
 
+/* Internal: seeks an animation to a time in ms. */
 static JSValue
 ns_anim_seek_native(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -15790,6 +16316,7 @@ ns_anim_seek_native(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, ok);
 }
 
+/* Internal: applies a play/pause-style control op to an animation. */
 static JSValue
 ns_anim_control_native(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -15817,6 +16344,7 @@ typedef struct {
     const char *run_easing;
 } ns_anim_kf_ctx;
 
+/* Visitor converting one keyframe into an offset/easing/props JS object. */
 static void
 ns_anim_keyframe_visit(double offset, const char *easing, const GArray *decls,
                        gpointer user)
@@ -15856,6 +16384,7 @@ ns_anim_keyframe_visit(double offset, const char *easing, const GArray *decls,
     JS_SetPropertyUint32(ctx, kc->arr, kc->n++, frame);
 }
 
+/* Internal: underlying (non-animated) value of a property, or its initial. */
 static JSValue
 ns_anim_base_value_native(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -15884,6 +16413,7 @@ ns_anim_base_value_native(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Internal: keyframes of a CSS animation as JS objects. */
 static JSValue
 ns_anim_keyframes_native(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -15903,6 +16433,7 @@ ns_anim_keyframes_native(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* Internal backend for Element.animate(): starts a script animation. */
 static JSValue
 ns_anim_animate_native(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -15968,6 +16499,7 @@ ns_anim_animate_native(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* Returns a linked stylesheet's cached source, only for same-origin sheets. */
 static JSValue
 ns_linked_css_text(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -15992,6 +16524,7 @@ ns_linked_css_text(JSContext *ctx, JSValueConst this_val,
 
 static ns_node *ns_element_find_shadow_child(const ns_node *host);
 
+/* True if the element is connected and not an unslotted shadow-host child. */
 static gboolean
 ns_cssom_element_is_rendered(JSContext *ctx, JSValueConst v)
 {
@@ -16008,6 +16541,7 @@ ns_cssom_element_is_rendered(JSContext *ctx, JSValueConst v)
     return p == js->current_doc;
 }
 
+/* getComputedStyle(): read-only declaration wrapped in a camelCase Proxy. */
 static JSValue
 ns_window_getComputedStyle(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -16130,6 +16664,7 @@ ns_window_getComputedStyle(JSContext *ctx, JSValueConst this_val,
     return cs;
 }
 
+/* crypto.getRandomValues(): fills integer typed arrays up to 65536 bytes. */
 static JSValue
 ns_window_getRandomValues(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -16183,6 +16718,7 @@ ns_window_getRandomValues(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, arr);
 }
 
+/* crypto.randomUUID(): RFC 4122 version 4 UUID from the CSPRNG. */
 static JSValue
 ns_window_randomUUID(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -16205,6 +16741,7 @@ ns_window_randomUUID(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, buf);
 }
 
+/* True if url resolves against the document base URL. */
 static gboolean
 ns_js_url_parses(ns_js *js, const char *url)
 {
@@ -16216,6 +16753,7 @@ ns_js_url_parses(ns_js *js, const char *url)
     return resolved != NULL;
 }
 
+/* window.open(): navigates only with transient activation, else logs a blocked popup. */
 static JSValue
 ns_window_open_method(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -16248,6 +16786,7 @@ ns_window_open_method(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* window.prompt() stub returning the default value. */
 static JSValue
 ns_window_prompt(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -16268,6 +16807,7 @@ static JSValue ns_event_initEvent(JSContext *ctx, JSValueConst this_val,
 static void ns_event_link_proto(JSContext *ctx, JSValueConst global,
                                 const char *child, const char *parent);
 
+/* btoa(): base64 of a Latin-1 string; InvalidCharacterError above U+00FF. */
 static JSValue
 ns_window_btoa(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -16309,6 +16849,7 @@ ns_window_btoa(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* atob() per the forgiving-base64 decode algorithm, returning Latin-1 text. */
 static JSValue
 ns_window_atob(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -16383,6 +16924,7 @@ static JSValue
 ns_window_url_ctor(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv);
 
+/* Parses href into a plain object of URL components, or null. */
 static JSValue
 ns_url_parts_to_js(JSContext *ctx, const char *href)
 {
@@ -16403,6 +16945,7 @@ ns_url_parts_to_js(JSContext *ctx, const char *href)
     return o;
 }
 
+/* Internal: URL components for an href. */
 static JSValue
 ns_window_url_parts_internal(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -16416,6 +16959,7 @@ ns_window_url_parts_internal(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* Internal: applies a URL component setter and returns new components. */
 static JSValue
 ns_window_url_set_internal(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -16440,6 +16984,7 @@ ns_window_url_set_internal(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* URL.canParse(). */
 static JSValue
 ns_window_url_can_parse(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -16455,6 +17000,7 @@ ns_window_url_can_parse(JSContext *ctx, JSValueConst this_val,
     return JS_TRUE;
 }
 
+/* URL.parse(): a URL or null. */
 static JSValue
 ns_window_url_parse_static(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -16469,6 +17015,7 @@ ns_window_url_parse_static(JSContext *ctx, JSValueConst this_val,
     return tmp;
 }
 
+/* Makes the URL global non-enumerable and its prototype non-writable. */
 static void
 ns_url_install_interface(JSContext *ctx)
 {
@@ -16483,6 +17030,7 @@ ns_url_install_interface(JSContext *ctx)
     JS_FreeValue(ctx, r);
 }
 
+/* Makes URLSearchParams non-enumerable with a non-writable prototype. */
 static void
 ns_usp_install_interface(JSContext *ctx)
 {
@@ -16497,6 +17045,7 @@ ns_usp_install_interface(JSContext *ctx)
     JS_FreeValue(ctx, r);
 }
 
+/* URL constructor: resolves against base; builds instances via a JS helper. */
 static JSValue
 ns_window_url_ctor(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -16646,6 +17195,7 @@ ns_window_url_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* URLSearchParams construction via a cached JS helper defining its prototype. */
 static JSValue
 ns_url_get_searchParams_value(JSContext *ctx, JSValueConst init)
 {
@@ -16755,6 +17305,7 @@ ns_url_get_searchParams_value(JSContext *ctx, JSValueConst init)
     return JS_Call(ctx, jsx->search_params_helper, JS_UNDEFINED, 1, args);
 }
 
+/* URLSearchParams for a query string, or an empty object on failure. */
 static JSValue
 ns_url_get_searchParams_object(JSContext *ctx, const char *search)
 {
@@ -16768,6 +17319,7 @@ ns_url_get_searchParams_object(JSContext *ctx, const char *search)
     return obj;
 }
 
+/* DocumentFragment constructor: new orphan fragment node. */
 static JSValue
 ns_window_document_fragment_ctor(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -16783,6 +17335,7 @@ ns_window_document_fragment_ctor(JSContext *ctx, JSValueConst this_val,
 static void ns_tag_owner_document(JSContext *ctx, JSValueConst doc_val,
                               JSValueConst node_val);
 
+/* Creates an orphan Text/Comment node with the given data, owned by document. */
 static JSValue
 ns_window_character_data_new(JSContext *ctx, int argc, JSValueConst *argv,
                              ns_node *(*node_new)(char *, guint32))
@@ -16829,6 +17382,7 @@ ns_window_comment_ctor(JSContext *ctx, JSValueConst this_val,
                                         ns_node_new_comment_len);
 }
 
+/* Image(width, height) constructor: new orphan img element. */
 static JSValue
 ns_window_image_ctor(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -16849,6 +17403,7 @@ ns_window_image_ctor(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, el);
 }
 
+/* Audio(src) constructor: new orphan audio element. */
 static JSValue
 ns_window_audio_ctor(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -16864,6 +17419,7 @@ ns_window_audio_ctor(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, el);
 }
 
+/* Option(text, value, defaultSelected, selected) constructor. */
 static JSValue
 ns_window_option_ctor(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -16891,6 +17447,7 @@ ns_window_option_ctor(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, el);
 }
 
+/* URLSearchParams constructor. */
 static JSValue
 ns_window_usp_ctor(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -16918,6 +17475,7 @@ static JSValue ns_synthdoc_get_title(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_synthdoc_get_forms(JSContext *ctx, JSValueConst this_val,
                                      int argc, JSValueConst *argv);
 
+/* DOMParser.parseFromString(): HTML or XML document, parsererror on XML failure. */
 static JSValue
 ns_dom_parser_parseFromString(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -16987,6 +17545,7 @@ ns_dom_parser_parseFromString(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* Document.parseHTMLUnsafe(): inert document with declarative shadow roots. */
 static JSValue
 ns_document_parseHTMLUnsafe(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -17014,6 +17573,7 @@ ns_document_parseHTMLUnsafe(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* HTMLScriptElement.supports(): classic, module and importmap. */
 static JSValue
 ns_html_script_supports(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -17031,6 +17591,7 @@ ns_html_script_supports(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, supported);
 }
 
+/* DOMParser constructor recording the creating document's URL. */
 static JSValue
 ns_window_dom_parser_ctor(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -17066,6 +17627,7 @@ typedef struct ns_xhr_state {
     GPtrArray *request_headers;
 } ns_xhr_state;
 
+/* Reason phrase for an HTTP status code, or "". */
 static const char *
 ns_http_status_text(int status)
 {
@@ -17184,6 +17746,7 @@ ns_js_exposed_response_headers(const ns_response *resp, gboolean same_origin)
     return g_string_free(out, FALSE);
 }
 
+/* Fallback raw header lines from the known response header fields. */
 static char *
 ns_xhr_serialize_headers(const ns_response *resp)
 {
@@ -17203,6 +17766,7 @@ ns_xhr_serialize_headers(const ns_response *resp)
     return g_string_free(s, FALSE);
 }
 
+/* XHR.getResponseHeader(): first exposed header matching name, trimmed. */
 static JSValue
 ns_xhr_getResponseHeader(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -17243,6 +17807,7 @@ ns_xhr_getResponseHeader(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* XHR.getAllResponseHeaders(): the exposed raw header lines. */
 static JSValue
 ns_xhr_getAllResponseHeaders(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -17254,6 +17819,7 @@ ns_xhr_getAllResponseHeaders(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, "");
 }
 
+/* Frees an XHR request state and its request headers. */
 static void
 ns_xhr_state_free(ns_xhr_state *st)
 {
@@ -17266,6 +17832,7 @@ ns_xhr_state_free(ns_xhr_state *st)
     g_free(st);
 }
 
+/* Builds a trusted, non-bubbling plain event object for a non-node target. */
 static JSValue
 ns_target_make_event(JSContext *ctx, JSValueConst target, const char *type)
 {
@@ -17296,6 +17863,7 @@ static void ns_current_event_push(ns_js *js, JSValueConst fn, JSValueConst ev,
 static void ns_current_event_pop(ns_js *js, ns_current_event_guard *g);
 static gboolean ns_global_is_window(JSContext *ctx, JSValueConst global);
 
+/* Dispatches to a non-node target's onX handler and JS-side listener list. */
 static void
 ns_target_dispatch_with_event(JSContext *ctx, JSValueConst obj,
                               const char *type, JSValueConst ev)
@@ -17384,6 +17952,7 @@ ns_target_dispatch_with_event(JSContext *ctx, JSValueConst obj,
     JS_FreeValue(ctx, listeners);
 }
 
+/* Invokes a listener function or handleEvent object with window.event set. */
 static JSValue
 ns_event_call_listener(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -17424,6 +17993,7 @@ ns_event_call_listener(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Internal helper reporting a listener exception as uncaught. */
 static JSValue
 ns_event_report_listener_exception(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
@@ -17435,6 +18005,7 @@ ns_event_report_listener_exception(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Creates and dispatches a simple event on a non-node target. */
 static void
 ns_target_fire_event(JSContext *ctx, JSValueConst obj, const char *type)
 {
@@ -17443,12 +18014,14 @@ ns_target_fire_event(JSContext *ctx, JSValueConst obj, const char *type)
     JS_FreeValue(ctx, ev);
 }
 
+/* True for Document nodes (not fragments). */
 static gboolean
 ns_target_is_document_node(const ns_node *n)
 {
     return n && n->kind == NS_NODE_DOCUMENT && !(n->flags & NS_NODE_FRAGMENT);
 }
 
+/* EventTarget.addEventListener(): node path, or a JS-side list for other objects. */
 static JSValue
 ns_target_addEventListener(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -17517,6 +18090,7 @@ ns_target_addEventListener(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Throws InvalidStateError if the event is mid-dispatch or uninitialized. */
 static JSValue
 ns_event_dispatch_guard(JSContext *ctx, JSValueConst event)
 {
@@ -17532,6 +18106,7 @@ ns_event_dispatch_guard(JSContext *ctx, JSValueConst event)
     return JS_UNDEFINED;
 }
 
+/* EventTarget.dispatchEvent() for non-node targets, with checkbox click steps. */
 static JSValue
 ns_target_dispatchEvent(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -17575,6 +18150,7 @@ ns_target_dispatchEvent(JSContext *ctx, JSValueConst this_val,
     return was_prevented ? JS_FALSE : JS_TRUE;
 }
 
+/* Dispatches a ProgressEvent-like event on an XHR target. */
 static void
 ns_xhr_fire_progress_event(JSContext *ctx, JSValueConst target,
                            const char *type, double loaded, double total,
@@ -17589,6 +18165,7 @@ ns_xhr_fire_progress_event(JSContext *ctx, JSValueConst target,
     JS_FreeValue(ctx, event);
 }
 
+/* XHR.abort(): sets DONE and fires readystatechange, abort and loadend. */
 static JSValue
 ns_xhr_abort(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
@@ -17604,6 +18181,7 @@ ns_xhr_abort(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* XHR.overrideMimeType(): stores the override for charset decoding. */
 static JSValue
 ns_xhr_overrideMimeType(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -17614,6 +18192,7 @@ ns_xhr_overrideMimeType(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Decodes an XHR body using the override or response charset, else UTF-8. */
 static JSValue
 ns_xhr_response_text_value(JSContext *ctx, JSValueConst obj,
                            const guint8 *body, gsize blen,
@@ -17636,6 +18215,7 @@ ns_xhr_response_text_value(JSContext *ctx, JSValueConst obj,
     return v;
 }
 
+/* EventTarget.removeEventListener() for nodes or JS-side listener lists. */
 static JSValue
 ns_target_removeEventListener(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -17682,6 +18262,7 @@ ns_target_removeEventListener(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Completes an XHR: CORS check, status/headers, typed response, load events. */
 static void
 ns_xhr_deliver(ns_xhr_state *st, ns_response *resp, GError *err)
 {
@@ -17872,6 +18453,7 @@ typedef struct {
     GError       *err;
 } ns_xhr_delivery;
 
+/* Deferred XHR delivery, retrying while a nested loop is pumping. */
 static gboolean
 ns_on_xhr_deliver_idle(gpointer user_data)
 {
@@ -17885,6 +18467,7 @@ ns_on_xhr_deliver_idle(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* Network completion for XHR; delivers now or defers when inside a pump. */
 static void
 ns_on_xhr_done(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -17903,6 +18486,7 @@ ns_on_xhr_done(GObject *src, GAsyncResult *result, gpointer user_data)
     ns_xhr_deliver(st, resp, err);
 }
 
+/* Reports a policy-blocked XHR as a network error asynchronously. */
 static gboolean
 ns_xhr_emit_blocked_idle(gpointer user_data)
 {
@@ -17934,6 +18518,7 @@ ns_xhr_emit_blocked_idle(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* XHR.open(): validates method and URL, normalizes method, resets state. */
 static JSValue
 ns_xhr_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -18040,6 +18625,7 @@ ns_xhr_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* Runs the main loop until a sync XHR finishes or 60 s pass. */
 static void
 ns_xhr_pump_until_done(JSContext *ctx, JSValueConst this_val)
 {
@@ -18061,6 +18647,7 @@ ns_xhr_pump_until_done(JSContext *ctx, JSValueConst this_val)
     ns_js_credit_pumped_time(js, pump_start_us);
 }
 
+/* True if the XHR was opened synchronously. */
 static gboolean
 ns_xhr_is_sync(JSContext *ctx, JSValueConst this_val)
 {
@@ -18070,6 +18657,7 @@ ns_xhr_is_sync(JSContext *ctx, JSValueConst this_val)
     return sync;
 }
 
+/* XHR.setRequestHeader(): validates, silently drops forbidden headers. */
 static JSValue
 ns_xhr_setRequestHeader(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -18130,6 +18718,7 @@ ns_xhr_setRequestHeader(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* True for a "Name: value" line with a valid, non-forbidden header. */
 static gboolean
 ns_xhr_header_line_allowed(const char *line)
 {
@@ -18145,6 +18734,7 @@ ns_xhr_header_line_allowed(const char *line)
     return ok;
 }
 
+/* True for token methods other than CONNECT, TRACE and TRACK. */
 static gboolean
 ns_xhr_method_allowed(const char *method)
 {
@@ -18154,6 +18744,7 @@ ns_xhr_method_allowed(const char *method)
            g_ascii_strcasecmp(method, "TRACK") != 0;
 }
 
+/* XHR.send(): serializes body, applies policy, fires loadstart/upload events. */
 static JSValue
 ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -18330,6 +18921,7 @@ ns_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* XMLHttpRequest constructor initializing state, handlers and upload object. */
 static JSValue
 ns_window_xhr_ctor(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -18385,6 +18977,7 @@ ns_window_xhr_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* XHR.readyState getter backed by _readyState, defaulting to 0 (UNSENT). */
 static JSValue
 ns_xhr_get_readyState(JSContext *ctx, JSValueConst this_val)
 {
@@ -18398,6 +18991,7 @@ static const JSCFunctionListEntry ns_xhr_proto_accessors[] = {
     JS_CGETSET_DEF("readyState", ns_xhr_get_readyState, NULL),
 };
 
+/* Installs XMLHttpRequest prototype methods, readyState accessor and state constants. */
 static void
 ns_xhr_install_interface(JSContext *ctx, JSValueConst global)
 {
@@ -18431,6 +19025,7 @@ ns_xhr_install_interface(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, ctor);
 }
 
+/* Returns a new reference to FormData's _entries array, creating it if missing. */
 static JSValue
 ns_form_data_method(JSContext *ctx, JSValueConst this_val)
 {
@@ -18443,6 +19038,7 @@ ns_form_data_method(JSContext *ctx, JSValueConst this_val)
     return entries;
 }
 
+/* FormData.append(): adds a [name, value, filename?] entry. */
 static JSValue
 ns_form_data_append(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -18460,6 +19056,7 @@ ns_form_data_append(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FormData.set(): replaces the first matching entry and drops the rest. */
 static JSValue
 ns_form_data_set(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -18507,6 +19104,7 @@ ns_form_data_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FormData.getAll(): all values for a name. */
 static JSValue
 ns_form_data_getAll(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -18535,6 +19133,7 @@ ns_form_data_getAll(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* FormData.get(): first value for a name, or null. */
 static JSValue
 ns_form_data_get(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -18565,6 +19164,7 @@ ns_form_data_get(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* FormData.has(). */
 static JSValue
 ns_form_data_has(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -18580,6 +19180,7 @@ static void ns_form_collect_controls(const ns_node *form, const ns_node *scan,
                                      JSValue arr, uint32_t *idx, int depth,
                                      gboolean include_image);
 
+/* FormData.delete(): removes all entries with the name. */
 static JSValue
 ns_form_data_delete(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -18608,6 +19209,7 @@ ns_form_data_delete(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FormData.forEach(callback) over (value, name, formData). */
 static JSValue
 ns_form_data_forEach(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -18630,6 +19232,7 @@ ns_form_data_forEach(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Appends a string name/value pair to a FormData object. */
 static void
 ns_form_data_append_pair(JSContext *ctx, JSValueConst fd,
                          const char *name, const char *value)
@@ -18644,6 +19247,7 @@ ns_form_data_append_pair(JSContext *ctx, JSValueConst fd,
     JS_FreeValue(ctx, (JSValue)args[1]);
 }
 
+/* True if an option or its enclosing optgroup is disabled. */
 static gboolean
 ns_form_data_option_disabled(const ns_node *option)
 {
@@ -18657,6 +19261,7 @@ ns_form_data_option_disabled(const ns_node *option)
     return FALSE;
 }
 
+/* Appends a select's selected, enabled option values to FormData. */
 static void
 ns_form_data_append_select(JSContext *ctx, JSValueConst fd,
                            const ns_node *select, const char *name)
@@ -18682,6 +19287,7 @@ ns_form_data_append_select(JSContext *ctx, JSValueConst fd,
     g_ptr_array_free(opts, TRUE);
 }
 
+/* HTML constructing the entry list: adds a form's successful controls. */
 static void
 ns_form_data_populate_from_form(JSContext *ctx, JSValueConst fd,
                                 const ns_node *form, const ns_node *submitter)
@@ -18761,6 +19367,7 @@ ns_form_data_populate_from_form(JSContext *ctx, JSValueConst fd,
     JS_FreeValue(ctx, controls);
 }
 
+/* FormData constructor; from a form it builds the entry list and fires formdata. */
 static JSValue
 ns_window_form_data_ctor(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -18867,6 +19474,7 @@ ns_window_form_data_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Appends a form's entry list as urlencoded pairs (files by name) to query. */
 gboolean
 ns_js_form_entry_list(ns_js *js, const ns_node *form, const ns_node *submitter,
                       GString *query, gboolean *first)
@@ -18907,6 +19515,7 @@ ns_js_form_entry_list(ns_js *js, const ns_node *form, const ns_node *submitter,
     return TRUE;
 }
 
+/* AbortSignal.throwIfAborted(): throws the reason when aborted. */
 static JSValue
 ns_abort_signal_throw_if_aborted(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -18926,6 +19535,7 @@ ns_abort_signal_throw_if_aborted(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* AbortController.abort(): sets aborted and reason, fires abort once. */
 static JSValue
 ns_abort_controller_abort(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -18948,6 +19558,7 @@ ns_abort_controller_abort(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Creates an AbortSignal object, optionally already aborted with a reason. */
 static JSValue
 ns_make_abort_signal(JSContext *ctx, gboolean aborted, JSValueConst reason)
 {
@@ -18976,6 +19587,7 @@ ns_make_abort_signal(JSContext *ctx, gboolean aborted, JSValueConst reason)
     return sig;
 }
 
+/* AbortSignal.abort(reason). */
 static JSValue
 ns_abort_signal_static_abort(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -18985,6 +19597,7 @@ ns_abort_signal_static_abort(JSContext *ctx, JSValueConst this_val,
                                 argc >= 1 ? argv[0] : JS_UNDEFINED);
 }
 
+/* Aborts a combined signal with the source's reason unless already aborted. */
 static void
 ns_abort_signal_propagate(JSContext *ctx, JSValueConst combined,
                           JSValueConst source)
@@ -19004,6 +19617,7 @@ ns_abort_signal_propagate(JSContext *ctx, JSValueConst combined,
     ns_target_fire_event(ctx, combined, "abort");
 }
 
+/* abort listener forwarding a source signal's abort to the combined signal. */
 static JSValue
 ns_abort_signal_any_handler(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv, int magic,
@@ -19014,6 +19628,7 @@ ns_abort_signal_any_handler(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* AbortSignal.any(): a signal aborting when any input signal aborts. */
 static JSValue
 ns_abort_signal_static_any(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -19056,6 +19671,7 @@ static JSValue ns_abort_signal_static_timeout(JSContext *ctx,
                                               JSValueConst this_val,
                                               int argc, JSValueConst *argv);
 
+/* Installs the AbortSignal interface and its static abort/timeout/any. */
 static void
 ns_install_abort_signal_interface(JSContext *ctx, JSValueConst global)
 {
@@ -19078,6 +19694,7 @@ typedef struct {
     JSValue    sig;
 } ns_abort_timeout;
 
+/* Timer callback aborting a timeout signal with a TimeoutError. */
 static gboolean
 ns_abort_signal_timeout_fire(gpointer user_data)
 {
@@ -19108,6 +19725,7 @@ ns_abort_signal_timeout_fire(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* AbortSignal.timeout(ms): signal aborted after the delay. */
 static JSValue
 ns_abort_signal_static_timeout(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -19129,6 +19747,7 @@ ns_abort_signal_static_timeout(JSContext *ctx, JSValueConst this_val,
     return sig;
 }
 
+/* AbortController constructor with a fresh signal. */
 static JSValue
 ns_window_abort_controller_ctor(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -19141,6 +19760,7 @@ ns_window_abort_controller_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* CloseWatcher close()/requestClose(): dispatches a close event. */
 static JSValue
 ns_close_watcher_fire(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -19160,6 +19780,7 @@ ns_close_watcher_fire(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* CloseWatcher constructor stub with event target methods. */
 static JSValue
 ns_window_close_watcher_ctor(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -19209,6 +19830,7 @@ ns_blob_entry_free(gpointer p)
 static GMutex g_blob_lock;
 static GPtrArray *g_blob_js_registry = NULL;
 
+/* Snapshots a Blob's bytes and type into a blob URL entry. */
 static ns_blob_entry *
 ns_blob_entry_new_for_object(JSContext *ctx, JSValueConst obj)
 {
@@ -19228,6 +19850,7 @@ ns_blob_entry_new_for_object(JSContext *ctx, JSValueConst obj)
     return e;
 }
 
+/* Network-thread blob: URL resolver; returns a new GBytes ref under the lock. */
 static GBytes *
 ns_js_net_blob_resolver(const char *url, char **out_type, gpointer user_data)
 {
@@ -19250,6 +19873,7 @@ ns_js_net_blob_resolver(const char *url, char **out_type, gpointer user_data)
     return found;
 }
 
+/* Registers a js instance for blob URL resolution, installing the resolver once. */
 static void
 ns_js_blob_registry_add(ns_js *js)
 {
@@ -19265,6 +19889,7 @@ ns_js_blob_registry_add(ns_js *js)
         ns_net_set_blob_resolver(ns_js_net_blob_resolver, NULL);
 }
 
+/* Unregisters a js instance from blob URL resolution. */
 static void
 ns_js_blob_registry_remove(ns_js *js)
 {
@@ -19274,6 +19899,7 @@ ns_js_blob_registry_remove(ns_js *js)
     g_mutex_unlock(&g_blob_lock);
 }
 
+/* Stores a blob URL entry under the blob lock, taking ownership. */
 static void
 ns_js_blob_store(ns_js *js, const char *url, ns_blob_entry *e)
 {
@@ -19303,6 +19929,7 @@ ns_js_caller_web_origin(ns_js *js, JSContext *ctx)
     return o;
 }
 
+/* URL.createObjectURL(): mints blob:<origin>/<uuid> for the caller's origin. */
 static JSValue
 ns_window_url_create_object(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -19326,6 +19953,7 @@ ns_window_url_create_object(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* Internal: replaces a blob URL's content, only for the creating realm. */
 static JSValue
 ns_window_url_update_object(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -19358,6 +19986,7 @@ ns_window_url_update_object(JSContext *ctx, JSValueConst this_val,
     return JS_TRUE;
 }
 
+/* URL.revokeObjectURL(), honored only for the creating realm. */
 static JSValue
 ns_window_url_revoke_object(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -19421,6 +20050,7 @@ typedef struct ns_filereader_idle {
     guint   source;
 } ns_filereader_idle;
 
+/* Idle completion of a FileReader read: sets DONE, fires load and loadend. */
 static gboolean
 ns_filereader_complete(gpointer ud)
 {
@@ -19442,6 +20072,7 @@ ns_filereader_complete(gpointer ud)
     return G_SOURCE_REMOVE;
 }
 
+/* Schedules asynchronous completion events for a FileReader read. */
 static void
 ns_filereader_schedule(JSContext *ctx, JSValueConst self)
 {
@@ -19456,6 +20087,7 @@ ns_filereader_schedule(JSContext *ctx, JSValueConst self)
     fr->source = ns_engine_idle_add(ns_filereader_complete, fr);
 }
 
+/* Copies a Blob's bytes (or a value's string form) into a NUL-terminated buffer. */
 static char *
 ns_blob_bytes_as_string(JSContext *ctx, JSValueConst blob, gsize *out_len)
 {
@@ -19489,6 +20121,7 @@ ns_blob_bytes_as_string(JSContext *ctx, JSValueConst blob, gsize *out_len)
     return out;
 }
 
+/* FileReader.readAsText(): raw bytes as a string, completed asynchronously. */
 static JSValue
 ns_filereader_readAsText(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -19502,6 +20135,7 @@ ns_filereader_readAsText(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FileReader.readAsBinaryString(): one Latin-1 char per byte. */
 static JSValue
 ns_filereader_readAsBinaryString(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -19528,6 +20162,7 @@ ns_filereader_readAsBinaryString(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FileReader.readAsDataURL(): base64 data: URL with the Blob type. */
 static JSValue
 ns_filereader_readAsDataURL(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -19551,6 +20186,7 @@ ns_filereader_readAsDataURL(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FileReader.readAsArrayBuffer(): copy of the Blob bytes. */
 static JSValue
 ns_filereader_readAsArrayBuffer(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -19565,6 +20201,7 @@ ns_filereader_readAsArrayBuffer(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* FileReader constructor stub with read methods and handlers. */
 static JSValue
 ns_window_filereader_ctor(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -19591,6 +20228,7 @@ ns_window_filereader_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Gives a Request/Response Body mixin methods via a cached JS helper. */
 static void
 ns_attach_body_consumers(JSContext *ctx, JSValueConst obj)
 {
@@ -19711,6 +20349,7 @@ ns_attach_body_consumers(JSContext *ctx, JSValueConst obj)
     }
 }
 
+/* Copies a BufferSource's bytes into a new ArrayBuffer, or undefined. */
 static JSValue
 ns_body_extract_buffer(JSContext *ctx, JSValueConst body)
 {
@@ -19740,6 +20379,7 @@ ns_body_set_raw(JSContext *ctx, JSValueConst obj, JSValue value)
         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
 }
 
+/* Extracts a body init into _bodyBuffer/body and records an inferred Content-Type. */
 static void
 ns_body_install(JSContext *ctx, JSValueConst obj, JSValueConst body,
                 gboolean null_when_empty)
@@ -19819,6 +20459,7 @@ ns_body_install(JSContext *ctx, JSValueConst obj, JSValueConst body,
     ns_body_set_raw(ctx, obj, s);
 }
 
+/* Sets the inferred body Content-Type header unless one is already present. */
 static void
 ns_body_apply_inferred_ct(JSContext *ctx, JSValueConst obj)
 {
@@ -19856,6 +20497,7 @@ ns_body_apply_inferred_ct(JSContext *ctx, JSValueConst obj)
     JS_FreeValue(ctx, ctv);
 }
 
+/* New Headers from an init, or a plain object if construction fails. */
 static JSValue
 ns_make_headers_from_init(JSContext *ctx, JSValueConst init)
 {
@@ -19877,6 +20519,7 @@ ns_make_headers_from_init(JSContext *ctx, JSValueConst init)
     return out;
 }
 
+/* Sets an object's prototype to globalThis[name].prototype. */
 static void
 ns_set_instance_proto(JSContext *ctx, JSValueConst object,
                       const char *constructor_name)
@@ -19891,6 +20534,7 @@ ns_set_instance_proto(JSContext *ctx, JSValueConst object,
     JS_FreeValue(ctx, global);
 }
 
+/* Response constructor: validates status/statusText and extracts the body. */
 static JSValue
 ns_window_response_ctor(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -19960,6 +20604,7 @@ ns_window_response_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Fetch method normalization: uppercases standard methods; caller frees. */
 static char *
 ns_fetch_normalize_method(const char *method)
 {
@@ -19990,6 +20635,7 @@ static const JSCFunctionListEntry ns_request_proto_accessors[] = {
     JS_CGETSET_DEF("url", ns_request_get_url, NULL),
 };
 
+/* Request constructor: merges input and init, resolves URL, rejects GET/HEAD bodies. */
 static JSValue
 ns_window_request_ctor(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -20103,6 +20749,7 @@ ns_window_request_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Copies body methods and the body accessor from a sample instance onto the prototype. */
 static void
 ns_fetch_install_interface(JSContext *ctx, JSValueConst global,
                            const char *name)
@@ -20161,6 +20808,7 @@ ns_fetch_install_interface(JSContext *ctx, JSValueConst global,
     JS_FreeValue(ctx, ctor);
 }
 
+/* Installs Response.error(), Response.json() and Response.redirect() via an eval'd shim. */
 static void
 ns_fetch_install_static_response(JSContext *ctx)
 {
@@ -20189,6 +20837,7 @@ ns_fetch_install_static_response(JSContext *ctx)
     JS_FreeValue(ctx, result);
 }
 
+/* Sets obj[key] to fallback only when undefined; consumes fallback either way. */
 static void
 ns_event_default_if_absent(JSContext *ctx, JSValueConst obj, const char *key,
                            JSValue fallback)
@@ -20202,6 +20851,7 @@ ns_event_default_if_absent(JSContext *ctx, JSValueConst obj, const char *key,
         JS_FreeValue(ctx, fallback);
 }
 
+/* Shared Event ctor; also builds custom-element instances when called on a registered class. */
 static JSValue
 ns_window_event_ctor(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -20323,6 +20973,7 @@ typedef struct ns_js_ws {
 
 static JSClassID ns_ws_class_id;
 
+/* Drops the WebSocket from the pending list and frees the native connection. */
 static void
 ns_ws_class_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -20339,6 +20990,7 @@ static JSClassDef ns_ws_class = {
     .finalizer = ns_ws_class_finalizer,
 };
 
+/* Takes the pending exception and logs it with its stack via the page log callback. */
 static void
 ns_js_ws_log_exception(JSContext *ctx, const char *type)
 {
@@ -20364,6 +21016,7 @@ ns_js_ws_log_exception(JSContext *ctx, const char *type)
     JS_FreeValue(ctx, ex);
 }
 
+/* Calls the on<type> handler then matching _listeners entries; consumes event. */
 static void
 ns_js_ws_dispatch(JSContext *ctx, JSValueConst this_v,
                   const char *on_name, JSValue event)
@@ -20413,6 +21066,7 @@ ns_js_ws_dispatch(JSContext *ctx, JSValueConst this_v,
     JS_FreeValue(ctx, event);
 }
 
+/* Builds a plain trusted, non-bubbling event object with the standard Event methods. */
 static JSValue
 ns_js_ws_event(JSContext *ctx, const char *type)
 {
@@ -20430,6 +21084,7 @@ ns_js_ws_event(JSContext *ctx, const char *type)
     return ev;
 }
 
+/* Reports whether the page is inside a JS pump, so network callbacks defer. */
 static gboolean
 ns_js_ws_busy(gpointer user_data)
 {
@@ -20468,6 +21123,7 @@ ns_js_ws_on_text(const char *text, gsize len, gpointer user_data)
     ns_js_budget_pop(s->js, &bg);
 }
 
+/* Delivers a binary frame as ArrayBuffer or Blob per binaryType via a message event. */
 static void
 ns_js_ws_on_binary(const guint8 *data, gsize len, gpointer user_data)
 {
@@ -20513,6 +21169,7 @@ ns_js_ws_on_binary(const guint8 *data, gsize len, gpointer user_data)
     ns_js_budget_pop(s->js, &bg);
 }
 
+/* Sets readyState CLOSED, fires close, and releases the self-pin taken at construction. */
 static void
 ns_js_ws_on_close(int code, const char *reason, gboolean clean,
                   gpointer user_data)
@@ -20550,6 +21207,7 @@ ns_js_ws_on_error(const char *message, gpointer user_data)
     ns_js_budget_pop(s->js, &bg);
 }
 
+/* WebSocket.send(): sends ArrayBuffer, view, Blob as binary, anything else as text. */
 static JSValue
 ns_js_ws_send(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -20609,6 +21267,7 @@ ns_js_ws_send(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* WebSocket.close(): validates code (1000 or 3000-4999) and reason length (<=123 bytes). */
 static JSValue
 ns_js_ws_close_method(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -20642,6 +21301,7 @@ ns_js_ws_close_method(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Stringifies arg and resolves it against the page URL; caller frees. */
 static char *
 ns_js_page_url_arg(JSContext *ctx, JSValueConst arg)
 {
@@ -20656,6 +21316,7 @@ ns_js_page_url_arg(JSContext *ctx, JSValueConst arg)
     return target;
 }
 
+/* WebSocket ctor: maps http(s) to ws(s), applies HSTS and policy, validates subprotocols. */
 static JSValue
 ns_window_websocket_ctor(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -20850,6 +21511,7 @@ ns_js_es_on_open(gpointer user_data)
     ns_js_budget_pop(s->js, &bg);
 }
 
+/* Dispatches an SSE event named by the event field (default message) with data and id. */
 static void
 ns_js_es_on_message(const char *event, const char *data, const char *last_id,
                     gpointer user_data)
@@ -20872,6 +21534,7 @@ ns_js_es_on_message(const char *event, const char *data, const char *last_id,
     ns_js_budget_pop(s->js, &bg);
 }
 
+/* Fires error; fatal errors set CLOSED and drop the self-pin, others reset to CONNECTING. */
 static void
 ns_js_es_on_error(gboolean fatal, gpointer user_data)
 {
@@ -20889,6 +21552,7 @@ ns_js_es_on_error(gboolean fatal, gpointer user_data)
     }
 }
 
+/* EventSource.close(): sets CLOSED, stops the stream and releases the self-pin. */
 static JSValue
 ns_js_es_close_method(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -20905,6 +21569,7 @@ ns_js_es_close_method(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* EventSource ctor: requires http(s), checks connect policy, starts the SSE stream. */
 static JSValue
 ns_window_eventsource_ctor(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -21028,6 +21693,7 @@ ns_worker_host_ref(ns_worker_host *host)
     return host;
 }
 
+/* Drops a host reference; frees contexts, strings and CSP on the last one. */
 static void
 ns_worker_host_unref(ns_worker_host *host)
 {
@@ -21045,6 +21711,7 @@ ns_worker_host_unref(ns_worker_host *host)
     g_free(host);
 }
 
+/* Runs on the worker thread: halts its JS and quits the worker main loop. */
 static gboolean
 ns_worker_quit_cb(gpointer data)
 {
@@ -21056,6 +21723,7 @@ ns_worker_quit_cb(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Schedules ns_worker_quit_cb on the worker's main context. */
 static void
 ns_worker_host_request_quit(ns_worker_host *host)
 {
@@ -21066,6 +21734,7 @@ ns_worker_host_request_quit(ns_worker_host *host)
                                (GDestroyNotify)ns_worker_host_unref);
 }
 
+/* Runs pending worker-context sources, bounded to 1024 iterations. */
 static void
 ns_worker_context_drain(ns_worker_host *host)
 {
@@ -21075,6 +21744,7 @@ ns_worker_context_drain(ns_worker_host *host)
         g_main_context_iteration(host->context, FALSE);
 }
 
+/* Marks the worker closing and asks it to quit; with join, joins the thread once. */
 static void
 ns_worker_host_stop(ns_worker_host *host, gboolean join)
 {
@@ -21106,6 +21776,7 @@ ns_worker_host_stop(ns_worker_host *host, gboolean join)
         g_thread_join(thread);
 }
 
+/* Frees a worker message and recursively its queued port follow-up messages. */
 static void
 ns_worker_message_free(ns_worker_message *msg)
 {
@@ -21132,6 +21803,7 @@ static ns_worker_message *ns_worker_message_new_full(JSContext *ctx,
                                                      JSValueConst value,
                                                      GPtrArray *transfer_ports);
 
+/* Returns a process-wide unique nonzero id for a cross-thread MessagePort bridge. */
 static guint64
 ns_port_bridge_alloc_id(void)
 {
@@ -21139,6 +21811,7 @@ ns_port_bridge_alloc_id(void)
     return (guint64)(guint)g_atomic_int_add(&counter, 1) + 1;
 }
 
+/* Returns the global __ns_port_bridge id-to-port map, creating it if needed. */
 static JSValue
 ns_port_bridge_registry(JSContext *ctx)
 {
@@ -21185,6 +21858,7 @@ ns_worker_transfer_is_port(JSContext *ctx, JSValueConst v)
     return is;
 }
 
+/* Bridges a transferred port: registers its pair, moves queued messages to followups. */
 static void
 ns_worker_transfer_port(JSContext *ctx, JSValueConst port, JSValueConst pair,
                         ns_worker_message *msg, JSValueConst bridge_worker)
@@ -21221,6 +21895,7 @@ ns_worker_transfer_port(JSContext *ctx, JSValueConst port, JSValueConst pair,
     msg->xfer_ids[msg->n_xfer++] = id;
 }
 
+/* Validates the postMessage transfer list; with detach, detaches buffers and bridges ports. */
 static gboolean
 ns_worker_walk_transfers(JSContext *ctx, int argc, JSValueConst *argv,
                          gboolean detach, gboolean *has_nontransferable,
@@ -21280,6 +21955,7 @@ ns_worker_message_new(JSContext *ctx, ns_worker_host *host, JSValueConst value)
     return ns_worker_message_new_full(ctx, host, value, NULL);
 }
 
+/* Serializes value (cloning transferred ports) into a message; NULL if too big or fails. */
 static ns_worker_message *
 ns_worker_message_new_full(JSContext *ctx, ns_worker_host *host,
                            JSValueConst value, GPtrArray *transfer_ports)
@@ -21319,6 +21995,7 @@ ns_worker_message_new_full(JSContext *ctx, ns_worker_host *host,
 static JSValue ns_port_bridge_receive(JSContext *ctx, guint64 id,
                                       JSValueConst worker_obj);
 
+/* Tests for a transferred-port marker object and returns its index in xfer_ids. */
 static gboolean
 ns_worker_port_marker_index(JSContext *ctx, JSValueConst value,
                             const ns_worker_message *msg, guint *out_index)
@@ -21333,6 +22010,7 @@ ns_worker_port_marker_index(JSContext *ctx, JSValueConst value,
     return found;
 }
 
+/* Recursively replaces transferred-port markers in a value with live bridged ports. */
 static void
 ns_worker_restore_message_ports_rec(JSContext *ctx, JSValueConst value,
                                     const ns_worker_message *msg,
@@ -21364,6 +22042,7 @@ ns_worker_restore_message_ports_rec(JSContext *ctx, JSValueConst value,
     JS_FreePropertyEnum(ctx, props, count);
 }
 
+/* Deserializes a worker message into a JS value, restoring transferred ports. */
 static JSValue
 ns_worker_message_value(JSContext *ctx, const ns_worker_message *msg,
                         JSValueConst worker_obj)
@@ -21384,6 +22063,7 @@ ns_worker_message_value(JSContext *ctx, const ns_worker_message *msg,
     return value;
 }
 
+/* Delivers data to a bridged port: dispatch now if started, else queue it. */
 static void
 ns_port_bridge_deliver(JSContext *ctx, guint64 id, JSValueConst data)
 {
@@ -21417,6 +22097,7 @@ ns_port_bridge_deliver(JSContext *ctx, guint64 id, JSValueConst data)
     JS_FreeValue(ctx, port);
 }
 
+/* Returns the local port for a bridge id, creating and registering one if absent. */
 static JSValue
 ns_port_bridge_receive(JSContext *ctx, guint64 id, JSValueConst worker_obj)
 {
@@ -21431,6 +22112,7 @@ ns_port_bridge_receive(JSContext *ctx, guint64 id, JSValueConst worker_obj)
     return p;
 }
 
+/* Sets ev.ports to the bridged ports for the message's transferred ids. */
 static void
 ns_worker_event_attach_ports(JSContext *ctx, JSValueConst ev,
                              const ns_worker_message *msg,
@@ -21445,6 +22127,7 @@ ns_worker_event_attach_ports(JSContext *ctx, JSValueConst ev,
     JS_SetPropertyStr(ctx, ev, "ports", ports);
 }
 
+/* Builds a trusted MessageEvent/ErrorEvent-shaped object for worker delivery. */
 static JSValue
 ns_worker_event(JSContext *ctx, const char *type, JSValueConst data,
                 const char *origin, const char *message, const char *filename)
@@ -21474,6 +22157,7 @@ ns_worker_event(JSContext *ctx, const char *type, JSValueConst data,
     return ev;
 }
 
+/* Calls target.dispatchEvent(ev), swallowing any exception. */
 static void
 ns_worker_dispatch(JSContext *ctx, JSValueConst target, JSValueConst ev)
 {
@@ -21487,6 +22171,7 @@ ns_worker_dispatch(JSContext *ctx, JSValueConst target, JSValueConst ev)
     JS_FreeValue(ctx, dispatch);
 }
 
+/* Applies a service worker state change to the registration and fires statechange. */
 static void
 ns_sw_apply_state(JSContext *ctx, ns_worker_host *host, const char *state)
 {
@@ -21538,6 +22223,7 @@ ns_sw_apply_state(JSContext *ctx, ns_worker_host *host, const char *state)
     JS_FreeValue(ctx, reg);
 }
 
+/* Owner-thread delivery of a worker message, error or SW state change; frees msg. */
 static gboolean
 ns_worker_deliver_owner(gpointer data)
 {
@@ -21610,6 +22296,7 @@ ns_worker_deliver_owner(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Queues a message for delivery on the owner's main context; takes ownership. */
 static void
 ns_worker_post_owner_message(ns_worker_host *host, ns_worker_message *msg)
 {
@@ -21621,6 +22308,7 @@ ns_worker_post_owner_message(ns_worker_host *host, ns_worker_message *msg)
                                ns_worker_deliver_owner, msg, NULL);
 }
 
+/* Posts an error event with message and filename to the worker's owner. */
 static void
 ns_worker_post_owner_error(ns_worker_host *host, const char *message,
                            const char *filename)
@@ -21633,6 +22321,7 @@ ns_worker_post_owner_error(ns_worker_host *host, const char *message,
     ns_worker_post_owner_message(host, msg);
 }
 
+/* Posts a service worker state change to the owner thread. */
 static void
 ns_sw_post_owner_state(ns_worker_host *host, const char *state)
 {
@@ -21643,6 +22332,7 @@ ns_sw_post_owner_state(ns_worker_host *host, const char *state)
     ns_worker_post_owner_message(host, msg);
 }
 
+/* Owner-thread delivery of a worker console line to the page log callback. */
 static gboolean
 ns_worker_log_deliver(gpointer data)
 {
@@ -21656,6 +22346,7 @@ ns_worker_log_deliver(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Worker log callback: forwards a copy of the line to the owner's main context. */
 static void
 ns_worker_log_cb(const char *line, gpointer user_data)
 {
@@ -21668,6 +22359,7 @@ ns_worker_log_cb(const char *line, gpointer user_data)
                                ns_worker_log_deliver, d, NULL);
 }
 
+/* Checks scheme, fetch policy and same-origin rules for a worker script URL. */
 static gboolean
 ns_worker_script_url_allowed(ns_worker_host *host, const char *url,
                              gboolean allow_cross_origin, char **out_error)
@@ -21708,6 +22400,7 @@ ns_worker_script_url_allowed(ns_worker_host *host, const char *url,
     return ns_url_is_http_or_https(url) || g_str_has_prefix(url, "file:");
 }
 
+/* Blocking fetch of a worker or importScripts script with CSP; returns new body or NULL. */
 static char *
 ns_worker_fetch_script(ns_worker_host *host, const char *url,
                        gboolean allow_cross_origin,
@@ -21768,6 +22461,7 @@ ns_worker_fetch_script(ns_worker_host *host, const char *url,
     return body;
 }
 
+/* Evaluates a classic or module worker script, logging failures; drains microtasks. */
 static gboolean
 ns_worker_eval_script(ns_js *js, const char *src, gsize len,
                       const char *url, char **out_error)
@@ -21818,6 +22512,7 @@ ns_worker_eval_script(ns_js *js, const char *src, gsize len,
     return ok;
 }
 
+/* Worker-thread delivery of a message to a bridged port or the global scope. */
 static gboolean
 ns_worker_deliver_worker(gpointer data)
 {
@@ -21863,6 +22558,7 @@ ns_worker_deliver_worker(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Posts a message and its port follow-ups to the owner or the worker thread. */
 static void
 ns_worker_msg_send(ns_worker_host *host, ns_worker_message *msg,
                    gboolean to_owner)
@@ -21887,6 +22583,7 @@ ns_worker_msg_send(ns_worker_host *host, ns_worker_message *msg,
     }
 }
 
+/* Sends data across a bridged MessagePort to the other thread. */
 static JSValue
 ns_port_bridge_send(JSContext *ctx, JSValueConst port, guint64 id,
                     JSValueConst data)
@@ -21912,6 +22609,7 @@ ns_port_bridge_send(JSContext *ctx, JSValueConst port, guint64 id,
     return JS_UNDEFINED;
 }
 
+/* Worker.postMessage(): validates the transfer list, clones and posts to the worker. */
 static JSValue
 ns_worker_post_message(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -21950,6 +22648,7 @@ ns_worker_terminate(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Worker-scope postMessage(): validates the transfer list, clones and posts to the owner. */
 static JSValue
 ns_worker_global_post_message(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -21991,6 +22690,7 @@ ns_worker_global_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* importScripts(): fetches each URL under CSP and evaluates it synchronously in order. */
 static JSValue
 ns_worker_import_scripts(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -22052,6 +22752,7 @@ ns_worker_import_scripts(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Worker performance.now(): ms since the worker's time origin, coarsened. */
 static JSValue
 ns_worker_performance_now(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -22063,6 +22764,7 @@ ns_worker_performance_now(JSContext *ctx, JSValueConst this_val,
     return JS_NewFloat64(ctx, ms);
 }
 
+/* Joins prefix and stringified args with spaces and sends the line to the log callback. */
 static void
 ns_worker_console_emit(JSContext *ctx, const char *prefix,
                        int argc, JSValueConst *argv)
@@ -22109,6 +22811,7 @@ ns_worker_console_error(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* console.assert(): logs the remaining args only when the first is falsy. */
 static JSValue
 ns_worker_console_assert(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -22119,6 +22822,7 @@ ns_worker_console_assert(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Logs unhandled promise rejections in a worker to its console. */
 static void
 ns_worker_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
                                     JSValueConst reason, ns_js_bool is_handled,
@@ -22140,6 +22844,7 @@ static const ns_fn_def ns_console_noop_methods[] = {
     { "timeStamp", 0 }, { "context", 0 }, { "clear", 0 },
 };
 
+/* Installs a worker console that forwards log/warn/error/assert and stubs the rest. */
 static void
 ns_worker_install_console(JSContext *ctx, JSValueConst global)
 {
@@ -22160,6 +22865,7 @@ ns_worker_install_console(JSContext *ctx, JSValueConst global)
     ns_install_namespace_object(ctx, global, "console", console, "console");
 }
 
+/* Installs a WorkerLocation-like object built from the script URL's parts. */
 static void
 ns_worker_install_location(JSContext *ctx, JSValueConst global, const char *url)
 {
@@ -22200,6 +22906,7 @@ ns_sw_saved_free(gpointer data)
     g_free(saved);
 }
 
+/* Per-origin SW registration INI path under the data dir; NULL in private mode. */
 static char *
 ns_sw_registration_path(const char *origin)
 {
@@ -22217,6 +22924,7 @@ ns_sw_registration_path(const char *origin)
     return g_build_filename(dir, file, NULL);
 }
 
+/* INI group name for a scope: "registration-" plus the scope's SHA-256; caller frees. */
 static char *
 ns_sw_registration_group(const char *scope)
 {
@@ -22225,6 +22933,7 @@ ns_sw_registration_group(const char *scope)
     return g_strconcat("registration-", hash, NULL);
 }
 
+/* Saves the SW script and scope to the origin's registration file. */
 static void
 ns_sw_persist_registration(ns_worker_host *host)
 {
@@ -22241,6 +22950,7 @@ ns_sw_persist_registration(ns_worker_host *host)
     g_key_file_free(kf);
 }
 
+/* Removes a persisted scope; deletes the file when no registrations remain. */
 static gboolean
 ns_sw_remove_persisted(const char *origin, const char *scope)
 {
@@ -22271,6 +22981,7 @@ ns_sw_remove_persisted(const char *origin, const char *scope)
     return removed;
 }
 
+/* Loads same-origin persisted SW registrations for origin; always returns an array. */
 static GPtrArray *
 ns_sw_load_persisted(const char *origin)
 {
@@ -22305,6 +23016,7 @@ ns_sw_load_persisted(const char *origin)
     return saved;
 }
 
+/* Returns the active, client-controlling SW with the longest scope prefix of abs_url. */
 static ns_worker_host *
 ns_sw_controller_for(ns_js *js, const char *abs_url)
 {
@@ -22339,6 +23051,7 @@ typedef struct {
     char   *error;
 } ns_sw_fres;
 
+/* Owner side of an SW fetch: delivers the response, the error, or falls back to network. */
 static gboolean
 ns_sw_fetch_result_on_owner(gpointer data)
 {
@@ -22395,6 +23108,7 @@ ns_sw_fetch_result_on_owner(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* __nd_sw_fetch_result(id, outcome, ...): packs the SW response and posts it to the owner. */
 static JSValue
 ns_sw_fetch_result(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -22480,6 +23194,7 @@ ns_sw_freq_free(ns_sw_freq *r)
     g_free(r);
 }
 
+/* Tells the owner an SW fetch went unhandled so it falls back to the network. */
 static void
 ns_sw_report_unhandled(ns_worker_host *host, guint id)
 {
@@ -22491,6 +23206,7 @@ ns_sw_report_unhandled(ns_worker_host *host, guint id)
                                ns_sw_fetch_result_on_owner, res, NULL);
 }
 
+/* Worker side: calls __nd_sw_dispatch_fetch; reports unhandled if it can't dispatch. */
 static gboolean
 ns_sw_dispatch_fetch_on_worker(gpointer data)
 {
@@ -22543,6 +23259,7 @@ ns_sw_dispatch_fetch_on_worker(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Copies a fetch request and queues it for FetchEvent dispatch on the SW thread. */
 static void
 ns_sw_post_fetch_request(ns_worker_host *host, guint id,
                          const char *url, const char *method,
@@ -22565,6 +23282,7 @@ ns_sw_post_fetch_request(ns_worker_host *host, guint id,
                                ns_sw_dispatch_fetch_on_worker, r, NULL);
 }
 
+/* clients.claim(): flags the SW to control clients once activated. */
 static JSValue
 ns_sw_clients_claim(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -22576,6 +23294,7 @@ ns_sw_clients_claim(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, JS_UNDEFINED);
 }
 
+/* Builds global -> <scope>GlobalScope -> WorkerGlobalScope -> EventTarget prototypes. */
 static void
 ns_worker_install_scope_chain(JSContext *ctx, JSValueConst global,
                               const char *scope_name)
@@ -22595,6 +23314,7 @@ ns_worker_install_scope_chain(JSContext *ctx, JSValueConst global,
     JS_FreeValue(ctx, target);
 }
 
+/* Installs SW globals: registration, clients, extendable events and fetch dispatch shim. */
 static void
 ns_sw_install_scope(JSContext *ctx, JSValueConst global, ns_worker_host *host)
 {
@@ -22673,6 +23393,7 @@ ns_sw_install_scope(JSContext *ctx, JSValueConst global, ns_worker_host *host)
     JS_FreeValue(ctx, fd_ret);
 }
 
+/* Builds a trusted ExtendableEvent with a no-op waitUntil(). */
 static JSValue
 ns_sw_make_extendable_event(JSContext *ctx, const char *type)
 {
@@ -22703,6 +23424,7 @@ ns_sw_make_extendable_event(JSContext *ctx, const char *type)
     return ev;
 }
 
+/* Fires install then activate in the SW, posting installed/activating/activated states. */
 static void
 ns_sw_fire_lifecycle(ns_js *js)
 {
@@ -22730,6 +23452,7 @@ ns_sw_fire_lifecycle(ns_js *js)
 static JSValue ns_illegal_constructor(JSContext *ctx, JSValueConst this_val,
                                       int argc, JSValueConst *argv);
 
+/* Frees an ns_js whose runtime never started, releasing only its containers. */
 static void
 ns_js_free_unstarted(ns_js *js)
 {
@@ -22745,6 +23468,7 @@ ns_js_free_unstarted(ns_js *js)
     g_free(js);
 }
 
+/* Creates a worker runtime and global scope inheriting the creator's CSP and origin. */
 static ns_js *
 ns_worker_js_new(ns_worker_host *host)
 {
@@ -22930,6 +23654,7 @@ ns_worker_js_new(ns_worker_host *host)
 
 static gpointer ns_worker_thread(gpointer data);
 
+/* Starts the worker thread, using pthreads with a larger stack where available. */
 static void
 ns_worker_spawn(ns_worker_host *host, const char *name)
 {
@@ -22949,6 +23674,7 @@ ns_worker_spawn(ns_worker_host *host, const char *name)
     host->thread = g_thread_new(name, ns_worker_thread, ns_worker_host_ref(host));
 }
 
+/* Worker thread body: loads and runs the script, SW lifecycle, then the event loop. */
 static gpointer
 ns_worker_thread(gpointer data)
 {
@@ -23027,6 +23753,7 @@ ns_worker_thread(gpointer data)
     return NULL;
 }
 
+/* Returns options[name] as a new string when it is a string, else NULL. */
 static char *
 ns_worker_option_string(JSContext *ctx, JSValueConst options, const char *name)
 {
@@ -23044,6 +23771,7 @@ ns_worker_option_string(JSContext *ctx, JSValueConst options, const char *name)
     return out;
 }
 
+/* Worker ctor: resolves URL or blob, checks policy, creates the host and spawns it. */
 static JSValue
 ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -23161,6 +23889,7 @@ ns_worker_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return obj;
 }
 
+/* Registers the Worker class and installs the constructor and its prototype methods. */
 static void
 ns_worker_install_constructor(JSContext *ctx, JSValueConst global)
 {
@@ -23176,6 +23905,7 @@ ns_worker_install_constructor(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, global, "Worker", ctor);
 }
 
+/* Returns a promise rejected with an Error of the given name and message. */
 static JSValue
 ns_sw_reject(JSContext *ctx, const char *name, const char *msg)
 {
@@ -23194,6 +23924,7 @@ ns_sw_reject(JSContext *ctx, const char *name, const char *msg)
     return promise;
 }
 
+/* Default SW scope: the script URL up to and including its last slash; caller frees. */
 static char *
 ns_sw_default_scope(const char *abs_url)
 {
@@ -23203,6 +23934,7 @@ ns_sw_default_scope(const char *abs_url)
     return g_strndup(abs_url, (gsize)(slash - abs_url) + 1);
 }
 
+/* Finds the container registration with an exactly matching scope; new ref or undefined. */
 static JSValue
 ns_sw_registration_for_scope(JSContext *ctx, JSValueConst container,
                              const char *scope)
@@ -23229,6 +23961,7 @@ ns_sw_registration_for_scope(JSContext *ctx, JSValueConst container,
     return found;
 }
 
+/* Detaches a host from its dead owner and stops and joins its thread. */
 static void
 ns_worker_host_orphan(ns_worker_host *host)
 {
@@ -23240,6 +23973,7 @@ ns_worker_host_orphan(ns_worker_host *host)
     ns_worker_host_stop(host, TRUE);
 }
 
+/* Clears the owner wrapper's opaque pointer and drops the host's reference to it. */
 static void
 ns_worker_host_release_owner_obj(JSContext *ctx, ns_worker_host *host)
 {
@@ -23249,6 +23983,7 @@ ns_worker_host_release_owner_obj(JSContext *ctx, ns_worker_host *host)
     host->owner_obj = JS_UNDEFINED;
 }
 
+/* registration.unregister(): stops the same-origin SW, drops it and its persisted entry. */
 static JSValue
 ns_sw_unregister(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -23312,6 +24047,7 @@ ns_sw_unregister(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, JS_NewBool(ctx, removed));
 }
 
+/* Creates ServiceWorker and registration objects and spawns the SW thread. */
 static JSValue
 ns_sw_start_registration(JSContext *ctx, JSValueConst container, ns_js *js,
                          const char *abs_url, const char *scope,
@@ -23387,6 +24123,7 @@ ns_sw_start_registration(JSContext *ctx, JSValueConst container, ns_js *js,
     return reg;
 }
 
+/* Tears down prior SWs on navigation, resets the container, restores persisted ones. */
 static void
 ns_sw_prepare_document(ns_js *js)
 {
@@ -23448,6 +24185,7 @@ ns_js_realm_csp(ns_js *js, JSContext *ctx)
     return js->csp;
 }
 
+/* Whether CSP of the calling realm permits eval-like string compilation. */
 gboolean
 ns_js_eval_allowed(JSContext *ctx)
 {
@@ -23503,6 +24241,7 @@ ns_window_compile_handler(JSContext *ctx, JSValueConst this_val,
     return fn;
 }
 
+/* True for https URLs or http on a loopback host. */
 static gboolean
 ns_sw_url_is_secure(const char *url)
 {
@@ -23513,6 +24252,7 @@ ns_sw_url_is_secure(const char *url)
     return host && ns_url_host_is_loopback(host);
 }
 
+/* serviceWorker.register(): checks secure context, scope and policy; reuses same script. */
 static JSValue
 ns_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -23609,6 +24349,7 @@ ns_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return ret;
 }
 
+/* getRegistrations(): resolves with a copy of the registrations array. */
 static JSValue
 ns_sw_get_registrations(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -23626,6 +24367,7 @@ ns_sw_get_registrations(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, out);
 }
 
+/* getRegistration(): resolves with the longest-scope registration matching the client URL. */
 static JSValue
 ns_sw_get_registration(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -23663,6 +24405,7 @@ ns_sw_get_registration(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, found);
 }
 
+/* Installs navigator.serviceWorker with register/getRegistration and a ready promise. */
 static void
 ns_sw_install_container(JSContext *ctx, JSValueConst navigator)
 {
@@ -23711,6 +24454,7 @@ ns_mut_observer_targets_clear(ns_mut_observer *o)
     g_array_set_size(o->targets, 0);
 }
 
+/* Frees a MutationObserver's callback, targets and queued records. */
 static void
 ns_mut_observer_free(ns_js *js, ns_mut_observer *o)
 {
@@ -23724,6 +24468,7 @@ ns_mut_observer_free(ns_js *js, ns_mut_observer *o)
     g_free(o);
 }
 
+/* Unregisters the observer from the page list and frees it. */
 static void
 ns_mut_observer_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -23772,6 +24517,7 @@ ns_mut_record_free(gpointer p)
     g_free(r);
 }
 
+/* Clears every slot and MutationObserver reference to a node that is being freed. */
 static void
 ns_mut_scrub_node(ns_js *js, ns_node *n)
 {
@@ -23817,6 +24563,7 @@ ns_mut_scrub_node(ns_js *js, ns_node *n)
     }
 }
 
+/* Whether an observer registration covers node: itself, or a descendant with subtree. */
 static gboolean
 ns_mut_target_covers(const ns_mut_target *t, ns_node *node)
 {
@@ -23828,6 +24575,7 @@ ns_mut_target_covers(const ns_mut_target *t, ns_node *node)
     return FALSE;
 }
 
+/* Builds a MutationRecord object from queued record data. */
 static JSValue
 ns_mut_record_to_jsvalue(JSContext *ctx, const ns_mut_record_data *rd)
 {
@@ -23871,6 +24619,7 @@ ns_mut_record_to_jsvalue(JSContext *ctx, const ns_mut_record_data *rd)
     return r;
 }
 
+/* Microtask: delivers queued MutationRecords to observers, then fires pending slotchange. */
 static JSValue
 ns_mut_drain_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -23940,6 +24689,7 @@ ns_mut_drain_job(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* Enqueues the mutation-observer microtask once per checkpoint. */
 static void
 ns_mut_schedule_drain(ns_js *js)
 {
@@ -23948,6 +24698,7 @@ ns_mut_schedule_drain(ns_js *js)
     JS_EnqueueJob(js->ctx, ns_mut_drain_job, 0, NULL);
 }
 
+/* Queues a slot for a slotchange event (deduplicated) and schedules the drain. */
 static void
 ns_slot_signal(ns_js *js, ns_node *slot)
 {
@@ -23962,6 +24713,7 @@ ns_slot_signal(ns_js *js, ns_node *slot)
     ns_mut_schedule_drain(js);
 }
 
+/* Whether attribute name passes the registration's attributeFilter (case-insensitive). */
 static gboolean
 ns_mut_attribute_filter_matches(const ns_mut_target *t, const char *name)
 {
@@ -23974,6 +24726,7 @@ ns_mut_attribute_filter_matches(const ns_mut_target *t, const char *name)
     return FALSE;
 }
 
+/* Queues a single-node mutation record on each interested observer (first match only). */
 static void
 ns_mut_record_emit(ns_js *js, const char *type, ns_node *target,
                    ns_node *added, ns_node *removed,
@@ -24028,6 +24781,7 @@ ns_mut_record_emit(ns_js *js, const char *type, ns_node *target,
     if (js->mutation_observers->len > 0) ns_mut_schedule_drain(js);
 }
 
+/* Queues one childList record with multiple added/removed nodes per observer. */
 static void
 ns_mut_record_emit_child_list_arrays(ns_js *js, ns_node *target,
                                      GPtrArray *added_nodes,
@@ -24076,6 +24830,7 @@ ns_mut_record_emit_child_list_arrays(ns_js *js, ns_node *target,
     if (js->mutation_observers->len > 0) ns_mut_schedule_drain(js);
 }
 
+/* Bumps the DOM generation so cached query results go stale. */
 static void
 ns_qcache_invalidate(ns_js *js)
 {
@@ -24083,6 +24838,7 @@ ns_qcache_invalidate(ns_js *js)
     js->dom_gen++;
 }
 
+/* Looks up a cached query result for (root, kind, key) at the current DOM generation. */
 static JSValue
 ns_qcache_get(ns_js *js, const void *root, char kind, const char *key)
 {
@@ -24098,6 +24854,7 @@ ns_qcache_get(ns_js *js, const void *root, char kind, const char *key)
     return JS_UNDEFINED;
 }
 
+/* Stores a query result in the small round-robin cache; skips null/undefined values. */
 static void
 ns_qcache_put(ns_js *js, const void *root, char kind, const char *key, JSValue v)
 {
@@ -24127,6 +24884,7 @@ ns_qcache_put(ns_js *js, const void *root, char kind, const char *key, JSValue v
     js->qcache[slot].value = JS_DupValue(js->ctx, v);
 }
 
+/* Frees every query-cache entry and resets the ring position. */
 static void
 ns_qcache_clear(ns_js *js)
 {
@@ -24142,6 +24900,7 @@ ns_qcache_clear(ns_js *js)
     js->qcache_next = 0;
 }
 
+/* Finds the document owning parent, falling back to the current document's subtree. */
 static ns_node *
 ns_js_mutation_root(ns_js *js, ns_node *parent)
 {
@@ -24155,6 +24914,7 @@ ns_js_mutation_root(ns_js *js, ns_node *parent)
     return doc;
 }
 
+/* Updates id/class/tag indexes and form past-names maps for an inserted/removed subtree. */
 static void
 ns_js_index_child_change(ns_js *js, ns_node *parent,
                          ns_node *added, ns_node *removed)
@@ -24201,6 +24961,7 @@ ns_js_index_child_change(ns_js *js, ns_node *parent,
     }
 }
 
+/* Single-node child change: indexes, style invalidation, slots and MutationObservers. */
 static void
 ns_js_record_child_change(ns_js *js, ns_node *parent,
                           ns_node *added, ns_node *removed,
@@ -24214,6 +24975,7 @@ ns_js_record_child_change(ns_js *js, ns_node *parent,
                        previous_sibling, next_sibling, NULL, NULL, NULL);
 }
 
+/* Records the removal of all of a fragment's children as one childList mutation. */
 static void
 ns_js_record_fragment_emptied(ns_js *js, ns_node *fragment)
 {
@@ -24226,6 +24988,7 @@ ns_js_record_fragment_emptied(ns_js *js, ns_node *fragment)
     g_ptr_array_free(kids, FALSE);
 }
 
+/* Batch child change: indexes, restyle marking, slot reconcile and one childList record. */
 static void
 ns_js_record_child_change_arrays(ns_js *js, ns_node *parent,
                                  GPtrArray *added, GPtrArray *removed,
@@ -24302,6 +25065,7 @@ ns_js_record_child_change_arrays(ns_js *js, ns_node *parent,
                                          previous_sibling, next_sibling);
 }
 
+/* Attribute change bookkeeping: class index, form past names, restyle, slots, observers. */
 static void
 ns_js_record_attr_change_ns(ns_js *js, ns_node *target,
                             const char *name, const char *namespace_uri,
@@ -24356,6 +25120,7 @@ ns_js_record_attr_change(ns_js *js, ns_node *target,
     ns_js_record_attr_change_ns(js, target, name, NULL, old_value);
 }
 
+/* Records a text change; marks :empty restyle when emptiness flips. */
 static void
 ns_js_record_character_data(ns_js *js, ns_node *target, const char *old_value)
 {
@@ -24369,6 +25134,7 @@ ns_js_record_character_data(ns_js *js, ns_node *target, const char *old_value)
                        NULL, NULL, NULL, NULL, old_value);
 }
 
+/* Whether an element is an SVG resource container (defs, gradient, mask, filter, ...). */
 static gboolean
 svg_is_resource(const ns_node *n)
 {
@@ -24382,6 +25148,7 @@ svg_is_resource(const ns_node *n)
     return FALSE;
 }
 
+/* Returns the enclosing <svg> for repaint; sets shared if inside an SVG resource. */
 static const ns_node *
 attr_svg_painter(const ns_node *n, gboolean *shared)
 {
@@ -24405,6 +25172,7 @@ dir_base_of(const char *v)
     return DIR_NEUTRAL;
 }
 
+/* Base direction from the element's own dir or the nearest ancestor with dir. */
 static dir_base
 dir_shaping_base(const ns_node *n, const char *own)
 {
@@ -24417,6 +25185,7 @@ dir_shaping_base(const ns_node *n, const char *own)
     return DIR_NEUTRAL;
 }
 
+/* Whether a code point is in an RTL script range or is an RTL bidi control. */
 static gboolean
 dir_char_is_rtl(gunichar ch)
 {
@@ -24426,6 +25195,7 @@ dir_char_is_rtl(gunichar ch)
            ch == 0x202E || ch == 0x2067;
 }
 
+/* Scans descendant text (budgeted) for RTL characters; TRUE when budget runs out. */
 static gboolean
 dir_text_may_be_rtl(const ns_node *n, int *budget)
 {
@@ -24442,6 +25212,7 @@ dir_text_may_be_rtl(const ns_node *n, int *budget)
     return FALSE;
 }
 
+/* Whether a dir attribute change can alter layout rather than only restyle. */
 static gboolean
 dir_change_reaches_layout(ns_js *js, const ns_node *n, const char *old_value)
 {
@@ -24462,6 +25233,7 @@ dir_change_reaches_layout(ns_js *js, const ns_node *n, const char *old_value)
     return dir_text_may_be_rtl(n, &budget);
 }
 
+/* Whether an attribute change needs relayout, with fast paths for dir, href and class. */
 static gboolean
 attr_change_reaches_layout(ns_js *js, const ns_node *n, const char *name,
                            const char *old_value)
@@ -24490,6 +25262,7 @@ attr_change_reaches_layout(ns_js *js, const ns_node *n, const char *name,
            ns_layout_reads_label_attr(n, name);
 }
 
+/* Schedules repaint, restyle or scoped relayout after an attribute change. */
 static void
 ns_js_note_attr_style_change(ns_js *js, const ns_node *n, const char *name,
                              const char *old_value)
@@ -24519,6 +25292,7 @@ ns_js_note_attr_style_change(ns_js *js, const ns_node *n, const char *name,
     }
 }
 
+/* Internal hook: sets a host's adopted-stylesheet scope tokens and forces restyle. */
 static JSValue
 ns_window_nd_host_adopt(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -24543,6 +25317,7 @@ ns_window_nd_host_adopt(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Script-facing setAttribute: refuses internal names, then notifies style, observers, CE. */
 static void
 ns_js_set_attr_recorded_len(ns_js *js, ns_node *n, const char *name,
                             const char *value, gssize len)
@@ -24577,6 +25352,7 @@ ns_js_set_attr_recorded(ns_js *js, ns_node *n, const char *name, const char *val
     ns_js_set_attr_recorded_len(js, n, name, value, -1);
 }
 
+/* Script-facing namespaced attribute set with style, observer and CE notifications. */
 static void
 ns_js_set_attr_ns_recorded(ns_js *js, ns_node *n, const char *namespace_uri,
                            const char *prefix, const char *local_name,
@@ -24607,6 +25383,7 @@ ns_js_set_attr_ns_recorded(ns_js *js, ns_node *n, const char *namespace_uri,
     g_free(old_copy);
 }
 
+/* Script-facing removeAttribute: detaches Attr nodes and notifies style, observers, CE. */
 static void
 ns_js_remove_attr_recorded(ns_js *js, ns_node *n, const char *name)
 {
@@ -24626,6 +25403,7 @@ ns_js_remove_attr_recorded(ns_js *js, ns_node *n, const char *name)
     g_free(old_copy);
 }
 
+/* Script-facing removeAttributeNS with the same notifications; skips internal names. */
 static void
 ns_js_remove_attr_ns_recorded(ns_js *js, ns_node *n, const char *namespace_uri,
                               const char *local_name)
@@ -24648,6 +25426,7 @@ ns_js_remove_attr_ns_recorded(ns_js *js, ns_node *n, const char *namespace_uri,
     g_free(old_copy);
 }
 
+/* MutationObserver.observe(): applies option defaulting and validation, replaces old entry. */
 static JSValue
 ns_mut_observer_observe(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -24726,6 +25505,7 @@ ns_mut_observer_observe(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* MutationObserver.disconnect(): drops targets and records and releases the self-pin. */
 static JSValue
 ns_mut_observer_disconnect(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -24743,6 +25523,7 @@ ns_mut_observer_disconnect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* MutationObserver.takeRecords(): returns and clears the queued records. */
 static JSValue
 ns_mut_observer_takeRecords(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -24761,6 +25542,7 @@ ns_mut_observer_takeRecords(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* MutationObserver constructor; registers the observer with the page. */
 static JSValue
 ns_window_observer_ctor(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -24809,6 +25591,7 @@ ns_window_observer_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Builds a ResizeObserverEntry; outputs the size of the observed box kind. */
 static JSValue
 ns_resize_observer_build_entry(JSContext *ctx, JSValueConst target,
                                const char *observed_box,
@@ -24899,6 +25682,7 @@ typedef struct ns_io_observer {
 
 static JSClassID ns_io_observer_class_id;
 
+/* Holds or releases a self-reference keeping the observer alive while it has targets. */
 static void
 ns_io_observer_set_pin(JSContext *ctx, ns_io_observer *o, gboolean want)
 {
@@ -24923,6 +25707,7 @@ ns_io_observer_targets_clear(JSContext *ctx, ns_io_observer *o)
     g_array_set_size(o->targets, 0);
 }
 
+/* Frees an IntersectionObserver's callback, root, targets and thresholds. */
 static void
 ns_io_observer_free(ns_js *js, ns_io_observer *o)
 {
@@ -24938,6 +25723,7 @@ ns_io_observer_free(ns_js *js, ns_io_observer *o)
     g_free(o);
 }
 
+/* Unregisters the observer from the page list and frees it. */
 static void
 ns_io_observer_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -24968,6 +25754,7 @@ ns_io_threshold_compare(gconstpointer a, gconstpointer b)
     return (av > bv) - (av < bv);
 }
 
+/* Validates one threshold (finite, within [0,1]) and appends it; throws on error. */
 static gboolean
 ns_io_threshold_append(JSContext *ctx, GArray *thresholds, JSValueConst value)
 {
@@ -24985,6 +25772,7 @@ ns_io_threshold_append(JSContext *ctx, GArray *thresholds, JSValueConst value)
     return TRUE;
 }
 
+/* Parses the threshold option (number or iterable) into a sorted array; NULL on throw. */
 static GArray *
 ns_io_parse_thresholds(JSContext *ctx, JSValueConst options)
 {
@@ -25058,6 +25846,7 @@ ns_io_parse_thresholds(JSContext *ctx, JSValueConst options)
     return thresholds;
 }
 
+/* Index of the first threshold above ratio, for detecting threshold crossings. */
 static guint
 ns_io_threshold_index(const ns_io_observer *o, double ratio)
 {
@@ -25067,6 +25856,7 @@ ns_io_threshold_index(const ns_io_observer *o, double ratio)
     return o->thresholds->len;
 }
 
+/* Parses one rootMargin length (absolute units to px) or percentage. */
 static gboolean
 ns_io_parse_margin_token(const char *token, ns_io_margin *margin)
 {
@@ -25090,6 +25880,7 @@ ns_io_parse_margin_token(const char *token, ns_io_margin *margin)
     return TRUE;
 }
 
+/* Parses a 1-4 value rootMargin with CSS shorthand expansion and serializes it. */
 static gboolean
 ns_io_parse_root_margin(const char *str,
                         ns_io_margin *top, ns_io_margin *right,
@@ -25133,6 +25924,7 @@ ns_io_parse_root_margin(const char *str,
     return TRUE;
 }
 
+/* Whether a block-level box clips its content via a non-visible overflow value. */
 static gboolean
 ns_io_overflow_clips(const ns_box *box)
 {
@@ -25153,6 +25945,7 @@ ns_io_overflow_clips(const ns_box *box)
     return FALSE;
 }
 
+/* Clips a rect in place to the clip rect; TRUE if they touch (edge-adjacent counts). */
 static gboolean
 ns_io_intersect_rect(double clip_x, double clip_y,
                      double clip_w, double clip_h,
@@ -25174,6 +25967,7 @@ ns_io_intersect_rect(double clip_x, double clip_y,
     return intersects;
 }
 
+/* Root intersection rect: root element's padding/border box, or the scrolled viewport. */
 static void
 ns_io_root_rect(JSContext *ctx, ns_io_observer *o,
                 const struct ns_box *layout_root,
@@ -25212,6 +26006,7 @@ ns_io_root_rect(JSContext *ctx, ns_io_observer *o,
     (void)layout_root;
 }
 
+/* Computes target, margin-expanded root and clipped intersection rects plus ratio. */
 static gboolean
 ns_io_compute_entry(JSContext *ctx, ns_io_observer *o,
                     const struct ns_box *layout_root,
@@ -25282,6 +26077,7 @@ ns_io_make_rect(JSContext *ctx, double x, double y, double w, double h)
     return ns_make_dom_rect(ctx, x, y, w, h);
 }
 
+/* Builds an IntersectionObserverEntry object from computed rects. */
 static JSValue
 ns_io_make_entry(JSContext *ctx, JSValueConst target,
                  double tx, double ty, double tw, double th,
@@ -25305,6 +26101,7 @@ ns_io_make_entry(JSContext *ctx, JSValueConst target,
     return e;
 }
 
+/* Invokes the observer callback under a fresh eval budget, logging exceptions. */
 static void
 ns_io_call_cb(JSContext *ctx, ns_io_observer *o, JSValue entries)
 {
@@ -25337,6 +26134,7 @@ ns_io_call_cb(JSContext *ctx, ns_io_observer *o, JSValue entries)
     JS_FreeValue(ctx, ret);
 }
 
+/* Computes a target's entry in viewport coords; TRUE if state or threshold changed. */
 static gboolean
 ns_io_evaluate_one(JSContext *ctx, ns_io_observer *o,
                    guint idx, JSValue *out_entry)
@@ -25385,6 +26183,7 @@ ns_io_evaluate_one(JSContext *ctx, ns_io_observer *o,
     return changed;
 }
 
+/* Evaluates all observers and calls back with entries whose state changed. */
 static void
 ns_intersection_observers_tick(ns_js *js)
 {
@@ -25417,6 +26216,7 @@ ns_intersection_observers_tick(ns_js *js)
     js->observer_ticking = FALSE;
 }
 
+/* IntersectionObserver.observe(): adds a target once and schedules an initial tick. */
 static JSValue
 ns_intersection_observer_observe(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -25447,6 +26247,7 @@ ns_intersection_observer_observe(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* IntersectionObserver.unobserve(): drops the target; unpins when none remain. */
 static JSValue
 ns_intersection_observer_unobserve(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
@@ -25474,6 +26275,7 @@ ns_intersection_observer_unobserve(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* IntersectionObserver.disconnect(): drops all targets and releases the self-pin. */
 static JSValue
 ns_intersection_observer_disconnect(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -25486,6 +26288,7 @@ ns_intersection_observer_disconnect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* IntersectionObserver ctor: validates root, rootMargin and thresholds; registers it. */
 static JSValue
 ns_intersection_observer_ctor(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -25616,6 +26419,7 @@ ns_intersection_observer_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Adds or re-boxes a target in the observer's parallel arrays; tracks new observers. */
 static void
 ns_resize_observer_register(ns_js *js, JSContext *ctx, JSValueConst observer,
                             JSValueConst target, const char *box_name)
@@ -25678,6 +26482,7 @@ ns_resize_observer_register(ns_js *js, JSContext *ctx, JSValueConst observer,
     JS_FreeValue(ctx, boxes);
 }
 
+/* ResizeObserver.observe(): validates the box option and schedules an observer tick. */
 static JSValue
 ns_resize_observer_observe(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -25724,6 +26529,7 @@ ns_resize_observer_observe(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Calls each ResizeObserver with entries whose observed size changed since last tick. */
 static void
 ns_resize_observers_tick(ns_js *js)
 {
@@ -25796,6 +26602,7 @@ ns_resize_observers_tick(ns_js *js)
     js->observer_ticking = FALSE;
 }
 
+/* Runs intersection and resize observer ticks once JS is idle; retries while busy. */
 static gboolean
 ns_observer_tick_timer(gpointer data)
 {
@@ -25811,6 +26618,7 @@ ns_observer_tick_timer(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Arms a 4 ms observer tick on page contexts (never in workers) if not pending. */
 static void
 ns_observer_schedule_tick(ns_js *js)
 {
@@ -25818,6 +26626,7 @@ ns_observer_schedule_tick(ns_js *js)
     js->observer_tick_source = ns_engine_timeout_add(4, ns_observer_tick_timer, js);
 }
 
+/* ResizeObserver.unobserve(): rebuilds the target arrays without the given element. */
 static JSValue
 ns_resize_observer_unobserve(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -25874,6 +26683,7 @@ ns_resize_observer_unobserve(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* ResizeObserver.disconnect(): clears targets and drops the page's reference to it. */
 static JSValue
 ns_resize_observer_disconnect(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -25892,6 +26702,7 @@ ns_resize_observer_disconnect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* ResizeObserver constructor; stores the callback and binds methods. */
 static JSValue
 ns_resize_observer_ctor(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -25927,6 +26738,7 @@ ns_resize_observer_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* requestIdleCallback(): schedules an idle timer, honoring the timeout option. */
 static JSValue
 ns_window_request_idle_callback(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -25962,6 +26774,7 @@ ns_window_request_idle_callback(JSContext *ctx, JSValueConst this_val,
 static gboolean ns_js_run_animation_frame_internal(ns_js *js);
 static void ns_js_flush_autofocus(ns_js *js);
 
+/* Fallback 16 ms rAF driver when the host is not driving frames; waits while busy. */
 static gboolean
 ns_raf_tick_timer(gpointer data)
 {
@@ -25988,6 +26801,7 @@ ns_raf_tick_timer(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Arms the fallback rAF timer unless in a worker or host-driven. */
 static void
 ns_raf_schedule_tick(ns_js *js)
 {
@@ -25996,6 +26810,7 @@ ns_raf_schedule_tick(ns_js *js)
     js->raf_tick_source = ns_engine_timeout_add(16, ns_raf_tick_timer, js);
 }
 
+/* Queues a rAF or video-frame callback; returns its id (offset by 0x40000000). */
 static JSValue
 ns_raf_request(JSContext *ctx, int argc, JSValueConst *argv,
                gboolean video_frame)
@@ -26025,6 +26840,7 @@ ns_window_requestAnimationFrame(JSContext *ctx, JSValueConst this_val,
     return ns_raf_request(ctx, argc, argv, FALSE);
 }
 
+/* cancelAnimationFrame(): removes the pending callback with the given id. */
 static JSValue
 ns_window_cancelAnimationFrame(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -26046,6 +26862,7 @@ ns_window_cancelAnimationFrame(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* preventDefault(): sets defaultPrevented if cancelable; ignored in passive listeners. */
 static JSValue
 ns_event_prevent_default(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26121,6 +26938,7 @@ ns_event_get_return_value(JSContext *ctx, JSValueConst this_val,
     return prevented ? JS_FALSE : JS_TRUE;
 }
 
+/* Legacy returnValue=false: marks default prevented unless the listener is passive. */
 static JSValue
 ns_event_set_return_value(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -26156,6 +26974,7 @@ ns_event_get_src_element(JSContext *ctx, JSValueConst this_val,
     return t;
 }
 
+/* Returns a cached per-realm C function stored on the global under key. */
 static JSValue
 ns_event_shared_accessor(JSContext *ctx, const char *key, JSCFunction *fn,
                          const char *name, int len)
@@ -26172,6 +26991,7 @@ ns_event_shared_accessor(JSContext *ctx, const char *key, JSCFunction *fn,
     return cached;
 }
 
+/* Defines a getter/setter on an event using shared per-realm accessor functions. */
 static void
 ns_event_define_accessor(JSContext *ctx, JSValueConst ev, const char *prop,
                          JSCFunction *get_fn, JSCFunction *set_fn)
@@ -26196,6 +27016,7 @@ ns_event_define_accessor(JSContext *ctx, JSValueConst ev, const char *prop,
 static const ns_node *ns_event_retarget_node(const ns_node *target,
                                              const ns_node *current);
 
+/* ToggleEvent/CommandEvent source getter, retargeted against currentTarget. */
 static JSValue
 ns_event_get_source(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv)
@@ -26215,6 +27036,7 @@ ns_event_get_source(JSContext *ctx, JSValueConst this_val, int argc,
     return ns_make_element(ctx, visible);
 }
 
+/* Stores the source element and defines its retargeting accessor. */
 static void
 ns_event_define_source(JSContext *ctx, JSValueConst ev, JSValue source)
 {
@@ -26223,6 +27045,7 @@ ns_event_define_source(JSContext *ctx, JSValueConst ev, JSValue source)
     ns_event_define_accessor(ctx, ev, "source", ns_event_get_source, NULL);
 }
 
+/* Maps an event type to its DOM interface name, defaulting to Event. */
 static const char *
 ns_event_interface_for_type(const char *type)
 {
@@ -26279,6 +27102,7 @@ ns_event_interface_for_type(const char *type)
     return "Event";
 }
 
+/* Returns the prototype of the interface matching the event's type (Event fallback). */
 static JSValue
 ns_event_interface_proto(JSContext *ctx, JSValueConst global,
                          JSValueConst ev)
@@ -26299,6 +27123,7 @@ ns_event_interface_proto(JSContext *ctx, JSValueConst global,
     return proto;
 }
 
+/* Defines cancelBubble, returnValue and srcElement accessors. */
 static void
 ns_event_define_legacy_accessors(JSContext *ctx, JSValueConst target)
 {
@@ -26312,6 +27137,7 @@ ns_event_define_legacy_accessors(JSContext *ctx, JSValueConst target)
                              ns_event_get_src_element, NULL);
 }
 
+/* Gives plain event objects the matching interface prototype and standard accessors. */
 static void
 ns_event_define_cancel_bubble(JSContext *ctx, JSValueConst ev)
 {
@@ -26337,6 +27163,7 @@ ns_event_define_cancel_bubble(JSContext *ctx, JSValueConst ev)
     ns_event_define_legacy_accessors(ctx, ev);
 }
 
+/* Whether a UA-dispatched event of this type crosses shadow boundaries. */
 static gboolean
 ns_event_type_is_composed(const char *type)
 {
@@ -26354,6 +27181,7 @@ ns_event_type_is_composed(const char *type)
     return FALSE;
 }
 
+/* Builds a trusted, bubbling, cancelable UA event targeted at a node. */
 static JSValue
 ns_make_event(JSContext *ctx, const char *type, const ns_node *target)
 {
@@ -26376,6 +27204,7 @@ ns_make_event(JSContext *ctx, const char *type, const ns_node *target)
     return event;
 }
 
+/* Event constructor: applies EventInit and ErrorEvent fields when called as ErrorEvent. */
 static JSValue
 ns_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26447,6 +27276,7 @@ ns_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return ev;
 }
 
+/* UIEvent ctor: adds view (Window or null) and detail. */
 static JSValue
 ns_ui_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26469,6 +27299,7 @@ ns_ui_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return ev;
 }
 
+/* CustomEvent ctor: adds detail, defaulting to null. */
 static JSValue
 ns_custom_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26483,6 +27314,7 @@ ns_custom_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
     return ev;
 }
 
+/* Shared Animation/TransitionEvent ctor: name, finite elapsedTime, pseudoElement. */
 static JSValue
 ns_timed_event_ctor(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv, const char *name_key)
@@ -26549,6 +27381,7 @@ ns_transition_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ns_timed_event_ctor(ctx, this_val, argc, argv, "propertyName");
 }
 
+/* SubmitEvent ctor: adds submitter, defaulting to null. */
 static JSValue
 ns_submit_event_ctor(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -26567,6 +27400,7 @@ ns_submit_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* Defines ev[member] from the init dict as a string, defaulting to "". */
 static int
 ns_event_init_string(JSContext *ctx, JSValueConst ev, int argc,
                      JSValueConst *argv, const char *member)
@@ -26582,6 +27416,7 @@ ns_event_init_string(JSContext *ctx, JSValueConst ev, int argc,
     return 0;
 }
 
+/* Defines the source member from the init dict; throws unless Element or null. */
 static int
 ns_event_init_source(JSContext *ctx, JSValueConst ev, int argc,
                      JSValueConst *argv, const char *member)
@@ -26605,6 +27440,7 @@ ns_event_init_source(JSContext *ctx, JSValueConst ev, int argc,
     return 0;
 }
 
+/* ToggleEvent ctor: newState, oldState and source. */
 static JSValue
 ns_toggle_event_ctor(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -26620,6 +27456,7 @@ ns_toggle_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* CommandEvent ctor: command and source. */
 static JSValue
 ns_command_event_ctor(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -26634,6 +27471,7 @@ ns_command_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* Converts an iterable of MessagePorts to a frozen array; throws on bad input. */
 static JSValue
 ns_message_event_ports(JSContext *ctx, JSValueConst input)
 {
@@ -26694,6 +27532,7 @@ ns_message_event_ports(JSContext *ctx, JSValueConst input)
     return frozen;
 }
 
+/* MessageEvent ctor: data, source, origin, lastEventId and frozen ports. */
 static JSValue
 ns_message_event_ctor(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -26750,6 +27589,7 @@ ns_message_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* initMessageEvent(): reinitializes fields unless the event is being dispatched. */
 static JSValue
 ns_message_event_init(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -26801,6 +27641,7 @@ ns_message_event_init(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Stringifies v, mapping undefined and null to null. */
 static JSValue
 ns_storage_event_nullable_string(JSContext *ctx, JSValueConst v)
 {
@@ -26808,6 +27649,7 @@ ns_storage_event_nullable_string(JSContext *ctx, JSValueConst v)
     return JS_ToString(ctx, v);
 }
 
+/* Legacy initStorageEvent(): sets type, flags and the storage fields positionally. */
 static JSValue
 ns_storage_event_init(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -26838,6 +27680,7 @@ ns_storage_event_init(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* StorageEvent ctor: key, oldValue, newValue, url and storageArea. */
 static JSValue
 ns_storage_event_ctor(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -26876,6 +27719,7 @@ ns_storage_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* getModifierState(): maps Control/Shift/Alt/Meta/OS to the modifier flag properties. */
 static JSValue
 ns_event_get_modifier_state(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -26897,6 +27741,7 @@ ns_event_get_modifier_state(JSContext *ctx, JSValueConst this_val,
     return state ? JS_TRUE : JS_FALSE;
 }
 
+/* Sets modifier key flags from the init dict and binds getModifierState(). */
 static void
 ns_event_apply_modifier_init(JSContext *ctx, JSValueConst ev, JSValueConst init)
 {
@@ -26914,6 +27759,7 @@ ns_event_apply_modifier_init(JSContext *ctx, JSValueConst ev, JSValueConst init)
     ns_bind_fn(ctx, ev, "getModifierState", ns_event_get_modifier_state, 1);
 }
 
+/* MouseEvent ctor: client coordinates mirrored to page/screen/offset, buttons, related. */
 static JSValue
 ns_mouse_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26951,6 +27797,7 @@ ns_mouse_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
     return ev;
 }
 
+/* WheelEvent ctor: adds deltaX/Y/Z and deltaMode. */
 static JSValue
 ns_wheel_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26971,6 +27818,7 @@ ns_wheel_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
     return ev;
 }
 
+/* TouchEvent ctor: touch lists (default empty arrays) and modifier keys. */
 static JSValue
 ns_touch_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -26988,6 +27836,7 @@ ns_touch_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
     return ev;
 }
 
+/* KeyboardEvent ctor: key, code, legacy keyCode/which/charCode, location and modifiers. */
 static JSValue
 ns_keyboard_event_ctor(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -27028,6 +27877,7 @@ ns_keyboard_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* FocusEvent ctor: adds relatedTarget, defaulting to null. */
 static JSValue
 ns_focus_event_ctor(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -27043,6 +27893,7 @@ ns_focus_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* CompositionEvent ctor: adds data as a string. */
 static JSValue
 ns_composition_event_ctor(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -27062,6 +27913,7 @@ ns_composition_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* InputEvent ctor: data, inputType, isComposing and dataTransfer. */
 static JSValue
 ns_input_event_ctor(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -27101,6 +27953,7 @@ ns_input_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* PointerEvent ctor: pointer geometry, pressure, tilt and type on top of MouseEvent. */
 static JSValue
 ns_pointer_event_ctor(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -27151,6 +28004,7 @@ ns_pointer_event_ctor(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* Sets child.prototype's [[Prototype]] to parent.prototype for two globals. */
 static void
 ns_event_link_proto(JSContext *ctx, JSValueConst global,
                     const char *child, const char *parent)
@@ -27169,6 +28023,7 @@ ns_event_link_proto(JSContext *ctx, JSValueConst global,
     JS_FreeValue(ctx, p);
 }
 
+/* Installs JS DataTransfer, DataTransferItem(List) and DragEvent implementations. */
 static void
 ns_install_drag_event_support(JSContext *ctx)
 {
@@ -27265,6 +28120,7 @@ ns_event_is_error_event(JSContext *ctx, JSValueConst event)
     return r;
 }
 
+/* Calls an event handler; window onerror gets the five-argument form and true cancels. */
 static JSValue
 ns_call_on_handler(ns_js *js, JSValue handler, JSValueConst this_obj,
                    const char *type, JSValue event, gboolean window_like,
@@ -27296,6 +28152,7 @@ ns_call_on_handler(ns_js *js, JSValue handler, JSValueConst this_obj,
     return r;
 }
 
+/* Whether element is body or frameset, whose on* handlers act as window handlers. */
 static gboolean
 ns_node_is_window_handler_holder(const ns_node *n)
 {
@@ -27303,6 +28160,7 @@ ns_node_is_window_handler_holder(const ns_node *n)
            ns_node_is_element_named(n, "frameset");
 }
 
+/* Compiles and runs an on<type> attribute in its realm under CSP; false return cancels. */
 static gboolean
 ns_fire_inline_on_handler(ns_js *js, const ns_node *target, const char *type,
                           JSValue event)
@@ -27371,6 +28229,7 @@ ns_fire_inline_on_handler(ns_js *js, const ns_node *target, const char *type,
     return TRUE;
 }
 
+/* Takes the pending exception and logs it as an on<type> handler error. */
 static void
 ns_js_log_handler_exception(ns_js *js, JSContext *ctx, const char *type)
 {
@@ -27385,6 +28244,7 @@ ns_js_log_handler_exception(ns_js *js, JSContext *ctx, const char *type)
     JS_FreeValue(ctx, ex);
 }
 
+/* Runs a script-assigned on<type> IDL handler (not attribute-sourced); false cancels. */
 static gboolean
 ns_fire_property_on_handler(ns_js *js, const ns_node *target, const char *type,
                             JSValue event)
@@ -27434,6 +28294,7 @@ ns_fire_property_on_handler(ns_js *js, const ns_node *target, const char *type,
     return fired;
 }
 
+/* Whether body/frameset on<type> handlers for this type reflect onto window. */
 static gboolean
 ns_event_type_is_window_reflected(const char *type)
 {
@@ -27448,6 +28309,7 @@ ns_event_type_is_window_reflected(const char *type)
     return FALSE;
 }
 
+/* Calls document.on<type> during dispatch; window-reflected types only at target. */
 static gboolean
 ns_fire_window_level_handlers(ns_js *js, const char *type, JSValue event,
                               gboolean at_target)
@@ -27478,6 +28340,7 @@ ns_fire_window_level_handlers(ns_js *js, const char *type, JSValue event,
     return fired;
 }
 
+/* Reads the event's internal stop-propagation flag, via cached atom when available. */
 static gboolean
 ns_event_propagation_is_stopped(ns_js *js, JSValue event)
 {
@@ -27489,6 +28352,7 @@ ns_event_propagation_is_stopped(ns_js *js, JSValue event)
     return stopped;
 }
 
+/* Whether a realm's global is a Window (it has an event property). */
 static gboolean
 ns_global_is_window(JSContext *ctx, JSValueConst global)
 {
@@ -27498,6 +28362,7 @@ ns_global_is_window(JSContext *ctx, JSValueConst global)
     return has > 0;
 }
 
+/* Sets window.event in the listener's realm for the call; skipped inside shadow trees. */
 static void
 ns_current_event_push(ns_js *js, JSValueConst fn, JSValueConst ev,
                       gboolean in_shadow, ns_current_event_guard *g)
@@ -27518,6 +28383,7 @@ ns_current_event_push(ns_js *js, JSValueConst fn, JSValueConst ev,
     g->set = TRUE;
 }
 
+/* Restores the previous window.event saved by ns_current_event_push. */
 static void
 ns_current_event_pop(ns_js *js, ns_current_event_guard *g)
 {
@@ -27527,6 +28393,7 @@ ns_current_event_pop(ns_js *js, ns_current_event_guard *g)
     g->set = FALSE;
 }
 
+/* Whether a node or any ancestor is a shadow host marker element. */
 static gboolean
 ns_node_in_shadow_tree(const ns_node *n)
 {
@@ -27537,6 +28404,7 @@ ns_node_in_shadow_tree(const ns_node *n)
     return FALSE;
 }
 
+/* DOM retargeting: lifts target out of shadow roots not containing current. */
 static const ns_node *
 ns_event_retarget_node(const ns_node *target, const ns_node *current)
 {
@@ -27550,6 +28418,7 @@ ns_event_retarget_node(const ns_node *target, const ns_node *current)
     return target;
 }
 
+/* Invokes a snapshot of listeners with once/passive/signal handling and error reporting. */
 static gboolean
 ns_run_listener_array_full(ns_js *js, GPtrArray *to_call,
                            JSValue current_target, const char *type,
@@ -27631,6 +28500,7 @@ ns_run_listener_array(ns_js *js, GPtrArray *to_call, JSValue current_target,
                                       event, FALSE, fired);
 }
 
+/* Whether a node has an unprefixed handler or listener, so webkit aliases are skipped. */
 static gboolean
 ns_node_has_own_unprefixed(ns_js *js, const ns_node *cur, const char *base)
 {
@@ -27653,6 +28523,7 @@ ns_node_has_own_unprefixed(ns_js *js, const ns_node *cur, const char *base)
     return FALSE;
 }
 
+/* Runs handlers and listeners at one path node with retargeting; TRUE if stopped. */
 static gboolean
 ns_invoke_listeners_at_full(ns_js *js, const ns_node *cur,
                             const ns_node *target, const char *type,
@@ -27738,6 +28609,7 @@ ns_invoke_listeners_at_full(ns_js *js, const ns_node *cur,
     return stopped;
 }
 
+/* Owning non-fragment document of target, else the current document. */
 static const ns_node *
 ns_event_document_for_target(ns_js *js, const ns_node *target)
 {
@@ -27747,6 +28619,7 @@ ns_event_document_for_target(ns_js *js, const ns_node *target)
     return js ? js->current_doc : NULL;
 }
 
+/* Returns the Window for a document: the frame's realm window or the main global. */
 static JSValue
 ns_event_window_for_document(ns_js *js, const ns_node *doc)
 {
@@ -27761,6 +28634,7 @@ ns_event_window_for_document(ns_js *js, const ns_node *doc)
     return JS_GetGlobalObject(js->ctx);
 }
 
+/* Calls window.on<type> and, for reflected types, the body's inline handler. */
 static gboolean
 ns_fire_window_property_handlers(ns_js *js, const ns_node *target,
                                  const char *type, JSValue event)
@@ -27811,6 +28685,7 @@ ns_invoke_window_listeners(ns_js *js, const ns_node *target, const char *type,
                                            capture_phase, FALSE, fired);
 }
 
+/* Runs window-level listeners for one phase with retargeted target and relatedTarget. */
 static gboolean
 ns_invoke_window_listeners_full(ns_js *js, const ns_node *target,
                                 const char *type, JSValue event,
@@ -27871,6 +28746,7 @@ ns_invoke_window_listeners_full(ns_js *js, const ns_node *target,
     return stopped;
 }
 
+/* Dispatches an event at window only (capture then bubble); consumes event. */
 static void
 ns_js_dispatch_window_only_event(ns_js *js, const ns_node *target_doc,
                                  const char *type, JSValue event,
@@ -27917,6 +28793,7 @@ static gboolean ns_js_dispatch_built_event_impl(ns_js *js,
                                                 JSValue event,
                                                 gboolean *default_prevented);
 
+/* Dispatches a prepared event with trace instrumentation; consumes event. */
 static gboolean
 ns_js_dispatch_built_event(ns_js *js, const ns_node *target, const char *type,
                            JSValue event, gboolean *default_prevented)
@@ -27933,6 +28810,7 @@ ns_js_dispatch_built_event(ns_js *js, const ns_node *target, const char *type,
     return r;
 }
 
+/* DOM dispatch: builds the composed path, runs capture/target/bubble, resets state. */
 static gboolean
 ns_js_dispatch_built_event_impl(ns_js *js, const ns_node *target,
                                 const char *type, JSValue event,
@@ -28118,6 +28996,7 @@ ns_js_dispatch_built_event_impl(ns_js *js, const ns_node *target,
 static gboolean ns_path_has_active_listener(ns_js *js, const ns_node *target,
                                             const char *type);
 
+/* Whether a non-passive listener for type exists on target's ancestors or window. */
 static gboolean
 ns_path_has_active_listener(ns_js *js, const ns_node *target, const char *type)
 {
@@ -28138,6 +29017,7 @@ ns_path_has_active_listener(ns_js *js, const ns_node *target, const char *type)
     return found;
 }
 
+/* Dispatches a wheel or legacy mousewheel event, cancelable only with active listeners. */
 static gboolean
 ns_js_dispatch_wheel_type(ns_js *js, const ns_node *target, const char *type,
                           double x, double y, double dx, double dy)
@@ -28165,6 +29045,7 @@ ns_js_dispatch_wheel_type(ns_js *js, const ns_node *target, const char *type,
     return ns_js_dispatch_built_event(js, target, type, event, NULL);
 }
 
+/* Fires wheel followed by legacy mousewheel at target. */
 static gboolean
 ns_js_dispatch_wheel_event(ns_js *js, const ns_node *target,
                            double x, double y, double dx, double dy)
@@ -28178,6 +29059,7 @@ ns_js_dispatch_wheel_event(ns_js *js, const ns_node *target,
     return fired;
 }
 
+/* Test-harness hook: synthesizes a wheel event; only when early injection is active. */
 static JSValue
 ns_wpt_wheel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -28196,6 +29078,7 @@ ns_wpt_wheel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return JS_UNDEFINED;
 }
 
+/* Dispatches a touch event with empty touch lists; touchstart/end grant activation. */
 static gboolean
 ns_js_dispatch_touch_type(ns_js *js, const ns_node *target, const char *type,
                           double x, double y)
@@ -28216,6 +29099,7 @@ ns_js_dispatch_touch_type(ns_js *js, const ns_node *target, const char *type,
     return ns_js_dispatch_built_event(js, target, type, event, NULL);
 }
 
+/* Test-harness hook: grants transient user activation. */
 static JSValue
 ns_wpt_activate(JSContext *ctx, JSValueConst this_val, int argc,
                 JSValueConst *argv)
@@ -28229,6 +29113,7 @@ ns_wpt_activate(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* Test-harness hook: synthesizes a touch event of the given type. */
 static JSValue
 ns_wpt_touch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -28249,6 +29134,7 @@ ns_wpt_touch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return JS_UNDEFINED;
 }
 
+/* Test-harness hook: synthesizes a mouse event; mousedown focuses unless prevented. */
 static JSValue
 ns_wpt_pointer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -28280,6 +29166,7 @@ ns_wpt_pointer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return JS_NewBool(ctx, prevented);
 }
 
+/* Legacy keyCode for a key name, or the uppercase char for single-char keys. */
 static int
 ns_wpt_key_code(const char *key)
 {
@@ -28296,6 +29183,7 @@ ns_wpt_key_code(const char *key)
     return 0;
 }
 
+/* Test-harness hook: synthesizes a key event plus Escape, Tab and activation defaults. */
 static JSValue
 ns_wpt_key(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -28342,6 +29230,7 @@ ns_js_set_style_table(ns_js *js, GHashTable *styles)
     js->style_table = styles;
 }
 
+/* Queues an element for a scrollend event at the next frame (deduplicated). */
 static void
 ns_js_queue_scrollend(ns_js *js, const ns_node *el)
 {
@@ -28353,6 +29242,7 @@ ns_js_queue_scrollend(ns_js *js, const ns_node *el)
     g_ptr_array_add(js->pending_scrollend, (gpointer)el);
 }
 
+/* Fires queued element scrollend events, then window and document ones if pending. */
 static void
 ns_js_flush_scrollend(ns_js *js)
 {
@@ -28393,6 +29283,7 @@ ns_js_flush_scrollend(ns_js *js)
     }
 }
 
+/* Frame timestamp in us: host frame time or now, clamped to be monotonic. */
 static gint64
 ns_js_animation_frame_time(ns_js *js)
 {
@@ -28412,6 +29303,7 @@ ns_js_run_animation_frame(ns_js *js)
 
 static gboolean ns_js_run_animation_frame_body(ns_js *js);
 
+/* Runs one animation frame with trace instrumentation; no-op while halted or pumping. */
 static gboolean
 ns_js_run_animation_frame_internal(ns_js *js)
 {
@@ -28425,6 +29317,7 @@ ns_js_run_animation_frame_internal(ns_js *js)
     return r;
 }
 
+/* Frame steps: scrollend, images, autofocus, iframes, then rAF callbacks in their realms. */
 static gboolean
 ns_js_run_animation_frame_body(ns_js *js)
 {
@@ -28528,6 +29421,7 @@ ns_js_has_pending_animation_frame(const ns_js *js)
     return js && js->raf_pending && js->raf_pending->len > 0;
 }
 
+/* Whether JS needs a frame: mutations, rAFs, scrollend or runnable iframe loads. */
 gboolean
 ns_js_wants_frame(const ns_js *js)
 {
@@ -28547,6 +29441,7 @@ ns_js_set_frame_time(ns_js *js, gint64 frame_time_us)
     if (js) js->frame_time_us = frame_time_us;
 }
 
+/* Whether any JS work is outstanding (tasks, timers, network, workers, observers). */
 gboolean
 ns_js_has_pending_work(const ns_js *js)
 {
@@ -28590,6 +29485,7 @@ ns_js_has_pending_work(const ns_js *js)
     return FALSE;
 }
 
+/* Appends JS heap usage and event-loop queue counts to out. */
 void
 ns_js_dump_stats(ns_js *js, GString *out)
 {
@@ -28632,6 +29528,7 @@ ns_js_dump_stats(ns_js *js, GString *out)
                            js->frame_ctxs ? js->frame_ctxs->len : 0);
 }
 
+/* Drops pending animation-frame callbacks registered by a frame. */
 static void
 ns_js_purge_frame_rafs(ns_js *js, const ns_node *frame)
 {
@@ -28645,6 +29542,7 @@ ns_js_purge_frame_rafs(ns_js *js, const ns_node *frame)
     if (js->raf_frame_ctx == frame) js->raf_frame_ctx = NULL;
 }
 
+/* Removes all timers belonging to a frame. */
 static void
 ns_js_purge_frame_timers(ns_js *js, const ns_node *frame)
 {
@@ -28658,6 +29556,7 @@ ns_js_purge_frame_timers(ns_js *js, const ns_node *frame)
     }
 }
 
+/* Returns the set of current global property names; caller destroys. */
 static GHashTable *
 ns_js_snapshot_globals(ns_js *js)
 {
@@ -28680,6 +29579,7 @@ ns_js_snapshot_globals(ns_js *js)
     return names;
 }
 
+/* Records globals an iframe added beyond the snapshot so they can be scrubbed later. */
 static void
 ns_js_record_iframe_globals(ns_js *js, ns_node *iframe, GHashTable *before)
 {
@@ -28717,6 +29617,7 @@ ns_js_record_iframe_globals(ns_js *js, ns_node *iframe, GHashTable *before)
     }
 }
 
+/* Deletes (or undefines) globals recorded for an iframe. */
 static void
 ns_js_scrub_iframe_globals(ns_js *js, const ns_node *iframe)
 {
@@ -28738,6 +29639,7 @@ ns_js_scrub_iframe_globals(ns_js *js, const ns_node *iframe)
     g_hash_table_remove(js->iframe_globals, (gpointer)iframe);
 }
 
+/* Purges rAFs, timers and leaked globals for every iframe in a removed subtree. */
 static void
 ns_js_purge_subtree_rafs(ns_js *js, ns_node *root)
 {
@@ -28751,6 +29653,7 @@ ns_js_purge_subtree_rafs(ns_js *js, ns_node *root)
         ns_js_purge_subtree_rafs(js, c);
 }
 
+/* Fires a UA event with per-type composed/bubbles/cancelable defaults. */
 gboolean
 ns_js_dispatch_event(ns_js *js, const ns_node *target, const char *type,
                      gboolean *default_prevented)
@@ -28787,6 +29690,7 @@ ns_js_dispatch_event(ns_js *js, const ns_node *target, const char *type,
     return ns_js_dispatch_built_event(js, target, type, event, default_prevented);
 }
 
+/* Delivers animation/transition events plus webkit-prefixed aliases, or internal hooks. */
 static void
 ns_js_anim_event_cb(const ns_node *node, const char *type,
                     const char *name, double elapsed_ms, gpointer user)
@@ -28849,6 +29753,7 @@ ns_js_anim_event_cb(const ns_node *node, const char *type,
     }
 }
 
+/* Drains queued animation events from anim and dispatches them. */
 void
 ns_js_dispatch_anim_events(ns_js *js, ns_anim *anim)
 {
@@ -28856,6 +29761,7 @@ ns_js_dispatch_anim_events(ns_js *js, ns_anim *anim)
     ns_anim_drain_events(anim, ns_js_anim_event_cb, js);
 }
 
+/* Fires a submit event at form with the given submitter. */
 gboolean
 ns_js_dispatch_submit_event(ns_js *js, const ns_node *form,
                             const ns_node *submitter,
@@ -28879,6 +29785,7 @@ ns_event_define_readonly(JSContext *ctx, JSValueConst ev, const char *name,
                               JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* Sets an event's prototype to the named interface's prototype. */
 static void
 ns_event_adopt_interface(JSContext *ctx, JSValueConst ev, const char *iface)
 {
@@ -28893,6 +29800,7 @@ ns_event_adopt_interface(JSContext *ctx, JSValueConst ev, const char *iface)
     JS_FreeValue(ctx, global);
 }
 
+/* Fires a non-bubbling ToggleEvent with oldState, newState and source. */
 static gboolean
 ns_js_fire_toggle_event(ns_js *js, const ns_node *target, const char *type,
                         const char *old_state, const char *new_state,
@@ -28927,6 +29835,7 @@ ns_js_dispatch_toggle_event(ns_js *js, const ns_node *target, const char *type,
                                    cancelable, NULL, default_prevented);
 }
 
+/* Fires a non-bubbling, non-cancelable resource event such as load or error. */
 static gboolean
 ns_js_dispatch_resource_event(ns_js *js, const ns_node *target, const char *type)
 {
@@ -28938,6 +29847,7 @@ ns_js_dispatch_resource_event(ns_js *js, const ns_node *target, const char *type
     return ns_js_dispatch_built_event(js, target, type, event, NULL);
 }
 
+/* Fires load or error on an image at most once. */
 static void
 ns_js_fire_img_load_once(ns_js *js, ns_node *node, gboolean failed)
 {
@@ -28948,6 +29858,7 @@ ns_js_fire_img_load_once(ns_js *js, ns_node *node, gboolean failed)
     ns_js_dispatch_event(js, node, failed ? "error" : "load", NULL);
 }
 
+/* Sets client/page coordinates, mirroring client to x/y, screen and offset. */
 static void
 ns_event_set_mouse_coords(JSContext *ctx, JSValueConst event, double client_x,
                           double client_y, double page_x, double page_y)
@@ -28964,6 +29875,7 @@ ns_event_set_mouse_coords(JSContext *ctx, JSValueConst event, double client_x,
                           JS_NewFloat64(ctx, coords[i].value));
 }
 
+/* Collects images whose load finished or failed but have not fired yet. */
 static void
 ns_js_walk_collect_media_events(const ns_box *b, GPtrArray *imgs,
                                 GArray *img_failed, GPtrArray *videos)
@@ -28989,6 +29901,7 @@ ns_js_walk_collect_media_events(const ns_box *b, GPtrArray *imgs,
                 imgs, img_failed, videos);
 }
 
+/* Fires pending image load/error events found in the layout tree. */
 void
 ns_js_fire_media_load_events(ns_js *js, const struct ns_box *layout)
 {
@@ -29012,6 +29925,7 @@ ns_js_fire_media_load_events(ns_js *js, const struct ns_box *layout)
     g_ptr_array_free(videos, TRUE);
 }
 
+/* Fires a composed keyboard event; keydown (except Escape) grants user activation. */
 gboolean
 ns_js_dispatch_key_event_full(ns_js *js, const ns_node *target, const char *type,
                               const char *key, const char *code, int key_code,
@@ -29051,6 +29965,7 @@ ns_js_dispatch_key_event(ns_js *js, const ns_node *target, const char *type,
                                          default_prevented);
 }
 
+/* Fires a mouse/pointer event with movement deltas, activation and light dismiss. */
 gboolean
 ns_js_dispatch_mouse_event(ns_js *js, const ns_node *target, const char *type,
                            double client_x, double client_y,
@@ -29117,6 +30032,7 @@ ns_js_dispatch_mouse_event(ns_js *js, const ns_node *target, const char *type,
                                       default_prevented);
 }
 
+/* Starts a drag session backed by a new JS DataTransfer; NULL if unavailable. */
 ns_js_drag_session *
 ns_js_drag_session_new(ns_js *js)
 {
@@ -29150,6 +30066,7 @@ ns_js_drag_session_free(ns_js_drag_session *session)
     g_free(session);
 }
 
+/* Calls setData(type, data) on the session's DataTransfer. */
 void
 ns_js_drag_session_set_data(ns_js_drag_session *session,
                             const char *type, const char *data)
@@ -29174,6 +30091,7 @@ ns_js_drag_session_set_data(ns_js_drag_session *session,
     JS_FreeValue(ctx, fn);
 }
 
+/* Reads a local file into a JS File with a sniffed MIME type; null on failure. */
 static JSValue
 ns_js_file_from_path(JSContext *ctx, const char *path)
 {
@@ -29217,6 +30135,7 @@ ns_js_file_from_path(JSContext *ctx, const char *path)
     return file;
 }
 
+/* Adds a local file to the drag session's DataTransfer items. */
 void
 ns_js_drag_session_add_file(ns_js_drag_session *session, const char *path)
 {
@@ -29241,6 +30160,7 @@ ns_js_drag_session_add_file(ns_js_drag_session *session, const char *path)
     JS_FreeValue(ctx, file);
 }
 
+/* Fires a drag event carrying the session's DataTransfer; only some types cancelable. */
 gboolean
 ns_js_dispatch_drag_event(ns_js *js, ns_js_drag_session *session,
                           const ns_node *target, const char *type,
@@ -29280,6 +30200,7 @@ ns_js_dispatch_drag_event(ns_js *js, ns_js_drag_session *session,
     return ns_js_dispatch_built_event(js, target, type, event, default_prevented);
 }
 
+/* Whether v is an instance of the realm's Attr interface. */
 static gboolean
 ns_value_is_attr_node(JSContext *ctx, JSValueConst v)
 {
@@ -29297,6 +30218,7 @@ ns_value_is_attr_node(JSContext *ctx, JSValueConst v)
     return is_attr;
 }
 
+/* Throws HierarchyRequestError for Attr arguments, else a TypeError. */
 static JSValue
 ns_throw_not_a_node(JSContext *ctx, JSValueConst v, const char *what)
 {
@@ -29306,6 +30228,7 @@ ns_throw_not_a_node(JSContext *ctx, JSValueConst v, const char *what)
     return JS_ThrowTypeError(ctx, "%s is not an object / Node", what);
 }
 
+/* appendChild(): validates, moves fragment children or the node, upgrades CEs, runs scripts. */
 static JSValue
 ns_element_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -29379,6 +30302,7 @@ ns_element_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return JS_DupValue(ctx, argv[0]);
 }
 
+/* removeChild(): detaches the child, orphans it and records the mutation. */
 static JSValue
 ns_element_removeChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -29407,6 +30331,7 @@ ns_element_removeChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return JS_DupValue(ctx, argv[0]);
 }
 
+/* Records removal of a node from its current parent before it is moved. */
 static void
 ns_js_record_move_removal(ns_js *js, ns_node *node)
 {
@@ -29415,6 +30340,7 @@ ns_js_record_move_removal(ns_js *js, ns_node *node)
                               node->prev_sibling, node->next_sibling);
 }
 
+/* Links newc before ref under parent, detaching it first; no mutation records. */
 static void
 ns_element_insert_before_single(ns_js *_j, ns_node *parent, ns_node *newc, ns_node *ref)
 {
@@ -29438,6 +30364,7 @@ ns_node_has_child_kind(const ns_node *p, ns_node_kind kind)
     return FALSE;
 }
 
+/* Whether a doctype appears after child among its following siblings. */
 static gboolean
 ns_node_doctype_follows(const ns_node *child)
 {
@@ -29446,6 +30373,7 @@ ns_node_doctype_follows(const ns_node *child)
     return FALSE;
 }
 
+/* Whether an element appears before child among its preceding siblings. */
 static gboolean
 ns_node_element_precedes(const ns_node *child)
 {
@@ -29454,6 +30382,7 @@ ns_node_element_precedes(const ns_node *child)
     return FALSE;
 }
 
+/* DOM "ensure pre-insertion validity"; throws HierarchyRequest/NotFound as needed. */
 static JSValue
 ns_pre_insert_validity(JSContext *ctx, ns_node *parent, ns_node *node,
                        ns_node *child, gboolean child_is_null)
@@ -29518,6 +30447,7 @@ static gboolean
 ns_node_has_child_kind_other(const ns_node *p, ns_node_kind kind,
                              const ns_node *except);
 
+/* moveBefore(): state-preserving move within the same tree, per its validity rules. */
 static JSValue
 ns_element_moveBefore(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -29580,6 +30510,7 @@ ns_element_moveBefore(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* insertBefore(): validates, inserts the node or fragment children, then activates them. */
 static JSValue
 ns_element_insertBefore(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -29671,6 +30602,7 @@ ns_node_has_child_kind_other(const ns_node *p, ns_node_kind kind,
     return FALSE;
 }
 
+/* DOM replace-child validity checks, ignoring the child being replaced. */
 static JSValue
 ns_pre_replace_validity(JSContext *ctx, ns_node *parent, ns_node *node,
                         ns_node *child)
@@ -29728,6 +30660,7 @@ ns_pre_replace_validity(JSContext *ctx, ns_node *parent, ns_node *node,
     return JS_UNDEFINED;
 }
 
+/* replaceChild(): swaps in the node or fragment children and records the mutations. */
 static JSValue
 ns_element_replaceChild(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -29823,6 +30756,7 @@ ns_element_replaceChild(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, argv[1]);
 }
 
+/* Links newc immediately before ref, detaching it first; no bookkeeping. */
 static void
 ns_insert_sibling_before(ns_node *ref, ns_node *newc)
 {
@@ -29838,6 +30772,7 @@ ns_insert_sibling_before(ns_node *ref, ns_node *newc)
     ref->prev_sibling = newc;
 }
 
+/* Links newc immediately after ref, detaching it first; no bookkeeping. */
 static void
 ns_insert_sibling_after(ns_node *ref, ns_node *newc)
 {
@@ -29853,6 +30788,7 @@ ns_insert_sibling_after(ns_node *ref, ns_node *newc)
     ref->next_sibling = newc;
 }
 
+/* insertAdjacentHTML(): parses in the right context and inserts at the given position. */
 static JSValue
 ns_element_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -29962,6 +30898,7 @@ ns_element_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Inserts a node at an insertAdjacent* position; FALSE if invalid or would cycle. */
 static gboolean
 ns_insert_adjacent_node(ns_node *self, const char *pos, ns_node *to_insert,
                         ns_node **out_parent)
@@ -30000,6 +30937,7 @@ ns_insert_adjacent_node(ns_node *self, const char *pos, ns_node *to_insert,
     return FALSE;
 }
 
+/* Validates an insertAdjacent* position and document constraints; -1 thrown, 0 no-op. */
 static int
 ns_insert_adjacent_check(JSContext *ctx, ns_node *self, const char *pos,
                          gboolean is_text, ns_node *to_insert)
@@ -30033,6 +30971,7 @@ ns_insert_adjacent_check(JSContext *ctx, ns_node *self, const char *pos,
     return 1;
 }
 
+/* insertAdjacentElement(): inserts and returns the element, or null if not inserted. */
 static JSValue
 ns_element_insertAdjacentElement(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -30061,6 +31000,7 @@ ns_element_insertAdjacentElement(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, child);
 }
 
+/* insertAdjacentText(): inserts a new text node at the given position. */
 static JSValue
 ns_element_insertAdjacentText(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -30091,6 +31031,7 @@ ns_element_insertAdjacentText(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Detaches a node (or a fragment's children) and appends it to the insertion sequence. */
 static void
 ns_convert_arg_node(ns_js *js, ns_node *node, GPtrArray *seq)
 {
@@ -30111,6 +31052,7 @@ ns_convert_arg_node(ns_js *js, ns_node *node, GPtrArray *seq)
     }
 }
 
+/* Converts ChildNode/ParentNode varargs to nodes, turning strings into text nodes. */
 static GPtrArray *
 ns_args_to_node_sequence(JSContext *ctx, ns_js *js, int argc,
                          JSValueConst *argv, const ns_node *parent,
@@ -30133,6 +31075,7 @@ ns_args_to_node_sequence(JSContext *ctx, ns_js *js, int argc,
     return seq;
 }
 
+/* ChildNode.before(): inserts the converted nodes before this node. */
 static JSValue
 ns_element_before(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -30159,6 +31102,7 @@ ns_element_before(JSContext *ctx, JSValueConst this_val,
 static gboolean ns_args_contain_node(JSValueConst *argv, int argc,
                                      const ns_node *n);
 
+/* ChildNode.after(): inserts before the first following sibling not among the args. */
 static JSValue
 ns_element_after(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -30199,6 +31143,7 @@ ns_args_contain_node(JSValueConst *argv, int argc, const ns_node *n)
     return FALSE;
 }
 
+/* ChildNode.replaceWith(): inserts the args in place of this node, then removes it. */
 static JSValue
 ns_element_replaceWith(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -30247,6 +31192,7 @@ ns_element_replaceWith(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Removes empty text nodes and merges adjacent ones recursively, recording mutations. */
 static void
 ns_node_normalize_walk(ns_js *js, ns_node *n, int depth)
 {
@@ -30282,6 +31228,7 @@ ns_node_normalize_walk(ns_js *js, ns_node *n, int depth)
     }
 }
 
+/* Node.normalize(): merges and prunes text nodes, then requests relayout. */
 static JSValue
 ns_element_normalize(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -30295,6 +31242,7 @@ ns_element_normalize(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* cloneNode(): documents get a new realm document wrapper; others are CE-upgraded. */
 static JSValue
 ns_element_cloneNode(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -30342,6 +31290,7 @@ ns_element_cloneNode(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, copy);
 }
 
+/* ChildNode.remove(); on select with an index, removes that option instead. */
 static JSValue
 ns_element_remove_self(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -30402,6 +31351,7 @@ ns_element_remove_self(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Validates append/prepend on a Document: no text, at most one element child. */
 static JSValue
 ns_validate_doc_batch(JSContext *ctx, ns_node *parent,
                       int argc, JSValueConst *argv)
@@ -30433,6 +31383,7 @@ ns_validate_doc_batch(JSContext *ctx, ns_node *parent,
     return JS_UNDEFINED;
 }
 
+/* ParentNode.append(): validates and appends the converted nodes. */
 static JSValue
 ns_element_append(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -30464,6 +31415,7 @@ ns_element_append(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* ParentNode.prepend(): validates and inserts the converted nodes before firstChild. */
 static JSValue
 ns_element_prepend(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -30517,6 +31469,7 @@ static JSValue ns_element_setAttributeNode(JSContext *ctx,
                                            JSValueConst this_val,
                                            int argc, JSValueConst *argv);
 
+/* Returns the element that owns a NamedNodeMap live wrapper. */
 static ns_node *
 ns_namedmap_owner(JSValueConst this_val)
 {
@@ -30525,6 +31478,7 @@ ns_namedmap_owner(JSValueConst this_val)
     return NULL;
 }
 
+/* NamedNodeMap.getNamedItem(): case-insensitive match, hiding internal attributes. */
 static JSValue
 ns_namedmap_getNamedItem(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -30547,6 +31501,7 @@ ns_namedmap_getNamedItem(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* NamedNodeMap.item(): index-th non-internal attribute as an Attr, or null. */
 static JSValue
 ns_namedmap_item(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -30571,6 +31526,7 @@ ns_namedmap_item(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* Counts the owner's attributes excluding internal data-nd-* ones. */
 static JSValue
 ns_namedmap_get_length(JSContext *ctx, JSValueConst this_val)
 {
@@ -30585,6 +31541,7 @@ ns_namedmap_get_length(JSContext *ctx, JSValueConst this_val)
     return JS_NewUint32(ctx, count);
 }
 
+/* NamedNodeMap.getNamedItemNS(): lookup by namespace and local name. */
 static JSValue
 ns_namedmap_getNamedItemNS(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -30620,6 +31577,7 @@ ns_namedmap_setNamedItem(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* NamedNodeMap.removeNamedItem(): removes and returns the Attr; NotFoundError if absent. */
 static JSValue
 ns_namedmap_removeNamedItem(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -30648,6 +31606,7 @@ ns_namedmap_removeNamedItem(JSContext *ctx, JSValueConst this_val,
     return removed;
 }
 
+/* NamedNodeMap.removeNamedItemNS(): removes by namespace and local name. */
 static JSValue
 ns_namedmap_removeNamedItemNS(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -30695,6 +31654,7 @@ ns_attr_state(JSValueConst value)
     return JS_GetOpaque(value, ns_attr_class_id);
 }
 
+/* Returns the live DOM attribute an Attr wrapper refers to, or NULL if detached. */
 static const ns_attr *
 ns_attr_state_dom_attr(const ns_js_attr *state)
 {
@@ -30703,6 +31663,7 @@ ns_attr_state_dom_attr(const ns_js_attr *state)
                                         state->local_name);
 }
 
+/* Finds the live Attr wrapper state for (owner, namespace, local name). */
 static ns_js_attr *
 ns_attr_state_find(ns_js *js, const ns_node *owner, const char *namespace_uri,
                    const char *local_name)
@@ -30719,6 +31680,7 @@ ns_attr_state_find(ns_js *js, const ns_node *owner, const char *namespace_uri,
     return NULL;
 }
 
+/* Detaches an Attr wrapper: snapshots its value and drops the owner pin. */
 static void
 ns_attr_state_detach(ns_js_attr *state)
 {
@@ -30737,6 +31699,7 @@ ns_attr_state_detach(ns_js_attr *state)
         JS_FreeValue(state->js->ctx, pinned);
 }
 
+/* Detaches the Attr wrapper for an attribute that is being removed. */
 static void
 ns_attr_detach_matching(ns_js *js, ns_node *owner, const char *namespace_uri,
                         const char *local_name)
@@ -30745,6 +31708,7 @@ ns_attr_detach_matching(ns_js *js, ns_node *owner, const char *namespace_uri,
     if (state) ns_attr_state_detach(state);
 }
 
+/* Detaches every Attr wrapper owned by an element. */
 static void
 ns_attr_detach_owner(ns_js *js, ns_node *owner)
 {
@@ -30755,6 +31719,7 @@ ns_attr_detach_owner(ns_js *js, ns_node *owner)
     }
 }
 
+/* Detaches all live Attr wrappers, e.g. at teardown. */
 static void
 ns_attr_detach_all(ns_js *js)
 {
@@ -30765,6 +31730,7 @@ ns_attr_detach_all(ns_js *js)
     }
 }
 
+/* Drops the cached NamedNodeMap wrapper for an element. */
 static void
 ns_attribute_map_release_owner(ns_js *js, ns_node *owner)
 {
@@ -30775,6 +31741,7 @@ ns_attribute_map_release_owner(ns_js *js, ns_node *owner)
     JS_FreeValue(js->ctx, JS_MKPTR(JS_TAG_OBJECT, wrapper));
 }
 
+/* Drops every cached NamedNodeMap wrapper. */
 static void
 ns_attribute_maps_release_all(ns_js *js)
 {
@@ -30808,6 +31775,7 @@ static JSClassDef ns_attr_class = {
 static JSValue ns_element_isSameNode(JSContext *ctx, JSValueConst this_val,
                                      int argc, JSValueConst *argv);
 
+/* Gives an Attr object the Attr prototype plus cloneNode and isSameNode. */
 static void
 ns_attr_apply_proto(JSContext *ctx, JSValueConst obj)
 {
@@ -30822,6 +31790,7 @@ ns_attr_apply_proto(JSContext *ctx, JSValueConst obj)
     ns_bind_fn(ctx, obj, "isSameNode", ns_element_isSameNode, 1);
 }
 
+/* Attr value getter: the live attribute value, or the detached snapshot. */
 static JSValue
 ns_attr_get_value(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -30834,6 +31803,7 @@ ns_attr_get_value(JSContext *ctx, JSValueConst this_val,
                                                  : state->value ? state->value : "");
 }
 
+/* Attr value setter: updates the snapshot and, if attached, the owner's attribute. */
 static JSValue
 ns_attr_set_value(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -30888,6 +31858,7 @@ ns_attr_define_owner_accessor(JSContext *ctx, JSValueConst entry)
     JS_FreeAtom(ctx, atom);
 }
 
+/* Attaches an Attr wrapper to an owner and pins it so identity is preserved. */
 static void
 ns_attr_state_attach(JSContext *ctx, JSValueConst entry, ns_js_attr *state,
                      ns_node *owner)
@@ -30901,6 +31872,7 @@ ns_attr_state_attach(JSContext *ctx, JSValueConst entry, ns_js_attr *state,
         g_ptr_array_add(state->js->attr_wrappers, state);
 }
 
+/* Returns the cached Attr for an attribute or builds a new one, optionally with node fields. */
 static JSValue
 ns_attr_to_js(JSContext *ctx, JSValueConst owner, const ns_attr *a,
               gboolean include_base)
@@ -30973,6 +31945,7 @@ ns_attr_to_js(JSContext *ctx, JSValueConst owner, const ns_attr *a,
     return entry;
 }
 
+/* Element.attributes: returns the cached live NamedNodeMap, creating it once. */
 static JSValue
 ns_element_get_attributes(JSContext *ctx, JSValueConst this_val)
 {
@@ -31000,6 +31973,7 @@ ns_element_get_attributes(JSContext *ctx, JSValueConst this_val)
     return arr;
 }
 
+/* getAttributeNames(): qualified names in order, excluding internal attributes. */
 static JSValue
 ns_element_getAttributeNames(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -31020,6 +31994,7 @@ ns_element_getAttributeNames(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* getAttributeNode(): name lowercased for HTML elements; returns the cached Attr. */
 static JSValue
 ns_element_getAttributeNode(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -31044,6 +32019,7 @@ ns_element_getAttributeNode(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* getAttributeNodeNS(): Attr by namespace (empty means null) and local name. */
 static JSValue
 ns_element_getAttributeNodeNS(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -31065,6 +32041,7 @@ ns_element_getAttributeNodeNS(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* removeAttributeNode(): NotFoundError unless the Attr is attached to this element. */
 static JSValue
 ns_element_removeAttributeNode(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -31083,6 +32060,7 @@ ns_element_removeAttributeNode(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, argv[0]);
 }
 
+/* setAttributeNode(): attaches the Attr, returning the replaced one; InUseAttributeError. */
 static JSValue
 ns_element_setAttributeNode(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -31119,6 +32097,7 @@ ns_element_setAttributeNode(JSContext *ctx, JSValueConst this_val,
     return old;
 }
 
+/* hasAttributes(), ignoring internal data-nd-* attributes. */
 static JSValue
 ns_element_hasAttributes(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -31137,6 +32116,7 @@ static JSValue ns_element_removeAttribute(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_validate_attr_ns(JSContext *ctx, const char *ns_uri,
                                     const char *qname);
 
+/* toggleAttribute(): validates the name and adds or removes it; returns presence. */
 static JSValue
 ns_element_toggleAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -31174,6 +32154,7 @@ ns_element_toggleAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return want ? JS_TRUE : JS_FALSE;
 }
 
+/* Finds an attribute by namespace and local name, hiding internal ones. */
 static const ns_attr *
 ns_element_attr_by_namespace(const ns_node *n, const char *namespace_uri,
                              const char *local)
@@ -31182,6 +32163,7 @@ ns_element_attr_by_namespace(const ns_node *n, const char *namespace_uri,
     return a && !ns_attr_name_is_internal(a->name) ? a : NULL;
 }
 
+/* getAttributeNS(): value by namespace and local name, or null. */
 static JSValue
 ns_element_getAttributeNS(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -31241,6 +32223,7 @@ ns_element_removeAttributeNS(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* setAttributeNS(): validates the qualified name against the namespace, then sets it. */
 static JSValue
 ns_element_setAttributeNS(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -31286,6 +32269,7 @@ ns_element_setAttributeNS(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return JS_UNDEFINED;
 }
 
+/* setAttribute(): validates and sets, then starts img/iframe/object loads and side effects. */
 static JSValue
 ns_element_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -31352,6 +32336,7 @@ ns_element_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+/* removeAttribute(): removes the normalized name; closing details fires toggle. */
 static JSValue
 ns_element_removeAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -31379,6 +32364,7 @@ ns_element_removeAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+/* Next element sibling, skipping shadow-root marker nodes. */
 static const ns_node *
 next_element_sibling(const ns_node *n)
 {
@@ -31387,6 +32373,7 @@ next_element_sibling(const ns_node *n)
     return NULL;
 }
 
+/* Previous element sibling, skipping shadow-root marker nodes. */
 static const ns_node *
 prev_element_sibling(const ns_node *n)
 {
@@ -31395,6 +32382,7 @@ prev_element_sibling(const ns_node *n)
     return NULL;
 }
 
+/* First element child, skipping shadow-root marker nodes. */
 static const ns_node *
 first_element_child(const ns_node *n)
 {
@@ -31403,6 +32391,7 @@ first_element_child(const ns_node *n)
     return NULL;
 }
 
+/* parentElement: the parent only when it is an element; documents have none. */
 static JSValue
 ns_element_get_parentElement(JSContext *ctx, JSValueConst this_val)
 {
@@ -31420,6 +32409,7 @@ ns_element_get_parentNode(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, n->parent);
 }
 
+/* firstElementChild; null for template, whose children live in its content. */
 static JSValue
 ns_element_get_firstElementChild(JSContext *ctx, JSValueConst this_val)
 {
@@ -31447,12 +32437,14 @@ ns_element_get_children(JSContext *ctx, JSValueConst this_val)
     return ns_make_live(ctx, this_val, NS_LIVE_CHILDREN, NULL);
 }
 
+/* Whether a child is internal (embedded frame document or shadow root) and hidden from DOM. */
 static gboolean
 ns_dom_hidden_child(const ns_node *c)
 {
     return ns_node_is_embedded_document(c) || ns_node_is_shadow_root(c);
 }
 
+/* First DOM-visible child, skipping internal embedded documents and shadow roots. */
 static ns_node *
 ns_dom_first_child(const ns_node *n)
 {
@@ -31461,6 +32453,7 @@ ns_dom_first_child(const ns_node *n)
     return c;
 }
 
+/* Last DOM-visible child, skipping internal embedded documents and shadow roots. */
 static ns_node *
 ns_dom_last_child(const ns_node *n)
 {
@@ -31469,6 +32462,7 @@ ns_dom_last_child(const ns_node *n)
     return c;
 }
 
+/* Next DOM-visible sibling, skipping internal embedded documents and shadow roots. */
 static ns_node *
 ns_dom_next_sibling(const ns_node *n)
 {
@@ -31477,6 +32471,7 @@ ns_dom_next_sibling(const ns_node *n)
     return c;
 }
 
+/* Previous DOM-visible sibling, skipping internal nodes. */
 static ns_node *
 ns_dom_prev_sibling(const ns_node *n)
 {
@@ -31485,6 +32480,7 @@ ns_dom_prev_sibling(const ns_node *n)
     return c;
 }
 
+/* firstChild over DOM-visible children; null for template elements. */
 static JSValue
 ns_element_get_firstChild(JSContext *ctx, JSValueConst this_val)
 {
@@ -31493,6 +32489,7 @@ ns_element_get_firstChild(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, ns_dom_first_child(n));
 }
 
+/* lastChild over DOM-visible children; null for template elements. */
 static JSValue
 ns_element_get_lastChild(JSContext *ctx, JSValueConst this_val)
 {
@@ -31501,6 +32498,7 @@ ns_element_get_lastChild(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, ns_dom_last_child(n));
 }
 
+/* lastElementChild, skipping shadow roots; null for template. */
 static JSValue
 ns_element_get_lastElementChild(JSContext *ctx, JSValueConst this_val)
 {
@@ -31526,6 +32524,7 @@ ns_element_get_previousSibling(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, ns_dom_prev_sibling(n));
 }
 
+/* childNodes: a live NodeList cached on the wrapper for identity. */
 static JSValue
 ns_element_get_childNodes(JSContext *ctx, JSValueConst this_val)
 {
@@ -31539,6 +32538,7 @@ ns_element_get_childNodes(JSContext *ctx, JSValueConst this_val)
     return list;
 }
 
+/* Counts element children excluding shadow roots; 0 for template. */
 static JSValue
 ns_element_get_childElementCount(JSContext *ctx, JSValueConst this_val)
 {
@@ -31551,6 +32551,7 @@ ns_element_get_childElementCount(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, count);
 }
 
+/* getElementsByTagName match: case-sensitive for foreign elements, handles prefixes. */
 static gboolean
 ns_tag_query_matches(const ns_node *n, const char *tag, const char *tag_lower)
 {
@@ -31566,6 +32567,7 @@ ns_tag_query_matches(const ns_node *n, const char *tag, const char *tag_lower)
     return strcmp(tag_lower, n->name) == 0;
 }
 
+/* Recursively appends tag-matching elements, not descending into template or frames. */
 static void
 ns_collect_by_tag_h(const ns_node *n, const char *tag, const char *tag_lower,
                     JSContext *ctx, JSValue arr, uint32_t *idx, int depth)
@@ -31581,6 +32583,7 @@ ns_collect_by_tag_h(const ns_node *n, const char *tag, const char *tag_lower,
     }
 }
 
+/* Collects elements matching tag under n into arr (lowercases once). */
 static void
 ns_collect_by_tag(const ns_node *n, const char *tag, JSContext *ctx,
                   JSValue arr, uint32_t *idx)
@@ -31590,6 +32593,7 @@ ns_collect_by_tag(const ns_node *n, const char *tag, JSContext *ctx,
     g_free(tag_lower);
 }
 
+/* Whether the class attribute contains one token, optionally case-insensitively. */
 static gboolean
 element_has_class_token(const ns_node *n, const char *want, gsize wl,
                         gboolean ci)
@@ -31609,6 +32613,7 @@ element_has_class_token(const ns_node *n, const char *want, gsize wl,
     return FALSE;
 }
 
+/* Whether the element has every class in a space-separated list (none means false). */
 static gboolean
 element_has_class(const ns_node *n, const char *want, gboolean ci)
 {
@@ -31627,6 +32632,7 @@ element_has_class(const ns_node *n, const char *want, gboolean ci)
     return any;
 }
 
+/* Recursively appends elements having all the given classes. */
 static void
 ns_collect_by_class(const ns_node *n, const char *cls, gboolean ci,
                     JSContext *ctx, JSValue arr, uint32_t *idx, int depth)
@@ -31641,12 +32647,14 @@ ns_collect_by_class(const ns_node *n, const char *cls, gboolean ci,
     }
 }
 
+/* Whether root is inside doc so document-wide indexes can answer queries. */
 static gboolean
 ns_root_uses_doc_index(const ns_node *root, const ns_node *doc)
 {
     return doc && root && ns_node_ancestor_or_self(root, doc) != NULL;
 }
 
+/* getElementsByTagName(): returns a live HTMLCollection. */
 static JSValue
 ns_element_getElementsByTagName(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -31662,6 +32670,7 @@ ns_element_getElementsByTagName(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* Whether the element matches any selector in a parsed list. */
 static gboolean
 ns_matches_any_selector(GPtrArray *sels, const ns_node *el)
 {
@@ -31672,6 +32681,7 @@ ns_matches_any_selector(GPtrArray *sels, const ns_node *el)
     return FALSE;
 }
 
+/* Preorder search for the first matching element, skipping template and frames. */
 static const ns_node *
 ns_walk_first_match(const ns_node *root, GPtrArray *sels, int depth)
 {
@@ -31687,6 +32697,7 @@ ns_walk_first_match(const ns_node *root, GPtrArray *sels, int depth)
     return NULL;
 }
 
+/* Preorder collection of matching elements, skipping template and frames. */
 static void
 ns_walk_all_matches(const ns_node *root, GPtrArray *sels, JSContext *ctx,
                     JSValue arr, uint32_t *idx, int depth)
@@ -31701,6 +32712,7 @@ ns_walk_all_matches(const ns_node *root, GPtrArray *sels, JSContext *ctx,
     }
 }
 
+/* NodeList.item(): element at index or null. */
 static JSValue
 ns_nodelist_item(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -31714,6 +32726,7 @@ ns_nodelist_item(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* namedItem(): first entry whose id, then name, equals the argument. */
 static JSValue
 ns_nodelist_namedItem(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -31752,6 +32765,7 @@ ns_nodelist_namedItem(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* NodeList.forEach(): calls cb(node, index, list) with optional thisArg. */
 static JSValue
 ns_nodelist_forEach(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -31776,6 +32790,7 @@ ns_nodelist_forEach(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Adds item() and namedItem() to an array-backed NodeList. */
 static void
 ns_nodelist_decorate(JSContext *ctx, JSValueConst arr)
 {
@@ -31793,6 +32808,7 @@ ns_nodelist_new(JSContext *ctx)
     return JS_NewArray(ctx);
 }
 
+/* Turns an array into a static NodeList with length, methods, iterators and toStringTag. */
 static JSValue
 ns_nodelist_finalize(JSContext *ctx, JSValue nl, uint32_t len)
 {
@@ -31842,6 +32858,7 @@ ns_nodelist_finalize(JSContext *ctx, JSValue nl, uint32_t len)
     return nl;
 }
 
+/* Copies arr into a new static NodeList; consumes arr. */
 static JSValue
 ns_nodelist_from_array(JSContext *ctx, JSValue arr)
 {
@@ -31856,6 +32873,7 @@ ns_nodelist_from_array(JSContext *ctx, JSValue arr)
     return ns_nodelist_finalize(ctx, nl, len);
 }
 
+/* Whether s is a plain ASCII identifier usable by the fast selector paths. */
 static gboolean
 ns_simple_ident_only(const char *s)
 {
@@ -31869,6 +32887,7 @@ ns_simple_ident_only(const char *s)
     return TRUE;
 }
 
+/* Returns desc if root is desc or one of its ancestors, else NULL. */
 static const ns_node *
 ns_node_ancestor_or_self(const ns_node *desc, const ns_node *root)
 {
@@ -31879,6 +32898,7 @@ ns_node_ancestor_or_self(const ns_node *desc, const ns_node *root)
     return NULL;
 }
 
+/* Nearest document (or fragment) ancestor-or-self of node. */
 static const ns_node *
 ns_node_scope_document(const ns_node *node)
 {
@@ -31887,6 +32907,7 @@ ns_node_scope_document(const ns_node *node)
     return NULL;
 }
 
+/* Whether the element's class list contains cls exactly (case-sensitive). */
 static gboolean
 ns_element_has_class(const ns_node *n, const char *cls)
 {
@@ -31906,6 +32927,7 @@ ns_element_has_class(const ns_node *n, const char *cls)
     return FALSE;
 }
 
+/* Recursively appends elements having class cls, skipping embedded documents. */
 static void
 ns_collect_by_class_walk(const ns_node *n, const char *cls, JSContext *ctx,
                          JSValue arr, uint32_t *i, int depth)
@@ -31919,6 +32941,7 @@ ns_collect_by_class_walk(const ns_node *n, const char *cls, JSContext *ctx,
     }
 }
 
+/* Preorder search for the first element with class cls. */
 static const ns_node *
 ns_find_first_by_class(const ns_node *n, const char *cls, int depth)
 {
@@ -31932,6 +32955,7 @@ ns_find_first_by_class(const ns_node *n, const char *cls, int depth)
     return NULL;
 }
 
+/* Recursively appends elements whose name equals tag (case-insensitive). */
 static void
 ns_collect_by_tag_walk(const ns_node *n, const char *tag, JSContext *ctx,
                        JSValue arr, uint32_t *i, int depth)
@@ -31946,6 +32970,7 @@ ns_collect_by_tag_walk(const ns_node *n, const char *tag, JSContext *ctx,
     }
 }
 
+/* Preorder search for the first element named tag (case-insensitive). */
 static const ns_node *
 ns_find_first_by_tag(const ns_node *n, const char *tag, int depth)
 {
@@ -31968,6 +32993,7 @@ ns_element_id_is(const ns_node *n, const char *id)
     return nid && strcmp(nid, id) == 0;
 }
 
+/* Recursively appends every element with the given id. */
 static void
 ns_collect_by_id_walk(const ns_node *n, const char *id, JSContext *ctx,
                       JSValue arr, uint32_t *i, int depth)
@@ -31981,6 +33007,7 @@ ns_collect_by_id_walk(const ns_node *n, const char *id, JSContext *ctx,
     }
 }
 
+/* Fast paths for #id, .class and tag selectors via doc indexes; undefined if not simple. */
 static JSValue
 ns_query_selector_simple(JSContext *ctx, const ns_node *root, const char *sel,
                          gboolean want_all, gboolean include_self)
@@ -32136,6 +33163,7 @@ ns_query_selector_simple(JSContext *ctx, const ns_node *root, const char *sel,
     return JS_UNDEFINED;
 }
 
+/* Indexed querySelector using the rightmost compound's id/class/tag; FALSE to fall back. */
 static gboolean
 ns_query_key_index(JSContext *ctx, const ns_node *root, GPtrArray *sels,
                    gboolean want_all, gboolean include_self, JSValue *out)
@@ -32218,6 +33246,7 @@ ns_query_key_index(JSContext *ctx, const ns_node *root, GPtrArray *sels,
     return TRUE;
 }
 
+/* Copies a selector replacing NUL bytes with U+FFFD; caller frees. */
 static char *
 ns_css_filter_nulls(const char *s, size_t len)
 {
@@ -32233,6 +33262,7 @@ ns_css_filter_nulls(const char *s, size_t len)
     return g_string_free(out, FALSE);
 }
 
+/* Fragment of the element's document URL (or page URL) for :target; caller frees. */
 static char *
 ns_element_target_fragment(JSContext *ctx, const ns_node *el)
 {
@@ -32271,6 +33301,7 @@ ns_element_target_fragment(JSContext *ctx, const ns_node *el)
     return NULL;
 }
 
+/* querySelector(All) core: fast paths, index lookup, else full tree walk with scope set. */
 static JSValue
 ns_query_selector_impl(JSContext *ctx, const ns_node *root,
                        int argc, JSValueConst *argv, gboolean want_all,
@@ -32348,6 +33379,7 @@ ns_element_querySelectorAll(JSContext *ctx, JSValueConst this_val,
                                   TRUE, FALSE);
 }
 
+/* getElementsByClassName(): returns a live HTMLCollection. */
 static JSValue
 ns_element_getElementsByClassName(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
@@ -32361,6 +33393,7 @@ ns_element_getElementsByClassName(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* Whether s starts a CSS identifier (letter, _, non-ASCII, or - followed by one). */
 static gboolean
 ns_is_valid_ident_start(const char *s)
 {
@@ -32375,6 +33408,7 @@ ns_is_valid_ident_start(const char *s)
     return FALSE;
 }
 
+/* Whether sel is exactly one .class with no combinators or other syntax. */
 static gboolean
 ns_is_simple_class_selector(const char *sel)
 {
@@ -32389,6 +33423,7 @@ ns_is_simple_class_selector(const char *sel)
     return TRUE;
 }
 
+/* Whether sel is a bare alphanumeric tag name. */
 static gboolean
 ns_is_simple_tag_selector(const char *sel)
 {
@@ -32401,6 +33436,7 @@ ns_is_simple_tag_selector(const char *sel)
     return TRUE;
 }
 
+/* Whether sel is exactly one #id with no combinators or other syntax. */
 static gboolean
 ns_is_simple_id_selector(const char *sel)
 {
@@ -32415,6 +33451,7 @@ ns_is_simple_id_selector(const char *sel)
     return TRUE;
 }
 
+/* Whether the selector begins with a lone :scope (followed by end or comma). */
 static gboolean
 ns_selector_is_scope(const char *sel)
 {
@@ -32426,6 +33463,7 @@ ns_selector_is_scope(const char *sel)
     return *rest == '\0' || *rest == ',';
 }
 
+/* Element.matches() with fast paths for :scope, .class, tag and #id. */
 static JSValue
 ns_element_matches(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -32475,6 +33513,7 @@ ns_element_matches(JSContext *ctx, JSValueConst this_val,
     return m ? JS_TRUE : JS_FALSE;
 }
 
+/* Element.closest(): nearest inclusive ancestor element matching, with fast paths. */
 static JSValue
 ns_element_closest(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -32554,6 +33593,7 @@ ns_element_closest(JSContext *ctx, JSValueConst this_val,
     return JS_NULL;
 }
 
+/* Node.contains(): inclusive descendant check. */
 static JSValue
 ns_element_contains(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -32568,6 +33608,7 @@ ns_element_contains(JSContext *ctx, JSValueConst this_val,
     return JS_FALSE;
 }
 
+/* hasChildNodes(); always false for template elements. */
 static JSValue
 ns_element_hasChildNodes(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -32578,6 +33619,7 @@ ns_element_hasChildNodes(JSContext *ctx, JSValueConst this_val,
     return (el && el->first_child) ? JS_TRUE : JS_FALSE;
 }
 
+/* Finds an attribute matching want's namespace and local name; outputs its value. */
 static gboolean
 ns_attr_lookup_equal_value(const ns_attr *a, const ns_attr *want,
                            const char **out)
@@ -32592,6 +33634,7 @@ ns_attr_lookup_equal_value(const ns_attr *a, const ns_attr *want,
     return FALSE;
 }
 
+/* Counts attributes excluding internal data-nd-* ones. */
 static guint
 ns_attr_count(const ns_attr *a)
 {
@@ -32603,6 +33646,7 @@ ns_attr_count(const ns_attr *a)
     return n;
 }
 
+/* Whether two elements have the same non-internal attributes and values. */
 static gboolean
 ns_node_attrs_equal(const ns_node *a, const ns_node *b)
 {
@@ -32618,6 +33662,7 @@ ns_node_attrs_equal(const ns_node *a, const ns_node *b)
     return TRUE;
 }
 
+/* Element namespace URI from the stored attribute or flags; XHTML by default. */
 static const char *
 ns_node_namespace_uri(const ns_node *n)
 {
@@ -32631,6 +33676,7 @@ ns_node_namespace_uri(const ns_node *n)
     return "http://www.w3.org/1999/xhtml";
 }
 
+/* Element prefix from the stored attribute or the qualified name; uses buf. */
 static const char *
 ns_node_prefix(const ns_node *n, char *buf, size_t buf_sz)
 {
@@ -32651,6 +33697,7 @@ ns_node_prefix(const ns_node *n, char *buf, size_t buf_sz)
     return NULL;
 }
 
+/* Element local name: the part of the qualified name after any colon. */
 static const char *
 ns_node_local_name(const ns_node *n)
 {
@@ -32663,6 +33710,7 @@ ns_node_local_name(const ns_node *n)
     return NULL;
 }
 
+/* DOM "node equals": recursive comparison of type, names, data, attributes, children. */
 static gboolean
 ns_node_equal(const ns_node *a, const ns_node *b, int depth)
 {
@@ -32701,6 +33749,7 @@ ns_node_equal(const ns_node *a, const ns_node *b, int depth)
     return ca == NULL && cb == NULL;
 }
 
+/* Node.isEqualNode() via structural comparison. */
 static JSValue
 ns_element_isEqualNode(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -32723,6 +33772,7 @@ ns_element_isSameNode(JSContext *ctx, JSValueConst this_val,
     return (JS_VALUE_GET_PTR(this_val) == JS_VALUE_GET_PTR(argv[0])) ? JS_TRUE : JS_FALSE;
 }
 
+/* compareDocumentPosition(): containment, tree order, or disconnected bits. */
 static JSValue
 ns_element_compareDocumentPosition(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
@@ -32761,6 +33811,7 @@ ns_element_compareDocumentPosition(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, result);
 }
 
+/* nodeType: maps node kind and fragment/CDATA/PI flags to DOM constants. */
 static JSValue
 ns_element_get_nodeType(JSContext *ctx, JSValueConst this_val)
 {
@@ -32779,6 +33830,7 @@ ns_element_get_nodeType(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, 0);
 }
 
+/* nodeName: #text/#comment/#document etc., PI target, doctype name, or tagName. */
 static JSValue
 ns_element_get_nodeName(JSContext *ctx, JSValueConst this_val)
 {
@@ -32804,6 +33856,7 @@ ns_element_get_nodeName(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "");
 }
 
+/* Fills a DOM-node-to-box map with the first box generated for each node. */
 static void
 ns_box_lookup_cache_build_walk(GHashTable *t, const ns_box *b)
 {
@@ -32818,6 +33871,7 @@ ns_box_lookup_cache_build_walk(GHashTable *t, const ns_box *b)
                 g_array_index(b->inline_atomics, ns_inline_atomic, i).box);
 }
 
+/* Finds the box for a DOM node; builds a hash cache after 8 lookups on the same layout. */
 const ns_box *
 ns_box_find_by_dom(const ns_box *root, const ns_node *target)
 {
@@ -32856,6 +33910,7 @@ ns_box_find_by_dom(const ns_box *root, const ns_node *target)
     return NULL;
 }
 
+/* Border-box rect of a box in layout coordinates (position plus margins). */
 static void
 ns_box_border_box(const ns_box *b, double *x, double *y, double *w, double *h)
 {
@@ -32867,6 +33922,7 @@ ns_box_border_box(const ns_box *b, double *x, double *y, double *w, double *h)
                            + b->border.top   + b->border.bottom;
 }
 
+/* Flushes layout (attributed to api) and returns the box for this element, if any. */
 static const ns_box *
 ns_box_for_this_from(JSContext *ctx, JSValueConst this_val, const char *api)
 {
@@ -32879,6 +33935,7 @@ ns_box_for_this_from(JSContext *ctx, JSValueConst this_val, const char *api)
     return ns_box_find_by_dom(js->layout_root, n);
 }
 
+/* Flushes layout and returns the union rect of an inline element's fragments. */
 static gboolean
 ns_inline_rect_for_this_from(JSContext *ctx, JSValueConst this_val,
                              double *x, double *y, double *w, double *h,
@@ -32893,6 +33950,7 @@ ns_inline_rect_for_this_from(JSContext *ctx, JSValueConst this_val,
     return ns_box_inline_rect_for_dom(js->layout_root, n, x, y, w, h);
 }
 
+/* Resolves transform-origin against the border box; defaults to its center. */
 static void
 ns_box_transform_origin_2d(const ns_box *b, double bx, double by,
                            double bw, double bh,
@@ -32912,6 +33970,7 @@ ns_box_transform_origin_2d(const ns_box *b, double bx, double by,
     }
 }
 
+/* Current sticky-position shift of a box, or zero when not position: sticky. */
 static void
 ns_js_box_sticky_offset(const ns_box *box, double *out_x, double *out_y)
 {
@@ -32923,6 +33982,7 @@ ns_js_box_sticky_offset(const ns_box *box, double *out_x, double *out_y)
     ns_box_hit_offset(box, out_x, out_y);
 }
 
+/* Composes transforms, ancestor scroll offsets and sticky shifts up the box chain. */
 static gboolean
 ns_box_accumulate_transform(const ns_box *box, ns_mat4 *out)
 {
@@ -32973,6 +34033,7 @@ ns_box_accumulate_transform(const ns_box *box, ns_mat4 *out)
     return any;
 }
 
+/* Replaces a rect with the bounding box of its transformed corners. */
 static void
 ns_box_apply_visual_transform(const ns_box *box,
                               double *x, double *y, double *w, double *h)
@@ -32998,6 +34059,7 @@ ns_box_apply_visual_transform(const ns_box *box,
     }
 }
 
+/* Border box after accumulated transforms, scrolling and sticky offsets. */
 static void
 ns_box_visual_border_box(const ns_box *box,
                          double *x, double *y, double *w, double *h)
@@ -33006,6 +34068,7 @@ ns_box_visual_border_box(const ns_box *box,
     ns_box_apply_visual_transform(box, x, y, w, h);
 }
 
+/* Padding box after accumulated transforms, scrolling and sticky offsets. */
 static void
 ns_box_visual_padding_box(const ns_box *box,
                           double *x, double *y, double *w, double *h)
@@ -33020,6 +34083,7 @@ ns_box_visual_padding_box(const ns_box *box,
     ns_box_apply_visual_transform(box, x, y, w, h);
 }
 
+/* getBoundingClientRect(): transformed border box in viewport coords, frame-relative. */
 static JSValue
 ns_element_getBoundingClientRect(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -33054,6 +34118,7 @@ ns_element_getBoundingClientRect(JSContext *ctx, JSValueConst this_val,
 
 typedef struct { double x, y; gboolean moveto; } ns_svg_pt;
 
+/* Parses a numeric SVG attribute, returning dflt when absent or invalid. */
 static double
 ns_svg_num(const ns_node *n, const char *attr, double dflt)
 {
@@ -33065,6 +34130,7 @@ ns_svg_num(const ns_node *n, const char *attr, double dflt)
     return (end == v) ? dflt : d;
 }
 
+/* Reads one number after whitespace/comma separators; returns the end or NULL. */
 static const char *
 ns_svg_read_num(const char *p, double *out)
 {
@@ -33077,6 +34143,7 @@ ns_svg_read_num(const char *p, double *out)
     return end;
 }
 
+/* Appends 24 sampled points of a cubic Bezier segment. */
 static void
 ns_svg_flatten_cubic(GArray *out, double x0, double y0, double x1, double y1,
                      double x2, double y2, double x3, double y3)
@@ -33091,6 +34158,7 @@ ns_svg_flatten_cubic(GArray *out, double x0, double y0, double x1, double y1,
     }
 }
 
+/* Appends 18 sampled points of a quadratic Bezier segment. */
 static void
 ns_svg_flatten_quad(GArray *out, double x0, double y0, double x1, double y1,
                     double x2, double y2)
@@ -33105,6 +34173,7 @@ ns_svg_flatten_quad(GArray *out, double x0, double y0, double x1, double y1,
     }
 }
 
+/* Flattens an SVG elliptical arc via the endpoint-to-center conversion (SVG F.6.5). */
 static void
 ns_svg_flatten_arc(GArray *out, double x0, double y0, double rx, double ry,
                    double phi, gboolean large, gboolean sweep,
@@ -33145,6 +34214,7 @@ ns_svg_flatten_arc(GArray *out, double x0, double y0, double rx, double ry,
     }
 }
 
+/* Flattens SVG path data into polyline points, marking moveto starts; caller frees. */
 static GArray *
 ns_svg_flatten_path(const char *d)
 {
@@ -33234,6 +34304,7 @@ ns_svg_flatten_path(const char *d)
     return pts;
 }
 
+/* SVG geometry bbox in user space for basic shapes and paths; unions children otherwise. */
 static gboolean
 ns_node_local_bbox(const ns_node *n, double *bx, double *by,
                    double *bw, double *bh, int depth)
@@ -33310,6 +34381,7 @@ ns_node_local_bbox(const ns_node *n, double *bx, double *by,
     return FALSE;
 }
 
+/* getBBox(): SVG geometry bbox, falling back to the layout border box. */
 static JSValue
 ns_element_getBBox(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -33324,6 +34396,7 @@ ns_element_getBBox(JSContext *ctx, JSValueConst this_val,
     return ns_make_dom_rect(ctx, x, y, w, h);
 }
 
+/* Polyline length; optionally outputs the point at distance at (clamped to the end). */
 static double
 ns_svg_path_length(GArray *pts, double at, double *out_x, double *out_y)
 {
@@ -33349,6 +34422,7 @@ ns_svg_path_length(GArray *pts, double at, double *out_x, double *out_y)
     return total;
 }
 
+/* getTotalLength() of the element's path data via flattening. */
 static JSValue
 ns_element_getTotalLength(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -33361,6 +34435,7 @@ ns_element_getTotalLength(JSContext *ctx, JSValueConst this_val,
     return JS_NewFloat64(ctx, len);
 }
 
+/* getPointAtLength(): point at a distance along the flattened path. */
 static JSValue
 ns_element_getPointAtLength(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -33378,6 +34453,7 @@ ns_element_getPointAtLength(JSContext *ctx, JSValueConst this_val,
     return pt;
 }
 
+/* Creates a DOMMatrix (or plain object) with the given 2D components. */
 static JSValue
 ns_make_dom_matrix(JSContext *ctx, double a, double b, double c,
                    double d, double e, double f)
@@ -33397,6 +34473,7 @@ ns_make_dom_matrix(JSContext *ctx, double a, double b, double c,
     return m;
 }
 
+/* SVGPoint.matrixTransform(): applies a 2D affine matrix and returns a new point. */
 static JSValue
 ns_svg_point_matrix_transform(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -33423,6 +34500,7 @@ ns_svg_point_matrix_transform(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* createSVGPoint(): a zero point supporting matrixTransform(). */
 static JSValue
 ns_element_createSVGPoint(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -33456,6 +34534,7 @@ ns_element_createSVGMatrix(JSContext *ctx, JSValueConst this_val,
     return ns_make_dom_matrix(ctx, 1, 0, 0, 1, 0, 0);
 }
 
+/* createSVGTransform(): identity transform stub whose setters are no-ops. */
 static JSValue
 ns_element_createSVGTransform(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -33474,6 +34553,7 @@ ns_element_createSVGTransform(JSContext *ctx, JSValueConst this_val,
     return t;
 }
 
+/* Outermost svg ancestor-or-self of n. */
 static const ns_node *
 ns_svg_owner_root(const ns_node *n)
 {
@@ -33483,6 +34563,7 @@ ns_svg_owner_root(const ns_node *n)
     return svg;
 }
 
+/* getScreenCTM(): viewBox scale and translation onto the outer svg's layout box. */
 static JSValue
 ns_element_getScreenCTM(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -33514,6 +34595,7 @@ ns_element_getScreenCTM(JSContext *ctx, JSValueConst this_val,
                               sx - minx*scaleX, sy - miny*scaleY);
 }
 
+/* getCTM(): viewBox-to-width/height scale of the outer svg, without page offset. */
 static JSValue
 ns_element_getCTM(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -33538,6 +34620,7 @@ ns_element_getCTM(JSContext *ctx, JSValueConst this_val,
                               -minx*scaleX, -miny*scaleY);
 }
 
+/* ownerSVGElement: nearest svg ancestor for SVG elements; undefined otherwise. */
 static JSValue
 ns_element_get_ownerSVGElement(JSContext *ctx, JSValueConst this_val)
 {
@@ -33549,6 +34632,7 @@ ns_element_get_ownerSVGElement(JSContext *ctx, JSValueConst this_val)
     return svg ? ns_make_element(ctx, svg) : JS_NULL;
 }
 
+/* offsetWidth: rounded border-box width, or the inline fragments' width. */
 static JSValue
 ns_element_get_offsetWidth(JSContext *ctx, JSValueConst this_val)
 {
@@ -33563,6 +34647,7 @@ ns_element_get_offsetWidth(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)(w + 0.5));
 }
 
+/* offsetHeight: rounded border-box height, or the inline fragments' height. */
 static JSValue
 ns_element_get_offsetHeight(JSContext *ctx, JSValueConst this_val)
 {
@@ -33577,6 +34662,7 @@ ns_element_get_offsetHeight(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)(h + 0.5));
 }
 
+/* clientWidth: padding-box width; the viewport width for the root element. */
 static JSValue
 ns_element_get_clientWidth(JSContext *ctx, JSValueConst this_val)
 {
@@ -33595,6 +34681,7 @@ ns_element_get_clientWidth(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)(w + 0.5));
 }
 
+/* clientHeight: padding-box height; the viewport height for the root element. */
 static JSValue
 ns_element_get_clientHeight(JSContext *ctx, JSValueConst this_val)
 {
@@ -33621,6 +34708,7 @@ static void ns_offset_parent_origin_from(JSContext *ctx,
     ns_offset_parent_origin_from((ctx), (this_val), (out_x), (out_y), \
                                  G_STRFUNC)
 
+/* offsetTop: border-box top relative to the offsetParent's padding edge. */
 static JSValue
 ns_element_get_offsetTop(JSContext *ctx, JSValueConst this_val)
 {
@@ -33636,6 +34724,7 @@ ns_element_get_offsetTop(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)floor(b->y + b->margin.top - origin_y + 0.5));
 }
 
+/* offsetLeft: border-box left relative to the offsetParent's padding edge. */
 static JSValue
 ns_element_get_offsetLeft(JSContext *ctx, JSValueConst this_val)
 {
@@ -33665,6 +34754,7 @@ ns_element_get_clientLeft(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, b ? (int)(b->border.left + 0.5) : 0);
 }
 
+/* Whether an ancestor can be offsetParent: positioned, table/cell, body or html. */
 static gboolean
 ns_offset_parent_candidate(ns_js *js, const ns_node *n)
 {
@@ -33688,6 +34778,7 @@ ns_offset_parent_candidate(ns_js *js, const ns_node *n)
     return FALSE;
 }
 
+/* Whether p is a statically positioned body or html. */
 static gboolean
 ns_offset_parent_is_static_root(ns_js *js, const ns_node *p)
 {
@@ -33700,6 +34791,7 @@ ns_offset_parent_is_static_root(ns_js *js, const ns_node *p)
     return !pos || ns_css_keyword_is(pos, "static");
 }
 
+/* Padding-edge origin of the offsetParent; zero for fixed or static-root parents. */
 static void
 ns_offset_parent_origin_from(JSContext *ctx, JSValueConst this_val,
                              double *out_x, double *out_y, const char *api)
@@ -33726,6 +34818,7 @@ ns_offset_parent_origin_from(JSContext *ctx, JSValueConst this_val,
     }
 }
 
+/* offsetParent: nearest candidate ancestor, else nearest element; null if fixed. */
 static JSValue
 ns_element_get_offsetParent(JSContext *ctx, JSValueConst this_val)
 {
@@ -33747,6 +34840,7 @@ ns_element_get_offsetParent(JSContext *ctx, JSValueConst this_val)
     return fallback ? ns_make_element(ctx, fallback) : JS_NULL;
 }
 
+/* Installs a new layout tree, resets the box cache and ticks observers. */
 void
 ns_js_set_layout_root(ns_js *js, const struct ns_box *root)
 {
@@ -33769,6 +34863,7 @@ ns_js_set_layout_root(ns_js *js, const struct ns_box *root)
     }
 }
 
+/* Attaches the animation engine; animation frames become host-driven. */
 void
 ns_js_set_anim(ns_js *js, struct ns_anim *anim)
 {
@@ -33777,6 +34872,7 @@ ns_js_set_anim(ns_js *js, struct ns_anim *anim)
     js->raf_host_driven = TRUE;
 }
 
+/* Sets the image cache and (un)registers this page in the blob registry. */
 void
 ns_js_set_image_cache(ns_js *js, struct ns_image_cache *cache)
 {
@@ -33793,6 +34889,7 @@ ns_element_get_zero_int(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, 0);
 }
 
+/* isContentEditable from the nearest contenteditable attribute on self or ancestors. */
 static JSValue
 ns_element_get_isContentEditable(JSContext *ctx, JSValueConst this_val)
 {
@@ -33810,6 +34907,7 @@ ns_element_get_isContentEditable(JSContext *ctx, JSValueConst this_val)
     return JS_FALSE;
 }
 
+/* Returns the decoded image for an img element, or NULL. */
 static const ns_image *
 ns_image_for_element(JSContext *ctx, JSValueConst this_val)
 {
@@ -33818,6 +34916,7 @@ ns_image_for_element(JSContext *ctx, JSValueConst this_val)
     return ns_js_image_for_node(js_from_ctx(ctx), n);
 }
 
+/* img.complete: true with no src/srcset or once loading finished or failed. */
 static JSValue
 ns_element_img_complete(JSContext *ctx, JSValueConst this_val)
 {
@@ -33831,6 +34930,7 @@ ns_element_img_complete(JSContext *ctx, JSValueConst this_val)
     return (im->loaded || im->failed) ? JS_TRUE : JS_FALSE;
 }
 
+/* naturalWidth/Height divided by the chosen srcset density. */
 static JSValue
 ns_img_natural_dimension(JSContext *ctx, JSValueConst this_val, gboolean width)
 {
@@ -33847,6 +34947,7 @@ ns_element_img_natural_width(JSContext *ctx, JSValueConst this_val)
     return ns_img_natural_dimension(ctx, this_val, TRUE);
 }
 
+/* img.currentSrc: the chosen source resolved against the document base URL. */
 static JSValue
 ns_element_img_current_src(JSContext *ctx, JSValueConst this_val)
 {
@@ -33880,6 +34981,7 @@ ns_get_empty_array(JSContext *ctx, JSValueConst this_val)
 #define NS_JS_PATTERN_MAX_LEN 2048
 #define NS_JS_PATTERN_VALUE_MAX_LEN 10000
 
+/* HTML pattern check with an anchored v-flag RegExp; invalid patterns match. */
 static gboolean
 ns_js_value_matches_pattern(const char *v, const char *pat)
 {
@@ -33943,6 +35045,7 @@ ns_js_value_matches_pattern(const char *v, const char *pat)
     return ok;
 }
 
+/* Whether n is an input of type radio. */
 static gboolean
 ns_node_is_radio(const ns_node *n)
 {
@@ -33951,6 +35054,7 @@ ns_node_is_radio(const ns_node *n)
     return type && g_ascii_strcasecmp(type, "radio") == 0;
 }
 
+/* Searches for a required radio with the same name and form owner. */
 static gboolean
 ns_radio_group_has_required(const ns_node *scan, const ns_node *root,
                             const ns_node *owner, const char *name, int depth)
@@ -33968,6 +35072,7 @@ ns_radio_group_has_required(const ns_node *scan, const ns_node *root,
     return FALSE;
 }
 
+/* Whether any radio in this radio's group is required. */
 static gboolean
 ns_radio_group_required(const ns_node *radio)
 {
@@ -33979,6 +35084,7 @@ ns_radio_group_required(const ns_node *radio)
                                        name, 0);
 }
 
+/* Computes HTML constraint-validation flags for input, textarea and select. */
 static void
 ns_js_compute_validity(const ns_node *n,
                        gboolean *value_missing,
@@ -34097,6 +35203,7 @@ ns_js_compute_validity(const ns_node *n,
 
 static gboolean ns_node_will_validate(const ns_node *n);
 
+/* Whether setCustomValidity() left a non-empty message. */
 static gboolean
 ns_node_has_custom_error(const ns_node *n)
 {
@@ -34104,6 +35211,7 @@ ns_node_has_custom_error(const ns_node *n)
     return msg && *msg;
 }
 
+/* Whether a candidate element satisfies its constraints, including custom errors. */
 static gboolean
 ns_js_element_valid(const ns_node *n)
 {
@@ -34115,6 +35223,7 @@ ns_js_element_valid(const ns_node *n)
     return !(vm || tm || pm || tl || ts || ru || ro || sm);
 }
 
+/* First invalid control owned by form in tree order, or NULL. */
 static const ns_node *
 ns_js_form_first_invalid(const ns_node *form, const ns_node *scan,
                          const ns_node *doc, int depth)
@@ -34131,6 +35240,7 @@ ns_js_form_first_invalid(const ns_node *form, const ns_node *scan,
     return NULL;
 }
 
+/* Collects every invalid control owned by form in tree order. */
 static void
 ns_js_form_collect_invalid(const ns_node *form, const ns_node *scan,
                            const ns_node *doc, int depth, GPtrArray *out)
@@ -34157,6 +35267,7 @@ static const JSCFunctionListEntry ns_validity_proto_funcs[] = {
     JS_CGETSET_DEF("valid", ns_validity_get_valid, NULL),
 };
 
+/* validity: builds a ValidityState snapshot from the current constraints. */
 static JSValue
 ns_element_get_validity(JSContext *ctx, JSValueConst this_val)
 {
@@ -34189,6 +35300,7 @@ ns_element_get_validity(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* checkValidity(): fires invalid on failing controls; forms check every owned control. */
 static JSValue
 ns_element_check_validity(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -34219,6 +35331,7 @@ ns_element_check_validity(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, valid);
 }
 
+/* validationMessage: custom message or a default text for the first failing check. */
 static JSValue
 ns_element_get_validation_message(JSContext *ctx, JSValueConst this_val)
 {
@@ -34258,6 +35371,7 @@ ns_element_get_validation_message(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "");
 }
 
+/* willValidate: submittable, enabled, not readonly, outside datalist, not barred type. */
 static gboolean
 ns_node_will_validate(const ns_node *n)
 {
@@ -34289,6 +35403,7 @@ ns_element_get_will_validate(JSContext *ctx, JSValueConst this_val)
     return JS_NewBool(ctx, ns_node_will_validate(ns_unwrap_element(this_val)));
 }
 
+/* Whether an element is labelable (non-hidden input, button, meter, select, ...). */
 static gboolean
 ns_js_node_is_labelable(const ns_node *n)
 {
@@ -34305,6 +35420,7 @@ ns_js_node_is_labelable(const ns_node *n)
            strcmp(n->name, "textarea") == 0;
 }
 
+/* First labelable descendant in tree order. */
 static const ns_node *
 ns_js_first_labelable_descendant(const ns_node *n, int depth)
 {
@@ -34317,6 +35433,7 @@ ns_js_first_labelable_descendant(const ns_node *n, int depth)
     return NULL;
 }
 
+/* label.control: the for= target if labelable, else first labelable descendant. */
 static JSValue
 ns_element_get_label_control(JSContext *ctx, JSValueConst this_val)
 {
@@ -34333,6 +35450,7 @@ ns_element_get_label_control(JSContext *ctx, JSValueConst this_val)
     return target ? ns_make_element(ctx, target) : JS_NULL;
 }
 
+/* The control a label is associated with, or NULL. */
 static const ns_node *
 ns_label_associated_control(const ns_node *label)
 {
@@ -34345,6 +35463,7 @@ ns_label_associated_control(const ns_node *label)
     return ns_js_first_labelable_descendant(label, 0);
 }
 
+/* Collects labels whose associated control is n. */
 static void
 ns_collect_labels_for(JSContext *ctx, const ns_node *scan, const ns_node *n,
                       JSValue arr, uint32_t *idx, int depth)
@@ -34357,6 +35476,7 @@ ns_collect_labels_for(JSContext *ctx, const ns_node *scan, const ns_node *n,
         ns_collect_labels_for(ctx, c, n, arr, idx, depth + 1);
 }
 
+/* labels: live list of associated labels; null for non-labelable elements. */
 static JSValue
 ns_element_get_labels(JSContext *ctx, JSValueConst this_val)
 {
@@ -34365,6 +35485,7 @@ ns_element_get_labels(JSContext *ctx, JSValueConst this_val)
     return ns_make_live(ctx, this_val, NS_LIVE_LABELS, NULL);
 }
 
+/* selectionDirection: stored forward/backward, else none; null when not applicable. */
 static JSValue
 ns_element_get_selection_dir(JSContext *ctx, JSValueConst this_val)
 {
@@ -34381,6 +35502,7 @@ ns_element_get_selection_dir(JSContext *ctx, JSValueConst this_val)
     return result;
 }
 
+/* defaultValue for output (text or saved default), textarea, or the value attribute. */
 static JSValue
 ns_element_get_default_value(JSContext *ctx, JSValueConst this_val)
 {
@@ -34404,6 +35526,7 @@ ns_element_get_default_value(JSContext *ctx, JSValueConst this_val)
     return ns_element_reflect_str_get(ctx, this_val, "value", FALSE);
 }
 
+/* Sets defaultValue; output and textarea replace their children when not dirty. */
 static JSValue
 ns_element_set_default_value(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -34438,6 +35561,7 @@ ns_element_set_default_value(JSContext *ctx, JSValueConst this_val, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* option.selected: the chosen option in single selects, else the option's state. */
 static JSValue
 ns_element_get_selected(JSContext *ctx, JSValueConst this_val)
 {
@@ -34452,6 +35576,7 @@ ns_element_get_selected(JSContext *ctx, JSValueConst this_val)
     return ns_option_is_selected(n) ? JS_TRUE : JS_FALSE;
 }
 
+/* option.selected setter: updates selectedness and requests relayout. */
 static JSValue
 ns_element_set_selected(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -34468,6 +35593,7 @@ typedef enum {
     NDIN_MONTH, NDIN_WEEK, NDIN_TIME, NDIN_DATETIME,
 } ns_input_kind;
 
+/* Classifies an input's type for valueAsNumber/valueAsDate handling. */
 static ns_input_kind
 ns_input_kind_of(const ns_node *n)
 {
@@ -34484,6 +35610,7 @@ ns_input_kind_of(const ns_node *n)
     return NDIN_OTHER;
 }
 
+/* Integer division rounding toward negative infinity. */
 static long
 ns_floordiv(long a, long b)
 {
@@ -34492,6 +35619,7 @@ ns_floordiv(long a, long b)
     return q;
 }
 
+/* Parses an input value to its numeric form (ms, months, or number) per type. */
 static gboolean
 ns_input_value_to_ms(ns_input_kind kind, const char *v, gboolean as_date, double *out)
 {
@@ -34560,6 +35688,7 @@ ns_input_value_to_ms(ns_input_kind kind, const char *v, gboolean as_date, double
     }
 }
 
+/* Appends a time of day as HH:MM[:SS[.mmm]], omitting zero seconds/fraction. */
 static void
 ns_append_time_ms(GString *out, long ms_of_day)
 {
@@ -34573,6 +35702,7 @@ ns_append_time_ms(GString *out, long ms_of_day)
     else         g_string_append_printf(out, "%02d:%02d", h, mi);
 }
 
+/* Serializes a numeric input value back to the type's string form; NULL if out of range. */
 static char *
 ns_input_ms_to_value(ns_input_kind kind, double v)
 {
@@ -34640,6 +35770,7 @@ ns_input_ms_to_value(ns_input_kind kind, double v)
     return g_string_free(out, FALSE);
 }
 
+/* valueAsNumber: parsed numeric form of the current value, or NaN. */
 static JSValue
 ns_element_get_value_as_number(JSContext *ctx, JSValueConst this_val)
 {
@@ -34652,6 +35783,7 @@ ns_element_get_value_as_number(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, (double)NAN);
 }
 
+/* Writes an input's current value (dirty-value slot or attribute) and relayouts. */
 static void
 ns_js_set_input_used_value(ns_js *js, ns_node *n, const char *s)
 {
@@ -34662,6 +35794,7 @@ ns_js_set_input_used_value(ns_js *js, ns_node *n, const char *s)
     if (js) ns_js_note_layout_unscoped(js, G_STRFUNC);
 }
 
+/* valueAsNumber setter: InvalidStateError for other types; NaN clears the value. */
 static JSValue
 ns_element_set_value_as_number(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -34688,6 +35821,7 @@ ns_element_set_value_as_number(JSContext *ctx, JSValueConst this_val, JSValueCon
     return JS_UNDEFINED;
 }
 
+/* valueAsDate for date, month, week and time inputs, as a new Date or null. */
 static JSValue
 ns_element_get_value_as_date(JSContext *ctx, JSValueConst this_val)
 {
@@ -34710,6 +35844,7 @@ ns_element_get_value_as_date(JSContext *ctx, JSValueConst this_val)
     return date;
 }
 
+/* valueAsDate setter: serializes a Date via getTime(); null or NaN clears the value. */
 static JSValue
 ns_element_set_value_as_date(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -34750,6 +35885,7 @@ ns_element_set_value_as_date(JSContext *ctx, JSValueConst this_val, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* form.enctype reflecting the attribute as a normalized enumerated value. */
 static JSValue
 ns_element_get_form_enctype(JSContext *ctx, JSValueConst this_val)
 {
@@ -34774,6 +35910,7 @@ ns_element_set_form_enctype(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* isConnected: whether the node's root is a (non-fragment) document. */
 static JSValue
 ns_element_get_isConnected(JSContext *ctx, JSValueConst this_val)
 {
@@ -34786,6 +35923,7 @@ ns_element_get_isConnected(JSContext *ctx, JSValueConst this_val)
         ? JS_TRUE : JS_FALSE;
 }
 
+/* baseURI: the document base URL, or about:blank. */
 static JSValue
 ns_element_get_baseURI(JSContext *ctx, JSValueConst this_val)
 {
@@ -34796,6 +35934,7 @@ ns_element_get_baseURI(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, base && *base ? base : "about:blank");
 }
 
+/* requestPointerLock(): records the lock element and fires pointerlockchange. */
 static JSValue
 ns_element_requestPointerLock(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -34812,6 +35951,7 @@ ns_element_requestPointerLock(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* exitPointerLock(): clears the lock and fires pointerlockchange. */
 static JSValue
 ns_document_exitPointerLock(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -34837,6 +35977,7 @@ ns_document_get_pointerLockElement(JSContext *ctx, JSValueConst this_val)
     return JS_NULL;
 }
 
+/* ownerDocument: the node's document wrapper, a frame realm's document, or null. */
 static JSValue
 ns_element_get_ownerDocument(JSContext *ctx, JSValueConst this_val)
 {
@@ -34891,6 +36032,7 @@ ns_element_get_ownerDocument(JSContext *ctx, JSValueConst this_val)
 
 static JSValue ns_element_get_shadowRoot(JSContext *ctx, JSValueConst this_val);
 
+/* attachInternals(): returns a stub ElementInternals with no-op form/validity methods. */
 static JSValue
 ns_element_attachInternals(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -34932,6 +36074,7 @@ ns_element_get_internals(JSContext *ctx, JSValueConst this_val)
     return ns_element_attachInternals(ctx, this_val, 0, NULL);
 }
 
+/* namespaceURI from the stored attribute or flags; XHTML by default. */
 static JSValue
 ns_element_get_namespaceURI(JSContext *ctx, JSValueConst this_val)
 {
@@ -34971,6 +36114,7 @@ ns_input_get_files(JSContext *ctx, JSValueConst this_val)
     return arr;
 }
 
+/* Returns the host's internal shadow-root child node, if any. */
 static ns_node *
 ns_element_find_shadow_child(const ns_node *host)
 {
@@ -34985,6 +36129,7 @@ ns_element_find_shadow_child(const ns_node *host)
 
 static void ns_shadow_root_define_props(JSContext *ctx, JSValueConst wrapper);
 
+/* Whether an element may host a shadow root (custom names or the allowed list). */
 static gboolean
 ns_shadow_host_name_allowed(const ns_node *host)
 {
@@ -35001,6 +36146,7 @@ ns_shadow_host_name_allowed(const ns_node *host)
     return FALSE;
 }
 
+/* Whether the element's custom element class lists "shadow" in disabledFeatures. */
 static gboolean
 ns_shadow_disabled_for_custom_element(JSContext *ctx, const ns_node *host)
 {
@@ -35024,6 +36170,7 @@ ns_shadow_disabled_for_custom_element(JSContext *ctx, const ns_node *host)
     return disabled;
 }
 
+/* attachShadow(): validates mode and host; reuses a matching declarative shadow root. */
 static JSValue
 ns_element_attachShadow(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -35106,6 +36253,7 @@ ns_element_attachShadow(JSContext *ctx, JSValueConst this_val,
     return w;
 }
 
+/* ShadowRoot.host: the shadow root node's parent element. */
 static JSValue
 ns_element_get_shadow_host(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -35116,6 +36264,7 @@ ns_element_get_shadow_host(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, root->parent);
 }
 
+/* ShadowRoot.mode from the stored marker, defaulting to open. */
 static JSValue
 ns_element_get_shadow_mode(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -35127,6 +36276,7 @@ ns_element_get_shadow_mode(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, mode ? mode : "open");
 }
 
+/* ShadowRoot delegatesFocus/serializable/clonable getter selected by magic. */
 static JSValue
 ns_element_get_shadow_flag(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv, int magic)
@@ -35140,6 +36290,7 @@ ns_element_get_shadow_flag(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, ns_element_get_attr(root, attr) != NULL);
 }
 
+/* ShadowRoot.activeElement: the focused node when it lies inside this root. */
 static JSValue
 ns_shadow_root_get_active_element(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
@@ -35155,6 +36306,7 @@ ns_shadow_root_get_active_element(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, js->focused_node);
 }
 
+/* Collects <style> sheets in a tree, not descending into nested shadow roots. */
 static void
 ns_collect_style_sheets(JSContext *ctx, const ns_node *root,
                         const ns_node *node, JSValue list, uint32_t *index,
@@ -35175,6 +36327,7 @@ ns_collect_style_sheets(JSContext *ctx, const ns_node *root,
         ns_collect_style_sheets(ctx, root, c, list, index, depth + 1);
 }
 
+/* Returns the style sheets under a connected root as a new array. */
 static JSValue
 ns_style_sheet_list(JSContext *ctx, const ns_node *root)
 {
@@ -35196,6 +36349,7 @@ ns_shadow_root_get_style_sheets(JSContext *ctx, JSValueConst this_val,
     return ns_style_sheet_list(ctx, ns_unwrap_element(this_val));
 }
 
+/* Defines a read-only boolean shadow-root flag accessor on the wrapper. */
 static void
 ns_shadow_root_define_flag(JSContext *ctx, JSValueConst wrapper,
                            const char *name, int magic)
@@ -35208,6 +36362,7 @@ ns_shadow_root_define_flag(JSContext *ctx, JSValueConst wrapper,
     JS_FreeAtom(ctx, a);
 }
 
+/* Makes a shadow-root node wrapper look like ShadowRoot (prototype and accessors). */
 static void
 ns_shadow_root_define_props(JSContext *ctx, JSValueConst wrapper)
 {
@@ -35251,6 +36406,7 @@ ns_shadow_root_define_props(JSContext *ctx, JSValueConst wrapper)
                ns_document_elements_from_point, 2);
 }
 
+/* shadowRoot: the open shadow root wrapper; null when closed or absent. */
 static JSValue
 ns_element_get_shadowRoot(JSContext *ctx, JSValueConst this_val)
 {
@@ -35265,6 +36421,7 @@ ns_element_get_shadowRoot(JSContext *ctx, JSValueConst this_val)
     return w;
 }
 
+/* Shadow host of the tree containing slot, or NULL outside shadow trees. */
 static const ns_node *
 ns_slot_find_host(const ns_node *slot)
 {
@@ -35275,6 +36432,7 @@ ns_slot_find_host(const ns_node *slot)
     return NULL;
 }
 
+/* Whether n is a slot element. */
 static gboolean
 ns_node_is_slot(const ns_node *n)
 {
@@ -35282,6 +36440,7 @@ ns_node_is_slot(const ns_node *n)
         && g_ascii_strcasecmp(n->name, "slot") == 0;
 }
 
+/* First slot in tree order whose name (default "") equals name, skipping nested roots. */
 static ns_node *
 ns_slot_first_named(ns_node *root, const char *name, int depth)
 {
@@ -35299,6 +36458,7 @@ ns_slot_first_named(ns_node *root, const char *name, int depth)
     return NULL;
 }
 
+/* Finds a slot's assigned nodes: host children whose slot name matches. */
 static void
 ns_slot_collect_direct(GPtrArray *nodes, const ns_node *slot,
                        gboolean elements_only)
@@ -35329,6 +36489,7 @@ ns_slot_collect_direct(GPtrArray *nodes, const ns_node *slot,
     }
 }
 
+/* DOM "find flattened slottables": assigned nodes or fallback, expanding nested slots. */
 static void
 ns_slot_collect_flattened(GPtrArray *nodes, const ns_node *slot,
                           gboolean elements_only, int depth)
@@ -35353,6 +36514,7 @@ ns_slot_collect_flattened(GPtrArray *nodes, const ns_node *slot,
     g_ptr_array_free(direct, TRUE);
 }
 
+/* Nearest shadow-root ancestor-or-self of node. */
 static ns_node *
 ns_slot_root_ancestor(const ns_node *node)
 {
@@ -35361,6 +36523,7 @@ ns_slot_root_ancestor(const ns_node *node)
     return NULL;
 }
 
+/* The slot a host child is assigned to, or NULL. */
 static ns_node *
 ns_node_assigned_slot_node(const ns_node *node)
 {
@@ -35375,6 +36538,7 @@ ns_node_assigned_slot_node(const ns_node *node)
     return ns_slot_first_named(root, name ? name : "", 0);
 }
 
+/* Whether two slot assignment snapshots hold the same nodes in order. */
 static gboolean
 ns_slot_snapshots_equal(const GPtrArray *a, const GPtrArray *b)
 {
@@ -35384,6 +36548,7 @@ ns_slot_snapshots_equal(const GPtrArray *a, const GPtrArray *b)
     return TRUE;
 }
 
+/* Snapshot of a slot's direct and flattened assignments, separated by a marker. */
 static GPtrArray *
 ns_slot_snapshot(ns_node *slot)
 {
@@ -35395,12 +36560,14 @@ ns_slot_snapshot(ns_node *slot)
     return snapshot;
 }
 
+/* Whether a snapshot contains any assigned node beyond the separator. */
 static gboolean
 ns_slot_snapshot_has_content(const GPtrArray *snapshot)
 {
     return snapshot && snapshot->len > 1;
 }
 
+/* Records host-to-shadow-root so child changes on the host trigger reconciliation. */
 static void
 ns_slot_register_root(ns_js *js, ns_node *root)
 {
@@ -35412,6 +36579,7 @@ ns_slot_register_root(ns_js *js, ns_node *root)
     ns_node_arm_js_invalidate(root);
 }
 
+/* Collects slots in a shadow tree, not descending into nested shadow roots. */
 static void
 ns_slot_collect_tree_slots(ns_node *root, ns_node *node,
                            GPtrArray *slots, int depth)
@@ -35424,6 +36592,7 @@ ns_slot_collect_tree_slots(ns_node *root, ns_node *node,
         ns_slot_collect_tree_slots(root, child, slots, depth + 1);
 }
 
+/* Stores a slot's assignment snapshot, replacing (and freeing) the previous one. */
 static void
 ns_slot_store_snapshot(ns_js *js, ns_node *slot, GPtrArray *snapshot)
 {
@@ -35435,6 +36604,7 @@ ns_slot_store_snapshot(ns_js *js, ns_node *slot, GPtrArray *snapshot)
     g_hash_table_replace(js->slot_assignments, slot, snapshot);
 }
 
+/* Re-snapshots a root's slots, recursing into dependent roots; signals changed slots. */
 static void
 ns_slot_reconcile_root_internal(ns_js *js, ns_node *root,
                                 GHashTable *visited)
@@ -35471,6 +36641,7 @@ ns_slot_reconcile_root_internal(ns_js *js, ns_node *root,
     g_ptr_array_free(slots, TRUE);
 }
 
+/* Collects the host's shadow root and every enclosing shadow root of parent. */
 static void
 ns_slot_collect_affected_roots(ns_js *js, ns_node *parent, GPtrArray *roots)
 {
@@ -35488,6 +36659,7 @@ ns_slot_collect_affected_roots(ns_js *js, ns_node *parent, GPtrArray *roots)
     }
 }
 
+/* Re-snapshots tracked slots inside a removed subtree and signals any that changed. */
 static void
 ns_slot_reconcile_removed_subtree(ns_js *js, ns_node *node, int depth)
 {
@@ -35506,6 +36678,7 @@ ns_slot_reconcile_removed_subtree(ns_js *js, ns_node *node, int depth)
         ns_slot_reconcile_removed_subtree(js, child, depth + 1);
 }
 
+/* Whether a removed subtree contains a slot with a stored snapshot. */
 static gboolean
 ns_slot_removed_subtree_is_tracked(ns_js *js, ns_node *node, int depth)
 {
@@ -35520,6 +36693,7 @@ ns_slot_removed_subtree_is_tracked(ns_js *js, ns_node *node, int depth)
     return FALSE;
 }
 
+/* Reconciles slot assignments after a child-list change when shadow trees are involved. */
 static void
 ns_slot_reconcile_changes(ns_js *js, ns_node *parent,
                           GPtrArray *removed, ns_node *removed_one)
@@ -35565,6 +36739,7 @@ ns_slot_reconcile_child_change_arrays(ns_js *js, ns_node *parent,
     ns_slot_reconcile_changes(js, parent, removed, NULL);
 }
 
+/* Reconciles slots when a slot attribute or a slot's name attribute changes. */
 static void
 ns_slot_reconcile_attr_change(ns_js *js, ns_node *target,
                               const char *name, const char *old_value)
@@ -35579,6 +36754,7 @@ ns_slot_reconcile_attr_change(ns_js *js, ns_node *target,
     ns_slot_reconcile_changes(js, target->parent, NULL, NULL);
 }
 
+/* Registers shadow roots and stores initial slot snapshots without signaling. */
 static void
 ns_slot_prime_subtree(ns_js *js, ns_node *node, int depth)
 {
@@ -35598,6 +36774,7 @@ ns_slot_prime_subtree(ns_js *js, ns_node *node, int depth)
         ns_slot_prime_subtree(js, child, depth + 1);
 }
 
+/* Fills arr with a slot's assigned (optionally flattened) nodes or elements. */
 static void
 ns_slot_collect_assigned(JSContext *ctx, JSValue arr, const ns_node *slot,
                          gboolean elements_only, gboolean flatten)
@@ -35613,6 +36790,7 @@ ns_slot_collect_assigned(JSContext *ctx, JSValue arr, const ns_node *slot,
     g_ptr_array_free(nodes, TRUE);
 }
 
+/* Reads the flatten option from an assignedNodes()/assignedElements() dictionary. */
 static gboolean
 ns_slot_options_flatten(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -35623,6 +36801,7 @@ ns_slot_options_flatten(JSContext *ctx, int argc, JSValueConst *argv)
     return flatten;
 }
 
+/* slot.assignedNodes({flatten}). */
 static JSValue
 ns_element_assignedNodes(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -35635,6 +36814,7 @@ ns_element_assignedNodes(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* slot.assignedElements({flatten}). */
 static JSValue
 ns_element_assignedElements(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -35647,6 +36827,7 @@ ns_element_assignedElements(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* assignedSlot: the assigned slot unless it lives in a closed shadow root. */
 static JSValue
 ns_element_get_assignedSlot(JSContext *ctx, JSValueConst this_val)
 {
@@ -35659,6 +36840,7 @@ ns_element_get_assignedSlot(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, found);
 }
 
+/* getRootNode(): enclosing shadow root, or the document root when composed. */
 static JSValue
 ns_element_getRootNode(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -35695,6 +36877,7 @@ ns_element_getRootNode(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, (ns_node *)root);
 }
 
+/* Element namespace URI (empty stored value means none); XHTML by default. */
 static const char *
 ns_node_element_namespace(const ns_node *n)
 {
@@ -35707,6 +36890,7 @@ ns_node_element_namespace(const ns_node *n)
     return "http://www.w3.org/1999/xhtml";
 }
 
+/* Whether n is a script element in the HTML or SVG namespace. */
 static gboolean
 ns_node_is_script_element(const ns_node *n)
 {
@@ -35722,6 +36906,7 @@ ns_node_is_script_element(const ns_node *n)
          strcmp(namespace_uri, "http://www.w3.org/2000/svg") == 0);
 }
 
+/* Element namespace prefix as a new string, or NULL; caller frees. */
 static char *
 ns_node_element_prefix_dup(const ns_node *n)
 {
@@ -35735,6 +36920,7 @@ ns_node_element_prefix_dup(const ns_node *n)
     return NULL;
 }
 
+/* DOM "locate a namespace" for prefix, walking xmlns attributes and ancestors. */
 static const char *
 ns_locate_namespace(const ns_node *node, const char *prefix, int depth)
 {
@@ -35780,6 +36966,7 @@ ns_locate_namespace(const ns_node *node, const char *prefix, int depth)
     }
 }
 
+/* DOM "locate a namespace prefix" for ns; returns a new string or NULL. */
 static char *
 ns_locate_prefix(const ns_node *node, const char *ns, int depth)
 {
@@ -35797,6 +36984,7 @@ ns_locate_prefix(const ns_node *node, const char *ns, int depth)
     return NULL;
 }
 
+/* lookupNamespaceURI(): empty prefix is treated as null. */
 static JSValue
 ns_element_lookupNamespaceURI(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -35814,6 +37002,7 @@ ns_element_lookupNamespaceURI(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* lookupPrefix(): dispatches by node type to locate a namespace prefix. */
 static JSValue
 ns_element_lookupPrefix(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -35841,6 +37030,7 @@ ns_element_lookupPrefix(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* isDefaultNamespace(): compares against the default namespace (empty means null). */
 static JSValue
 ns_element_isDefaultNamespace(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -35859,6 +37049,7 @@ ns_element_isDefaultNamespace(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, eq);
 }
 
+/* getClientRects(): a single bounding rect, or empty when the element has no box. */
 static JSValue
 ns_element_getClientRects(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -35882,6 +37073,7 @@ ns_element_noop_set(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* Whether the element is html, whose scroll offsets are the viewport's. */
 static gboolean
 ns_element_is_scrolling_root(JSValueConst this_val)
 {
@@ -35890,6 +37082,7 @@ ns_element_is_scrolling_root(JSValueConst this_val)
     return TRUE;
 }
 
+/* Viewport scroll X or Y (picked by an X in prop), 0 when non-finite. */
 static double
 ns_window_scroll_prop(JSContext *ctx, const char *prop)
 {
@@ -35916,6 +37109,7 @@ ns_window_get_scroll_y(JSContext *ctx, JSValueConst this_val,
     return JS_NewFloat64(ctx, ns_window_scroll_prop(ctx, "scrollY"));
 }
 
+/* scrollTop: viewport scroll for html, else the box's vertical scroll offset. */
 static JSValue
 ns_element_get_scrollTop(JSContext *ctx, JSValueConst this_val)
 {
@@ -35926,6 +37120,7 @@ ns_element_get_scrollTop(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, b->scroll_y);
 }
 
+/* scrollLeft: viewport scroll for html, else the box's horizontal scroll offset. */
 static JSValue
 ns_element_get_scrollLeft(JSContext *ctx, JSValueConst this_val)
 {
@@ -35936,6 +37131,7 @@ ns_element_get_scrollLeft(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, b->scroll_x);
 }
 
+/* Extends overflow bounds by descendants, skipping fixed and stopping at clippers. */
 static void
 ns_scrollable_overflow_walk(const ns_box *b, double *max_r, double *max_btm,
                             double *min_l, double *min_t, int depth)
@@ -35972,6 +37168,7 @@ ns_scrollable_overflow_walk(const ns_box *b, double *max_r, double *max_btm,
     }
 }
 
+/* Scrollable overflow size of a box incl. in-flow margins and RTL/wrap-reverse flips. */
 static void
 ns_scrollable_overflow_size(const ns_box *b, double *out_w, double *out_h)
 {
@@ -36046,6 +37243,7 @@ ns_scrollable_overflow_size(const ns_box *b, double *out_w, double *out_h)
     *out_h = h > pad_h ? h : legacy_h;
 }
 
+/* scrollHeight: scrollable overflow height; at least the viewport for html/body. */
 static JSValue
 ns_element_get_scrollHeight(JSContext *ctx, JSValueConst this_val)
 {
@@ -36070,6 +37268,7 @@ ns_element_get_scrollHeight(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)(h + 0.5));
 }
 
+/* scrollWidth: scrollable overflow width of the element's box. */
 static JSValue
 ns_element_get_scrollWidth(JSContext *ctx, JSValueConst this_val)
 {
@@ -36081,6 +37280,7 @@ ns_element_get_scrollWidth(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)(w + 0.5));
 }
 
+/* Sets scrollTop/Left: clamps, snaps, repaints and fires scroll plus scrollend. */
 static JSValue
 ns_element_set_scroll_offset(JSContext *ctx, JSValueConst this_val,
                              JSValueConst val, gboolean vertical)
@@ -36132,6 +37332,7 @@ ns_element_set_scrollLeft(JSContext *ctx, JSValueConst this_val, JSValueConst va
     return ns_element_set_scroll_offset(ctx, this_val, val, FALSE);
 }
 
+/* hidden: true, false, or "until-found". */
 static JSValue
 ns_element_get_hidden(JSContext *ctx, JSValueConst this_val)
 {
@@ -36144,6 +37345,7 @@ ns_element_get_hidden(JSContext *ctx, JSValueConst this_val)
     return JS_TRUE;
 }
 
+/* hidden setter: "until-found" kept, empty string or false removes, else sets. */
 static JSValue
 ns_element_set_hidden(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -36171,6 +37373,7 @@ ns_element_set_hidden(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 static ns_node *ns_js_clear_radio_group(ns_js *js, const ns_node *radio);
 static void ns_js_set_checkedness(ns_js *js, ns_node *n, gboolean checked);
 
+/* disabled: style elements use the sheet-disabled flag, others the attribute. */
 static JSValue
 ns_element_get_disabled(JSContext *ctx, JSValueConst this_val)
 {
@@ -36182,6 +37385,7 @@ ns_element_get_disabled(JSContext *ctx, JSValueConst this_val)
     return ns_element_get_attr(el, "disabled") ? JS_TRUE : JS_FALSE;
 }
 
+/* disabled setter: toggles a style sheet or the disabled attribute. */
 static JSValue
 ns_element_set_disabled(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -36210,6 +37414,7 @@ ns_element_get_checked(JSContext *ctx, JSValueConst this_val)
     return ns_input_is_checked(el) ? JS_TRUE : JS_FALSE;
 }
 
+/* checked setter: updates checkedness, unchecking the rest of a radio group. */
 static JSValue
 ns_element_set_checked(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -36235,6 +37440,7 @@ ns_input_is_indeterminate(const ns_node *el)
     return el && (el->flags & NS_NODE_INPUT_INDETERMINATE) != 0;
 }
 
+/* Sets or clears an input's indeterminate flag and restyles. */
 static void
 ns_js_set_indeterminate(ns_js *js, ns_node *el, gboolean indeterminate)
 {
@@ -36265,6 +37471,7 @@ ns_element_set_indeterminate(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Reflects a finite double into an attribute; optionally ignores non-positive values. */
 static JSValue
 ns_element_set_double_attr_limited(JSContext *ctx, ns_node *el,
                                    const char *attr, JSValueConst val,
@@ -36307,6 +37514,7 @@ ns_range_attr_name(int magic)
     return (magic >= 0 && magic < (int)G_N_ELEMENTS(names)) ? names[magic] : "";
 }
 
+/* min/max/low/high/optimum: clamped meter/progress values, else the attribute string. */
 static JSValue
 ns_element_range_number_getter(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -36329,6 +37537,7 @@ ns_element_range_number_getter(JSContext *ctx, JSValueConst this_val, int magic)
     return ns_element_reflect_str_get(ctx, this_val, attr, FALSE);
 }
 
+/* Sets min/max/low/high/optimum as doubles on meter/progress, strings elsewhere. */
 static JSValue
 ns_element_range_number_setter(JSContext *ctx, JSValueConst this_val,
                                JSValueConst val, int magic)
@@ -36344,6 +37553,7 @@ ns_element_range_number_setter(JSContext *ctx, JSValueConst this_val,
     return ns_element_reflect_str_set(ctx, this_val, val, attr);
 }
 
+/* progress.position: the completion fraction from the progress state. */
 static JSValue
 ns_element_get_progress_position(JSContext *ctx, JSValueConst this_val)
 {
@@ -36354,6 +37564,7 @@ ns_element_get_progress_position(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, st.frac);
 }
 
+/* value getter dispatched by element: progress/meter numbers, li, textarea, select, input. */
 static JSValue
 ns_element_get_value_prop(JSContext *ctx, JSValueConst this_val)
 {
@@ -36420,6 +37631,7 @@ ns_element_get_value_prop(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, v ? v : "");
 }
 
+/* Whether selection APIs apply: textarea and text-like input types. */
 static gboolean
 ns_text_selection_applies(const ns_node *el)
 {
@@ -36437,6 +37649,7 @@ ns_text_selection_applies(const ns_node *el)
     return TRUE;
 }
 
+/* Length in UTF-16 units of a text control's current value. */
 static uint32_t
 ns_text_control_value_length(JSContext *ctx, JSValueConst this_val)
 {
@@ -36449,6 +37662,7 @@ ns_text_control_value_length(JSContext *ctx, JSValueConst this_val)
     return length;
 }
 
+/* Stores selection start, end and direction on the control wrapper. */
 static void
 ns_text_selection_set_state(JSContext *ctx, JSValueConst this_val,
                             uint32_t start, uint32_t end,
@@ -36460,6 +37674,7 @@ ns_text_selection_set_state(JSContext *ctx, JSValueConst this_val,
                       JS_NewString(ctx, direction ? direction : "none"));
 }
 
+/* Collapses the selection to the end when a value change altered the value. */
 static void
 ns_text_selection_value_changed(JSContext *ctx, JSValueConst this_val,
                                 JSValueConst old_value)
@@ -36476,6 +37691,7 @@ ns_text_selection_value_changed(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, new_value);
 }
 
+/* label for option (computed label), optgroup and track; undefined otherwise. */
 static JSValue
 ns_element_get_label_prop(JSContext *ctx, JSValueConst this_val)
 {
@@ -36493,6 +37709,7 @@ ns_element_get_label_prop(JSContext *ctx, JSValueConst this_val)
     return JS_UNDEFINED;
 }
 
+/* label setter reflecting the attribute on option, optgroup and track. */
 static JSValue
 ns_element_set_label_prop(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -36505,6 +37722,7 @@ ns_element_set_label_prop(JSContext *ctx, JSValueConst this_val, JSValueConst va
     return ns_element_reflect_str_set(ctx, this_val, val, "label");
 }
 
+/* Copies s without CR and LF characters; caller frees. */
 static char *
 ns_strip_newlines(const char *s)
 {
@@ -36514,6 +37732,7 @@ ns_strip_newlines(const char *s)
     return g_string_free(o, FALSE);
 }
 
+/* HTML email sanitization: strip newlines and trim, per item when multiple. */
 static char *
 ns_sanitize_email_value(const ns_node *el, const char *value)
 {
@@ -36534,6 +37753,7 @@ ns_sanitize_email_value(const ns_node *el, const char *value)
     return g_string_free(out, FALSE);
 }
 
+/* Whether s is a #rrggbb simple color. */
 static gboolean
 ns_is_simple_color(const char *s)
 {
@@ -36543,6 +37763,7 @@ ns_is_simple_color(const char *s)
     return s[7] == '\0';
 }
 
+/* HTML value sanitization algorithm for the input's type; returns a new string. */
 static char *
 ns_input_sanitize_value(const ns_node *el, const char *value)
 {
@@ -36608,6 +37829,7 @@ ns_input_sanitize_value(const ns_node *el, const char *value)
     return out;
 }
 
+/* Re-sanitizes a dirty input value after its type changed. */
 static void
 ns_input_resanitize_value(ns_node *el)
 {
@@ -36628,6 +37850,7 @@ ns_input_resanitize_value(ns_node *el)
     g_free(dup);
 }
 
+/* value setter dispatched by element; sets dirty value and resets selection. */
 static JSValue
 ns_element_set_value_prop(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -36743,6 +37966,7 @@ ns_element_set_value_prop(JSContext *ctx, JSValueConst this_val, JSValueConst va
     return JS_UNDEFINED;
 }
 
+/* selectedIndex: index of the chosen option across optgroups, or -1. */
 static JSValue
 ns_element_get_selectedIndex(JSContext *ctx, JSValueConst this_val)
 {
@@ -36770,6 +37994,7 @@ ns_element_get_selectedIndex(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, -1);
 }
 
+/* selectedIndex setter: selects the option at that index (none if out of range). */
 static JSValue
 ns_element_set_selectedIndex(JSContext *ctx, JSValueConst this_val,
                              JSValueConst val)
@@ -36802,6 +38027,7 @@ ns_element_set_selectedIndex(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Whether el is an input of type image. */
 static gboolean
 ns_node_is_image_input(const ns_node *el)
 {
@@ -36810,6 +38036,7 @@ ns_node_is_image_input(const ns_node *el)
     return t && g_ascii_strcasecmp(t, "image") == 0;
 }
 
+/* Collects listed controls owned by form in tree order, optionally skipping image inputs. */
 static void
 ns_form_collect_controls(const ns_node *form, const ns_node *scan,
                          const ns_node *doc, JSContext *ctx, JSValue arr,
@@ -36829,6 +38056,7 @@ ns_form_collect_controls(const ns_node *form, const ns_node *scan,
     }
 }
 
+/* Collects form-owned controls whose id or name equals name (RadioNodeList). */
 static void
 ns_form_collect_radio_nodes(const ns_node *form, const ns_node *scan,
                             const ns_node *doc, const char *name,
@@ -36851,6 +38079,7 @@ ns_form_collect_radio_nodes(const ns_node *form, const ns_node *scan,
     }
 }
 
+/* Collects listed form controls among a fieldset's descendants. */
 static void
 ns_fieldset_collect_listed(const ns_node *scan, JSContext *ctx, JSValue arr,
                            uint32_t *idx, int depth)
@@ -36867,6 +38096,7 @@ ns_fieldset_collect_listed(const ns_node *scan, JSContext *ctx, JSValue arr,
     }
 }
 
+/* Collects a and area elements with href, skipping embedded documents. */
 static void
 ns_collect_links(const ns_node *n, JSContext *ctx, JSValue arr, uint32_t *idx,
                  int depth)
@@ -36881,6 +38111,7 @@ ns_collect_links(const ns_node *n, JSContext *ctx, JSValue arr, uint32_t *idx,
     }
 }
 
+/* Materializes a live collection's current members into a new array. */
 static JSValue
 ns_live_build(JSContext *ctx, ns_live_back *b)
 {
@@ -36971,6 +38202,7 @@ ns_live_build(JSContext *ctx, ns_live_back *b)
     return arr;
 }
 
+/* Returns the live collection's cached array, rebuilt when the DOM generation changed. */
 static JSValue
 ns_live_snapshot(JSContext *ctx, ns_live_back *b)
 {
@@ -36986,6 +38218,7 @@ ns_live_snapshot(JSContext *ctx, ns_live_back *b)
     return b->cache;
 }
 
+/* Whether s has no ASCII uppercase letters. */
 static gboolean
 ns_is_all_ascii_lower(const char *s)
 {
@@ -36996,6 +38229,7 @@ ns_is_all_ascii_lower(const char *s)
     return TRUE;
 }
 
+/* Named-property lookup on a live collection by id/name (or attribute name). */
 static JSValue
 ns_live_named(JSContext *ctx, ns_live_back *b, JSValueConst snap, uint32_t len,
               const char *name)
@@ -37039,6 +38273,7 @@ ns_live_named(JSContext *ctx, ns_live_back *b, JSValueConst snap, uint32_t len,
 }
 
 static gboolean ns_live_is_supported_index(const char *name, uint32_t len);
+/* Exotic [[GetOwnProperty]] for live collections: indices then named properties. */
 static int
 ns_live_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
                 JSValueConst obj, JSAtom prop)
@@ -37090,6 +38325,7 @@ ns_live_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
     return ret;
 }
 
+/* Exotic own keys: indices, then non-enumerable supported names not on the prototype. */
 static int
 ns_live_get_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
                       JSValueConst obj)
@@ -37209,6 +38445,7 @@ ns_live_get_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
     return 0;
 }
 
+/* Collection.item(): member at index or null. */
 static JSValue
 ns_live_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -37222,6 +38459,7 @@ ns_live_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return JS_GetPropertyUint32(ctx, snap, (uint32_t)idx);
 }
 
+/* Collection.namedItem(): first member matching by id or name, or null. */
 static JSValue
 ns_live_namedItem(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv)
@@ -37237,6 +38475,7 @@ ns_live_namedItem(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_IsUndefined(r) ? JS_NULL : r;
 }
 
+/* Whether name is an array index below the collection length. */
 static gboolean
 ns_live_is_supported_index(const char *name, uint32_t len)
 {
@@ -37246,6 +38485,7 @@ ns_live_is_supported_index(const char *name, uint32_t len)
     return idx < len;
 }
 
+/* Whether name is a canonical array index string (0..2^32-2). */
 static gboolean
 ns_live_is_array_index(const char *name)
 {
@@ -37259,6 +38499,7 @@ ns_live_is_array_index(const char *name)
     return end && *end == '\0' && idx >= 0 && idx <= 4294967294LL;
 }
 
+/* Exotic delete: fails for supported indices and named properties. */
 static int
 ns_live_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
@@ -37279,6 +38520,7 @@ ns_live_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return ret;
 }
 
+/* Exotic define: rejects indices and supported names, else defines normally. */
 static int
 ns_live_define_own_property(JSContext *ctx, JSValueConst this_obj, JSAtom prop,
                             JSValueConst val, JSValueConst getter,
@@ -37311,6 +38553,7 @@ ns_live_define_own_property(JSContext *ctx, JSValueConst this_obj, JSAtom prop,
                              flags | JS_PROP_NO_EXOTIC);
 }
 
+/* length getter of a live collection from its current snapshot. */
 static JSValue
 ns_live_length_get(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -37323,6 +38566,7 @@ ns_live_length_get(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt64(ctx, ns_js_array_length(ctx, snap));
 }
 
+/* Releases the live collection's owner, cached snapshot and parameters. */
 static void
 ns_live_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -37335,6 +38579,7 @@ ns_live_finalizer(JSRuntime *rt, JSValue val)
     g_free(b);
 }
 
+/* Marks the live collection's owner and cached snapshot for the GC. */
 static void
 ns_live_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
@@ -37358,6 +38603,7 @@ static JSClassDef ns_live_class = {
     .exotic     = &ns_live_exotic,
 };
 
+/* 1 for HTMLCollection, 0 for NodeList-like, -1 for attribute maps or non-live. */
 static int
 ns_live_collection_kind(JSValueConst val)
 {
@@ -37376,6 +38622,7 @@ static const JSCFunctionListEntry ns_nodelist_proto_funcs[] = {
     JS_CFUNC_DEF("item",      1, ns_live_item),
 };
 
+/* Creates a live collection of the given kind and params with the right prototype. */
 static JSValue
 ns_make_live2(JSContext *ctx, JSValueConst owner, ns_live_kind kind,
               const char *param, const char *param2)
@@ -37412,6 +38659,7 @@ ns_make_live(JSContext *ctx, JSValueConst owner, ns_live_kind kind,
     return ns_make_live2(ctx, owner, kind, param, NULL);
 }
 
+/* option.index within its select (across optgroups), or -1. */
 static JSValue
 ns_element_get_option_index(JSContext *ctx, JSValueConst this_val)
 {
@@ -37440,6 +38688,7 @@ ns_element_get_option_index(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, -1);
 }
 
+/* select.length: number of options including those in optgroups. */
 static JSValue
 ns_element_get_select_length(JSContext *ctx, JSValueConst this_val)
 {
@@ -37488,6 +38737,7 @@ static const struct {
     [NS_URL_PART_PASSWORD] = { "password", G_STRUCT_OFFSET(ns_url_parts, password) },
 };
 
+/* Returns the URL component string selected by part from parsed URL parts. */
 static const char *
 ns_url_part_of(const ns_url_parts *p, int part)
 {
@@ -37495,6 +38745,7 @@ ns_url_part_of(const ns_url_parts *p, int part)
                                           ns_url_part_fields[part].offset);
 }
 
+/* Whether n is a or area, the elements with HTMLHyperlinkElementUtils. */
 static gboolean
 ns_node_is_url_element(const ns_node *n)
 {
@@ -37502,6 +38753,7 @@ ns_node_is_url_element(const ns_node *n)
     return strcmp(n->name, "a") == 0 || strcmp(n->name, "area") == 0;
 }
 
+/* Document base URL from the first CSP-allowed base href, else the URL; caller frees. */
 static char *
 ns_js_document_base_url(ns_js *js, const ns_node *doc, const char *current_url)
 {
@@ -37532,6 +38784,7 @@ ns_js_document_base_url(ns_js *js, const ns_node *doc, const char *current_url)
     return current_url && *current_url ? g_strdup(current_url) : NULL;
 }
 
+/* Base URL of the current document; caller frees. */
 static char *
 ns_js_doc_base_url(ns_js *js)
 {
@@ -37539,6 +38792,7 @@ ns_js_doc_base_url(ns_js *js)
     return ns_js_document_base_url(js, js->current_doc, js->current_url);
 }
 
+/* characterSet of a non-current document via its wrapper; caller frees. */
 static char *
 ns_js_foreign_document_charset(ns_js *js, const ns_node *root)
 {
@@ -37565,6 +38819,7 @@ ns_js_foreign_document_charset(ns_js *js, const ns_node *root)
     return out;
 }
 
+/* Encoding of the node's document (frame, foreign, or page charset); caller frees. */
 static char *
 ns_js_node_charset(ns_js *js, const ns_node *n)
 {
@@ -37587,6 +38842,7 @@ ns_js_node_charset(ns_js *js, const ns_node *n)
     return g_strdup(js && js->doc_charset ? js->doc_charset : NULL);
 }
 
+/* Resolves href against the base URL using the document encoding; caller frees. */
 static char *
 ns_element_anchor_url(const ns_node *n, ns_js *js)
 {
@@ -37598,6 +38854,7 @@ ns_element_anchor_url(const ns_node *n, ns_js *js)
     return ns_url_resolve_encoded(base && *base ? base : NULL, raw, charset);
 }
 
+/* Resolved href, falling back to the raw attribute; caller frees. */
 static char *
 ns_element_anchor_resolved_href(const ns_node *n, ns_js *js)
 {
@@ -37607,6 +38864,7 @@ ns_element_anchor_resolved_href(const ns_node *n, ns_js *js)
     return raw ? g_strdup(raw) : NULL;
 }
 
+/* HTMLHyperlinkElementUtils getters (href, protocol, host, ...) selected by magic. */
 static JSValue
 ns_element_anchor_part_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -37648,6 +38906,7 @@ ns_element_anchor_href_set(JSContext *ctx, JSValueConst this_val,
     return ns_element_reflect_str_set(ctx, this_val, val, "href");
 }
 
+/* Sets one URL component of a/area href; other elements get a plain own property. */
 static JSValue
 ns_element_url_part_set(JSContext *ctx, JSValueConst this_val,
                         JSValueConst val, int magic)
@@ -37677,6 +38936,7 @@ ns_element_url_part_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* input.list setter: only custom elements accept an own value. */
 static JSValue
 ns_element_list_set(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -37687,6 +38947,7 @@ ns_element_list_set(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* input.list: the datalist referenced by the list attribute, or null. */
 static JSValue
 ns_element_get_list_ref(JSContext *ctx, JSValueConst this_val)
 {
@@ -37704,6 +38965,7 @@ ns_element_get_list_ref(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, found);
 }
 
+/* template.content: cached fragment wrapper; meta content attribute otherwise. */
 static JSValue
 ns_element_template_content(JSContext *ctx, JSValueConst this_val)
 {
@@ -37725,6 +38987,7 @@ ns_element_template_content(JSContext *ctx, JSValueConst this_val)
     return ns_element_reflect_str_get(ctx, this_val, "content", FALSE);
 }
 
+/* content setter: ignored for template, reflects the attribute elsewhere. */
 static JSValue
 ns_element_set_content(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -37733,6 +38996,7 @@ ns_element_set_content(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return ns_element_reflect_str_set(ctx, this_val, val, "content");
 }
 
+/* Index of attr in the integer-reflection table, or -1. */
 static int
 ns_int_attr_index(const char *attr)
 {
@@ -37757,6 +39021,7 @@ ns_element_set_rows(JSContext *ctx, JSValueConst this_val, JSValueConst val)
                                       ns_int_attr_index("rows"));
 }
 
+/* table.rows in thead, body, tfoot order; textarea/frameset reflect rows instead. */
 static JSValue
 ns_element_table_rows(JSContext *ctx, JSValueConst this_val)
 {
@@ -37791,6 +39056,7 @@ ns_element_table_rows(JSContext *ctx, JSValueConst this_val)
     return arr;
 }
 
+/* First child of a table with the given tag, or null. */
 static JSValue
 ns_element_table_section(JSContext *ctx, JSValueConst this_val, const char *tag)
 {
@@ -37814,6 +39080,7 @@ static JSValue
 ns_element_table_tfoot(JSContext *ctx, JSValueConst this_val)
 { return ns_element_table_section(ctx, this_val, "tfoot"); }
 
+/* table.tBodies: tbody children as an array. */
 static JSValue
 ns_element_table_tbodies(JSContext *ctx, JSValueConst this_val)
 {
@@ -37827,6 +39094,7 @@ ns_element_table_tbodies(JSContext *ctx, JSValueConst this_val)
     return arr;
 }
 
+/* tr.cells: td and th children as an array. */
 static JSValue
 ns_element_tr_cells(JSContext *ctx, JSValueConst this_val)
 {
@@ -37847,6 +39115,7 @@ ns_element_get_form_elements(JSContext *ctx, JSValueConst this_val)
     return ns_make_live(ctx, this_val, NS_LIVE_FORM_ELEMENTS, NULL);
 }
 
+/* form owner of a control, or of a label's associated control. */
 static JSValue
 ns_element_get_form(JSContext *ctx, JSValueConst this_val)
 {
@@ -37860,6 +39129,7 @@ ns_element_get_form(JSContext *ctx, JSValueConst this_val)
     return form ? ns_make_element(ctx, form) : JS_NULL;
 }
 
+/* item() for array-backed lists: element at index or null. */
 static JSValue
 ns_array_item(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -37873,6 +39143,7 @@ ns_array_item(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* namedItem() for array-backed lists: first entry matching id or name. */
 static JSValue
 ns_array_namedItem(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -37902,6 +39173,7 @@ ns_array_namedItem(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* Whether el is an input of type radio. */
 static gboolean
 ns_node_is_radio_input(const ns_node *el)
 {
@@ -37910,6 +39182,7 @@ ns_node_is_radio_input(const ns_node *el)
     return type && g_ascii_strcasecmp(type, "radio") == 0;
 }
 
+/* RadioNodeList.value: value of the checked radio ("on" default), or "". */
 static JSValue
 ns_radio_node_list_get_value(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -37931,6 +39204,7 @@ ns_radio_node_list_get_value(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, "");
 }
 
+/* RadioNodeList.value setter: checks the first radio with that value. */
 static JSValue
 ns_radio_node_list_set_value(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -37967,6 +39241,7 @@ ns_radio_node_list_set_value(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* form.elements named lookup: single control, or a cached RadioNodeList when several. */
 static JSValue
 ns_form_elements_named_lookup(JSContext *ctx, JSValueConst this_val,
                               const char *name)
@@ -38026,6 +39301,7 @@ ns_form_elements_named_lookup(JSContext *ctx, JSValueConst this_val,
     return first;
 }
 
+/* Snapshot of a form's listed controls, cached per DOM generation. */
 static JSValue
 ns_form_controls(JSContext *ctx, JSValueConst form, const ns_node *form_node)
 {
@@ -38041,6 +39317,7 @@ ns_form_controls(JSContext *ctx, JSValueConst form, const ns_node *form_node)
     return controls;
 }
 
+/* Adds key to the name index, marking duplicates with true. */
 static void
 ns_form_name_index_add(JSContext *ctx, JSValue index, const char *key,
                        JSValueConst control)
@@ -38054,6 +39331,7 @@ ns_form_name_index_add(JSContext *ctx, JSValue index, const char *key,
     JS_FreeAtom(ctx, atom);
 }
 
+/* Builds (and caches) a map from control id/name to control or duplicate marker. */
 static JSValue
 ns_form_name_index(JSContext *ctx, JSValueConst form, const ns_node *form_node)
 {
@@ -38080,6 +39358,7 @@ ns_form_name_index(JSContext *ctx, JSValueConst form, const ns_node *form_node)
     return index;
 }
 
+/* Resolves a form's named control, building a RadioNodeList for duplicates. */
 static JSValue
 ns_form_named_control(JSContext *ctx, JSValueConst form,
                       const ns_node *form_node, const char *name)
@@ -38098,6 +39377,7 @@ ns_form_named_control(JSContext *ctx, JSValueConst form,
     return several;
 }
 
+/* Exotic [[GetOwnProperty]] for form: indexed controls, names, then past names map. */
 static int
 ns_element_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
                          JSValueConst obj, JSAtom prop)
@@ -38183,6 +39463,7 @@ ns_element_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
     return 1;
 }
 
+/* Exotic delete for form: fails for properties backed by named or indexed controls. */
 static int
 ns_element_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
@@ -38205,6 +39486,7 @@ ns_element_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return 1;
 }
 
+/* Exotic define for form: throws when shadowing a named control, else defines. */
 static int
 ns_element_define_own_property(JSContext *ctx, JSValueConst this_obj, JSAtom prop,
                                JSValueConst val, JSValueConst getter,
@@ -38231,6 +39513,7 @@ ns_element_define_own_property(JSContext *ctx, JSValueConst this_obj, JSAtom pro
                              flags | JS_PROP_NO_EXOTIC);
 }
 
+/* options.selectedIndex: forwards to the owning select. */
 static JSValue
 ns_options_get_selectedIndex(JSContext *ctx, JSValueConst this_val)
 {
@@ -38240,6 +39523,7 @@ ns_options_get_selectedIndex(JSContext *ctx, JSValueConst this_val)
     return r;
 }
 
+/* options.selectedIndex setter: forwards to the owning select. */
 static JSValue
 ns_options_set_selectedIndex(JSContext *ctx, JSValueConst this_val,
                              JSValueConst val)
@@ -38250,6 +39534,7 @@ ns_options_set_selectedIndex(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* select.options: snapshot of options (incl. optgroups) with item/namedItem. */
 static JSValue
 ns_element_get_options(JSContext *ctx, JSValueConst this_val)
 {
@@ -38285,6 +39570,7 @@ bind:
     return arr;
 }
 
+/* selectedOptions: the chosen option, or every selected one for multiple. */
 static JSValue
 ns_element_get_selectedOptions(JSContext *ctx, JSValueConst this_val)
 {
@@ -38317,6 +39603,7 @@ typedef struct {
     JSValue element;
 } ns_dataset_back;
 
+/* Releases the DOMStringMap's reference to its element. */
 static void
 ns_dataset_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -38326,6 +39613,7 @@ ns_dataset_finalizer(JSRuntime *rt, JSValue val)
     g_free(b);
 }
 
+/* Marks the DOMStringMap's element for the GC. */
 static void
 ns_dataset_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
@@ -38333,6 +39621,7 @@ ns_dataset_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     if (b) JS_MarkValue(rt, b->element, mark_func);
 }
 
+/* Returns the element backing a DOMStringMap. */
 static ns_node *
 ns_dataset_node(JSValueConst obj)
 {
@@ -38340,6 +39629,7 @@ ns_dataset_node(JSValueConst obj)
     return b ? ns_unwrap_element_mut(b->element) : NULL;
 }
 
+/* Whether s contains an ASCII uppercase letter. */
 static gboolean
 ns_data_tail_has_upper(const char *s)
 {
@@ -38349,6 +39639,7 @@ ns_data_tail_has_upper(const char *s)
     return FALSE;
 }
 
+/* Maps a data-* attribute name to its camelCase dataset key; NULL if not exposed. */
 static char *
 ns_dataset_attr_to_prop(const char *name)
 {
@@ -38367,6 +39658,7 @@ ns_dataset_attr_to_prop(const char *name)
     return g_string_free(out, FALSE);
 }
 
+/* Maps a dataset key to its data-* attribute name, validating; may throw. */
 static char *
 ns_dataset_prop_to_attr(JSContext *ctx, const char *prop, gboolean throw_err)
 {
@@ -38398,6 +39690,7 @@ ns_dataset_prop_to_attr(JSContext *ctx, const char *prop, gboolean throw_err)
     return attr;
 }
 
+/* DOMStringMap [[GetOwnProperty]]: value of the matching data-* attribute. */
 static int
 ns_dataset_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
                    JSValueConst obj, JSAtom prop)
@@ -38430,6 +39723,7 @@ ns_dataset_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
     return 1;
 }
 
+/* DOMStringMap own keys: camelCased names of exposed data-* attributes. */
 static int
 ns_dataset_get_own_names(JSContext *ctx, JSPropertyEnum **ptab,
                          uint32_t *plen, JSValueConst obj)
@@ -38459,6 +39753,7 @@ ns_dataset_get_own_names(JSContext *ctx, JSPropertyEnum **ptab,
     return 0;
 }
 
+/* DOMStringMap [[Set]]: writes the data-* attribute; throws on invalid names. */
 static int
 ns_dataset_set_property(JSContext *ctx, JSValueConst obj, JSAtom prop,
                         JSValueConst val, JSValueConst receiver, int flags)
@@ -38484,6 +39779,7 @@ ns_dataset_set_property(JSContext *ctx, JSValueConst obj, JSAtom prop,
     return TRUE;
 }
 
+/* DOMStringMap [[Delete]]: removes the matching data-* attribute. */
 static int
 ns_dataset_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
@@ -38514,6 +39810,7 @@ static JSClassDef ns_dataset_class = {
     .exotic     = &ns_dataset_exotic,
 };
 
+/* Whether the element exposes dataset: HTML, SVG and MathML elements. */
 static gboolean
 ns_element_has_dataset(const ns_node *el)
 {
@@ -38524,6 +39821,7 @@ ns_element_has_dataset(const ns_node *el)
     return ns && strcmp(ns, "http://www.w3.org/1998/Math/MathML") == 0;
 }
 
+/* dataset: a new DOMStringMap bound to the element, or undefined. */
 static JSValue
 ns_element_get_dataset(JSContext *ctx, JSValueConst this_val)
 {
@@ -38537,6 +39835,7 @@ ns_element_get_dataset(JSContext *ctx, JSValueConst this_val)
     return ds;
 }
 
+/* Parses tabindex into out (0 if malformed); FALSE when absent. */
 static gboolean
 ns_node_tabindex(const ns_node *el, int *out)
 {
@@ -38549,6 +39848,7 @@ ns_node_tabindex(const ns_node *el, int *out)
     return TRUE;
 }
 
+/* Whether an element is focusable: not disabled/inert/hidden, by tag or tabindex. */
 gboolean
 ns_node_is_focusable(const ns_node *el)
 {
@@ -38575,6 +39875,7 @@ ns_node_is_focusable(const ns_node *el)
     return FALSE;
 }
 
+/* Fires a composed, non-cancelable focus-family event with relatedTarget. */
 static void
 ns_js_dispatch_focus_event(ns_js *js, const ns_node *target,
                            const ns_node *related, const char *type,
@@ -38590,6 +39891,7 @@ ns_js_dispatch_focus_event(ns_js *js, const ns_node *target,
     ns_js_dispatch_built_event(js, target, type, event, NULL);
 }
 
+/* Whether an element takes text input (textarea, text inputs, contenteditable). */
 static gboolean
 ns_node_accepts_text_entry(const ns_node *el)
 {
@@ -38608,6 +39910,7 @@ ns_node_accepts_text_entry(const ns_node *el)
     return ce && g_ascii_strcasecmp(ce, "false") != 0;
 }
 
+/* Updates :focus-visible: keyboard focus, or pointer focus on text-entry controls. */
 static void
 ns_js_update_focus_visible(ns_js *js)
 {
@@ -38617,12 +39920,14 @@ ns_js_update_focus_visible(ns_js *js)
     ns_css_set_focus_visible_node(visible ? el : NULL);
 }
 
+/* Records whether the last input was a pointer, for :focus-visible. */
 void
 ns_js_note_pointer_input(ns_js *js, gboolean pointer)
 {
     if (js) js->pointer_input = pointer;
 }
 
+/* Moves focus: blur/focusout on the old node, then focus/focusin on the new one. */
 void
 ns_js_set_focus(ns_js *js, const ns_node *el)
 {
@@ -38658,6 +39963,7 @@ ns_js_set_focus(ns_js *js, const ns_node *el)
     JS_FreeValue(js->ctx, old_ref);
 }
 
+/* Sets the focused node without firing focus events. */
 void
 ns_js_set_focused_node(ns_js *js, const ns_node *el)
 {
@@ -38667,6 +39973,7 @@ ns_js_set_focused_node(ns_js *js, const ns_node *el)
     ns_js_note_layout_unscoped(js, G_STRFUNC);
 }
 
+/* Focuses the nearest focusable ancestor of a click; else sets the nav start point. */
 void
 ns_js_focus_from_pointer(ns_js *js, const ns_node *target)
 {
@@ -38692,6 +39999,7 @@ typedef struct focus_candidate {
     guint          order;
 } focus_candidate;
 
+/* Collects tabbable elements in tree order with their tabindex. */
 static void
 collect_focus_candidates(const ns_node *root, GArray *out, guint *order,
                          int depth)
@@ -38710,6 +40018,7 @@ collect_focus_candidates(const ns_node *root, GArray *out, guint *order,
     }
 }
 
+/* Counts tabbable elements preceding target in tree order; TRUE if found. */
 static gboolean
 focus_candidates_before(const ns_node *root, const ns_node *target,
                         guint *count, int depth)
@@ -38727,6 +40036,7 @@ focus_candidates_before(const ns_node *root, const ns_node *target,
     return FALSE;
 }
 
+/* Index of the next/previous tabindex-0 candidate relative to a start node. */
 static int
 focus_index_from_start(const ns_node *scope, const ns_node *start,
                        GArray *cands, gboolean backward)
@@ -38744,6 +40054,7 @@ focus_index_from_start(const ns_node *scope, const ns_node *start,
     return found;
 }
 
+/* Sequential focus order: positive tabindex ascending, then zero, by tree order. */
 static int
 focus_candidate_cmp(gconstpointer a, gconstpointer b)
 {
@@ -38754,6 +40065,7 @@ focus_candidate_cmp(gconstpointer a, gconstpointer b)
     return x->order < y->order ? -1 : (x->order > y->order ? 1 : 0);
 }
 
+/* Whether root is node or one of its ancestors. */
 static gboolean
 node_reaches_root(const ns_node *root, const ns_node *node)
 {
@@ -38762,6 +40074,7 @@ node_reaches_root(const ns_node *root, const ns_node *node)
     return FALSE;
 }
 
+/* Focus navigation scope: the active modal dialog, else the document. */
 static const ns_node *
 ns_js_focus_scope(ns_js *js)
 {
@@ -38771,6 +40084,7 @@ ns_js_focus_scope(ns_js *js)
     return js->current_doc;
 }
 
+/* Next or previous element in sequential focus navigation order, wrapping. */
 const ns_node *
 ns_js_sequential_focus_target(ns_js *js, gboolean backward)
 {
@@ -38803,6 +40117,7 @@ ns_js_sequential_focus_target(ns_js *js, gboolean backward)
     return target;
 }
 
+/* focus(): focuses a focusable, non-inert element; body clears focus. */
 static JSValue
 ns_element_focus(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -38822,6 +40137,7 @@ ns_element_focus(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* blur(): clears focus when this element is focused. */
 static JSValue
 ns_element_blur(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -38835,6 +40151,7 @@ ns_element_blur(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* scrollIntoView(): asks the host to scroll the element into view. */
 static JSValue
 ns_element_scrollIntoView(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -38847,6 +40164,7 @@ ns_element_scrollIntoView(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* checkVisibility(): has a box, optionally not hidden by visibility or opacity. */
 static JSValue
 ns_element_checkVisibility(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -38876,6 +40194,7 @@ ns_element_checkVisibility(JSContext *ctx, JSValueConst this_val,
     return visible ? JS_TRUE : JS_FALSE;
 }
 
+/* Index of a pointer id in the element's capture array, or -1. */
 static int
 ns_pointer_capture_index(JSContext *ctx, JSValueConst set, int32_t id)
 {
@@ -38891,6 +40210,7 @@ ns_pointer_capture_index(JSContext *ctx, JSValueConst set, int32_t id)
     return -1;
 }
 
+/* setPointerCapture(): records the pointer id on the element. */
 static JSValue
 ns_element_setPointerCapture(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -38912,6 +40232,7 @@ ns_element_setPointerCapture(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* hasPointerCapture(): whether the pointer id is recorded. */
 static JSValue
 ns_element_hasPointerCapture(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -38925,6 +40246,7 @@ ns_element_hasPointerCapture(JSContext *ctx, JSValueConst this_val,
     return found ? JS_TRUE : JS_FALSE;
 }
 
+/* releasePointerCapture(): removes the pointer id. */
 static JSValue
 ns_element_releasePointerCapture(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -38957,6 +40279,7 @@ ns_dialog_store_return_value(JSContext *ctx, JSValueConst wrapper, const char *r
         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* dialog.returnValue from the stored slot, defaulting to "". */
 static JSValue
 ns_dialog_get_returnValue(JSContext *ctx, JSValueConst this_val)
 {
@@ -38975,6 +40298,7 @@ ns_dialog_set_returnValue(JSContext *ctx, JSValueConst this_val, JSValueConst va
     return JS_UNDEFINED;
 }
 
+/* Closes other open details sharing the name (exclusive accordion), firing toggles. */
 static void
 ns_details_close_others_in_group(ns_js *js, ns_node *opened, const char *name)
 {
@@ -39004,6 +40328,7 @@ ns_details_close_others_in_group(ns_js *js, ns_node *opened, const char *name)
     }
 }
 
+/* Fires beforetoggle/toggle for details; opening closes others in its name group. */
 void
 ns_js_details_toggle_open(ns_js *js, ns_node *details, gboolean open)
 {
@@ -39020,6 +40345,7 @@ ns_js_details_toggle_open(ns_js *js, ns_node *details, gboolean open)
                                 old_state, new_state, FALSE, NULL);
 }
 
+/* The details element toggled by activating el, if el is in its first summary. */
 static ns_node *
 ns_summary_toggle_target(const ns_node *el)
 {
@@ -39035,6 +40361,7 @@ ns_summary_toggle_target(const ns_node *el)
     return NULL;
 }
 
+/* Toggles details open when a summary is activated; FALSE if el is no summary. */
 gboolean
 ns_js_activate_summary(ns_js *js, const ns_node *el)
 {
@@ -39093,6 +40420,7 @@ typedef struct {
     ns_node    *target;
 } ns_attr_element_ref;
 
+/* Maps a popover attribute value to auto, hint or manual (invalid means manual). */
 static ns_popover_type
 ns_popover_type_of_value(const char *v)
 {
@@ -39102,6 +40430,7 @@ ns_popover_type_of_value(const char *v)
     return NS_POPOVER_MANUAL;
 }
 
+/* Whether el is an element in the HTML namespace. */
 static gboolean
 ns_node_is_html_element(const ns_node *el)
 {
@@ -39109,6 +40438,7 @@ ns_node_is_html_element(const ns_node *el)
            !(el->flags & (NS_NODE_SVG_NS | NS_NODE_FOREIGN_NS));
 }
 
+/* Popover type of an HTML element from its popover attribute. */
 static ns_popover_type
 ns_popover_type_of(const ns_node *el)
 {
@@ -39116,12 +40446,14 @@ ns_popover_type_of(const ns_node *el)
     return ns_popover_type_of_value(ns_element_get_attr(el, "popover"));
 }
 
+/* Whether a popover is in the showing state. */
 static gboolean
 ns_popover_is_showing(const ns_node *el)
 {
     return el && ns_element_get_attr(el, "data-nd-popover-open") != NULL;
 }
 
+/* Sets the internal popover-open state and restyles, relayouts and repaints. */
 static void
 ns_popover_set_showing(ns_js *js, ns_node *el, gboolean showing)
 {
@@ -39133,6 +40465,7 @@ ns_popover_set_showing(ns_js *js, ns_node *el, gboolean showing)
     if (js->repaint_cb) js->repaint_cb(js->repaint_user_data);
 }
 
+/* Whether the node's root is a non-fragment document. */
 static gboolean
 ns_node_is_connected(const ns_node *n)
 {
@@ -39141,6 +40474,7 @@ ns_node_is_connected(const ns_node *n)
            !(root->flags & NS_NODE_FRAGMENT);
 }
 
+/* Whether the node is connected to the current document. */
 static gboolean
 ns_node_in_active_document(ns_js *js, const ns_node *n)
 {
@@ -39148,6 +40482,7 @@ ns_node_in_active_document(ns_js *js, const ns_node *n)
            ns_node_root(n) == ns_node_root(js->current_doc);
 }
 
+/* Parent in the flat tree: assigned slot, else parent, skipping shadow roots. */
 static ns_node *
 ns_node_flat_parent(const ns_node *n)
 {
@@ -39159,6 +40494,7 @@ ns_node_flat_parent(const ns_node *n)
     return p;
 }
 
+/* Whether node is ancestor or a flat-tree descendant of it. */
 static gboolean
 ns_node_is_flat_inclusive_descendant_of(const ns_node *node,
                                         const ns_node *ancestor)
@@ -39170,6 +40506,7 @@ ns_node_is_flat_inclusive_descendant_of(const ns_node *node,
     return FALSE;
 }
 
+/* Root of the node's tree, stopping at shadow roots and frame documents. */
 static const ns_node *
 ns_node_tree_root(const ns_node *n)
 {
@@ -39181,6 +40518,7 @@ ns_node_tree_root(const ns_node *n)
     return n;
 }
 
+/* Frees per-element popover/dialog state, cancelling pending toggle timers. */
 static void
 ns_popover_info_free(gpointer data)
 {
@@ -39202,6 +40540,7 @@ ns_popover_info_lookup(ns_js *js, const ns_node *el)
     return g_hash_table_lookup(js->popover_info, el);
 }
 
+/* Returns per-element popover/dialog state, creating it on first use. */
 static ns_popover_info *
 ns_popover_info_get(ns_js *js, ns_node *el)
 {
@@ -39221,6 +40560,7 @@ ns_popover_info_get(ns_js *js, ns_node *el)
 static void ns_close_watcher_add(ns_js *js, ns_node *el);
 static void ns_close_watcher_remove(ns_js *js, const ns_node *el);
 
+/* Arms invalidation on a node held by popover state and returns it. */
 static ns_node *
 ns_popover_note(ns_node *n)
 {
@@ -39228,6 +40568,7 @@ ns_popover_note(ns_node *n)
     return n;
 }
 
+/* Purges every popover, dialog and focus reference to a node being freed. */
 static void
 ns_popover_forget_node(ns_js *js, ns_node *n)
 {
@@ -39267,6 +40608,7 @@ ns_popover_forget_node(ns_js *js, ns_node *n)
     }
 }
 
+/* Drops all popover, dialog, close-watcher and attr-element state. */
 static void
 ns_popover_state_clear(ns_js *js)
 {
@@ -39284,6 +40626,7 @@ ns_popover_state_clear(ns_js *js)
     js->popover_hiding_count = 0;
 }
 
+/* Finds an explicitly set attr-associated element for (owner, attr). */
 static ns_attr_element_ref *
 ns_attr_element_ref_find(ns_js *js, const ns_node *owner, const char *attr,
                          guint *index)
@@ -39300,6 +40643,7 @@ ns_attr_element_ref_find(ns_js *js, const ns_node *owner, const char *attr,
     return NULL;
 }
 
+/* Sets or clears an explicitly set attr-associated element. */
 static void
 ns_attr_element_set_explicit(ns_js *js, ns_node *owner, const char *attr,
                              ns_node *target)
@@ -39323,6 +40667,7 @@ ns_attr_element_set_explicit(ns_js *js, ns_node *owner, const char *attr,
     g_array_append_val(js->attr_element_refs, nr);
 }
 
+/* Reflected element: explicit target if in scope, else element by id in the tree. */
 static ns_node *
 ns_attr_associated_element(ns_js *js, const ns_node *el, const char *attr)
 {
@@ -39342,6 +40687,7 @@ ns_attr_associated_element(ns_js *js, const ns_node *el, const char *attr)
     return hit && hit->kind == NS_NODE_ELEMENT ? hit : NULL;
 }
 
+/* Element-reflecting attribute getter (e.g. popoverTargetElement). */
 static JSValue
 ns_attr_element_get(JSContext *ctx, JSValueConst this_val, const char *attr)
 {
@@ -39350,6 +40696,7 @@ ns_attr_element_get(JSContext *ctx, JSValueConst this_val, const char *attr)
     return t ? ns_make_element(ctx, t) : JS_NULL;
 }
 
+/* Element-reflecting attribute setter: sets an explicit target or clears it. */
 static JSValue
 ns_attr_element_set(JSContext *ctx, JSValueConst this_val, JSValueConst val,
                     const char *attr)
@@ -39373,6 +40720,7 @@ ns_attr_element_set(JSContext *ctx, JSValueConst this_val, JSValueConst val,
 
 static gboolean ns_dialog_is_modal(JSContext *ctx, ns_node *dialog);
 
+/* HTML "check popover validity": type, expected state, connectedness, modal dialog. */
 static int
 ns_popover_validity(ns_js *js, const ns_node *el, gboolean expect_showing,
                     const ns_node *expected_doc)
@@ -39392,6 +40740,7 @@ ns_popover_validity(ns_js *js, const ns_node *el, gboolean expect_showing,
     return NS_POPOVER_VALID;
 }
 
+/* Throws the DOMException for a popover validity failure. */
 static JSValue
 ns_popover_throw(JSContext *ctx, int result)
 {
@@ -39406,6 +40755,7 @@ ns_popover_throw(JSContext *ctx, int result)
     return JS_UNDEFINED;
 }
 
+/* Returns the auto or hint popover stack, creating it. */
 static GPtrArray *
 ns_popover_list(ns_js *js, gboolean hint)
 {
@@ -39420,6 +40770,7 @@ ns_popover_list_has(const GPtrArray *list, const ns_node *el, guint *index)
     return list && g_ptr_array_find((GPtrArray *)list, el, index);
 }
 
+/* Which stack (auto or hint) a showing popover is in, or none. */
 static ns_popover_type
 ns_popover_opened_mode(ns_js *js, const ns_node *el)
 {
@@ -39428,6 +40779,7 @@ ns_popover_opened_mode(ns_js *js, const ns_node *el)
     return NS_POPOVER_NONE;
 }
 
+/* Topmost open hint popover, else topmost auto popover. */
 static ns_node *
 ns_popover_topmost_auto_or_hint(ns_js *js)
 {
@@ -39438,6 +40790,7 @@ ns_popover_topmost_auto_or_hint(ns_js *js)
     return NULL;
 }
 
+/* Timer callback firing a coalesced popover or dialog toggle event. */
 static JSValue
 ns_toggle_task_fn(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv, int magic, JSValueConst *data)
@@ -39458,6 +40811,7 @@ ns_toggle_task_fn(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* Queues a toggle event task, coalescing with a pending one (keeps old state). */
 static void
 ns_queue_toggle_task(ns_js *js, ns_node *el, gboolean dialog,
                      gboolean old_open, gboolean new_open, ns_node *source)
@@ -39487,6 +40841,7 @@ ns_queue_toggle_task(ns_js *js, ns_node *el, gboolean dialog,
     tt->source = source ? ns_popover_note(source) : NULL;
 }
 
+/* Focuses el if connected, focusable, enabled and not inert. */
 static void
 ns_js_run_focusing_steps(ns_js *js, const ns_node *el)
 {
@@ -39499,6 +40854,7 @@ ns_js_run_focusing_steps(ns_js *js, const ns_node *el)
 
 static gboolean ns_node_hides_focus_subtree(const ns_node *n);
 
+/* First focusable autofocus descendant, skipping shadow roots and hidden subtrees. */
 static const ns_node *
 ns_autofocus_delegate(const ns_node *root, int depth)
 {
@@ -39518,6 +40874,7 @@ ns_autofocus_delegate(const ns_node *root, int depth)
 
 static void ns_dialog_focusing_steps(ns_js *js, ns_node *dialog);
 
+/* Popover focusing steps: dialog rules or the autofocus delegate. */
 static void
 ns_popover_focusing_steps(ns_js *js, ns_node *el)
 {
@@ -39532,6 +40889,7 @@ ns_popover_focusing_steps(ns_js *js, ns_node *el)
     js->autofocus_processed = TRUE;
 }
 
+/* Whether the URL fragment names an element in the current document. */
 static gboolean
 ns_js_url_targets_element(ns_js *js)
 {
@@ -39543,6 +40901,7 @@ ns_js_url_targets_element(ns_js *js)
     return hit;
 }
 
+/* Runs autofocus once, unless focus exists or the URL targets an element. */
 static void
 ns_js_flush_autofocus(ns_js *js)
 {
@@ -39561,6 +40920,7 @@ ns_js_flush_autofocus(ns_js *js)
     if (js->ready_state >= 2) js->autofocus_processed = TRUE;
 }
 
+/* Topmost open popover that contains node or the invoking source. */
 static ns_node *
 ns_popover_topmost_ancestor(ns_js *js, const ns_node *node,
                             const ns_node *source)
@@ -39581,6 +40941,7 @@ ns_popover_topmost_ancestor(ns_js *js, const ns_node *node,
 static int ns_popover_hide(ns_js *js, ns_node *el, gboolean focus_prev,
                            gboolean fire, ns_node *source);
 
+/* Hides popovers above endpoint in the auto or hint stack, then any stragglers. */
 static void
 ns_popover_hide_stack_until(ns_js *js, const ns_node *endpoint, gboolean hint,
                             gboolean focus_prev, gboolean fire)
@@ -39616,6 +40977,7 @@ ns_popover_hide_stack_until(ns_js *js, const ns_node *endpoint, gboolean hint,
     g_ptr_array_free(remain, TRUE);
 }
 
+/* Hides hint popovers then auto popovers down to the endpoint. */
 static void
 ns_popover_hide_until(ns_js *js, const ns_node *endpoint, gboolean focus_prev,
                       gboolean fire)
@@ -39628,6 +40990,7 @@ ns_popover_hide_until(ns_js *js, const ns_node *endpoint, gboolean focus_prev,
     ns_popover_hide_stack_until(js, auto_endpoint, FALSE, focus_prev, fire);
 }
 
+/* HTML "hide popover algorithm": closes descendants, fires events, restores focus. */
 static int
 ns_popover_hide_steps(ns_js *js, ns_node *el, gboolean focus_prev,
                       gboolean fire, ns_node *source)
@@ -39686,6 +41049,7 @@ ns_popover_hide_steps(ns_js *js, ns_node *el, gboolean focus_prev,
     return result;
 }
 
+/* Runs the hide-popover steps while holding a wrapper reference to el. */
 static int
 ns_popover_hide(ns_js *js, ns_node *el, gboolean focus_prev, gboolean fire,
                 ns_node *source)
@@ -39696,6 +41060,7 @@ ns_popover_hide(ns_js *js, ns_node *el, gboolean focus_prev, gboolean fire,
     return result;
 }
 
+/* HTML "show popover": beforetoggle, closes unrelated popovers, pushes onto stack. */
 static int
 ns_popover_show_steps(ns_js *js, ns_node *el, ns_node *source)
 {
@@ -39767,6 +41132,7 @@ ns_popover_show_steps(ns_js *js, ns_node *el, ns_node *source)
     return NS_POPOVER_VALID;
 }
 
+/* Runs the show-popover steps while holding a wrapper reference to el. */
 static int
 ns_popover_show(ns_js *js, ns_node *el, ns_node *source)
 {
@@ -39776,6 +41142,7 @@ ns_popover_show(ns_js *js, ns_node *el, ns_node *source)
     return result;
 }
 
+/* Reads the source option of showPopover/togglePopover; must be an HTMLElement. */
 static int
 ns_popover_source_option(JSContext *ctx, JSValueConst options, ns_node **out)
 {
@@ -39795,6 +41162,7 @@ ns_popover_source_option(JSContext *ctx, JSValueConst options, ns_node **out)
     return 0;
 }
 
+/* showPopover(): shows the popover, throwing on validity failures. */
 static JSValue
 ns_element_showPopover(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -39807,6 +41175,7 @@ ns_element_showPopover(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return ns_popover_throw(ctx, ns_popover_show(js, el, source));
 }
 
+/* hidePopover(): hides the popover, restoring focus. */
 static JSValue
 ns_element_hidePopover(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -39817,6 +41186,7 @@ ns_element_hidePopover(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return ns_popover_throw(ctx, ns_popover_hide(js, el, TRUE, TRUE, NULL));
 }
 
+/* togglePopover(force): toggles or forces state; returns whether it is showing. */
 static JSValue
 ns_element_togglePopover(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -39847,6 +41217,7 @@ ns_element_togglePopover(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return JS_NewBool(ctx, ns_popover_is_showing(el));
 }
 
+/* popover IDL attribute: auto, manual, hint or null. */
 static JSValue
 ns_element_get_popover(JSContext *ctx, JSValueConst this_val)
 {
@@ -39858,6 +41229,7 @@ ns_element_get_popover(JSContext *ctx, JSValueConst this_val)
     }
 }
 
+/* popover setter: null removes the attribute, else reflects the string. */
 static JSValue
 ns_element_set_popover(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -39889,6 +41261,7 @@ ns_element_set_popoverTargetElement(JSContext *ctx, JSValueConst this_val,
     return ns_attr_element_set(ctx, this_val, val, "popovertarget");
 }
 
+/* Whether el is a button or a button-type input (submit/reset/image/button). */
 static gboolean
 ns_node_is_button(const ns_node *el)
 {
@@ -39903,6 +41276,7 @@ ns_node_is_button(const ns_node *el)
 
 static const ns_node *ns_js_form_owner_for(const ns_node *el, ns_js *js);
 
+/* Popover named by popovertarget on an enabled, non-submitting button; else NULL. */
 static ns_node *
 ns_popover_target_element(ns_js *js, const ns_node *node)
 {
@@ -39914,6 +41288,7 @@ ns_popover_target_element(ns_js *js, const ns_node *node)
     return ns_popover_type_of(target) == NS_POPOVER_NONE ? NULL : target;
 }
 
+/* Popover target attribute activation: shows/hides/toggles per popovertargetaction. */
 static void
 ns_popover_target_activation(ns_js *js, ns_node *node, const ns_node *event_target)
 {
@@ -39933,6 +41308,7 @@ ns_popover_target_activation(ns_js *js, ns_node *node, const ns_node *event_targ
         ns_popover_show(js, popover, node);
 }
 
+/* Nearest flat-tree inclusive ancestor that is a showing popover, or NULL. */
 static ns_node *
 ns_popover_nearest_open(ns_js *js, const ns_node *node)
 {
@@ -39947,6 +41323,7 @@ ns_popover_nearest_open(ns_js *js, const ns_node *node)
 
 static ns_node *ns_button_target_popover(ns_js *js, const ns_node *node);
 
+/* Nearest flat-tree ancestor whose invoker targets a showing auto/hint popover. */
 static ns_node *
 ns_popover_nearest_target(ns_js *js, const ns_node *node)
 {
@@ -39964,6 +41341,7 @@ ns_popover_nearest_target(ns_js *js, const ns_node *node)
     return NULL;
 }
 
+/* 1-based position of el across the auto then hint popover stacks; 0 if absent. */
 static guint
 ns_popover_stack_position(ns_js *js, const ns_node *el)
 {
@@ -39976,6 +41354,7 @@ ns_popover_stack_position(ns_js *js, const ns_node *el)
     return 0;
 }
 
+/* Topmost clicked popover: higher-stacked of the nearest open and nearest invoked one. */
 static ns_node *
 ns_popover_topmost_clicked(ns_js *js, const ns_node *node)
 {
@@ -39985,6 +41364,7 @@ ns_popover_topmost_clicked(ns_js *js, const ns_node *node)
            ns_popover_stack_position(js, target) ? clicked : target;
 }
 
+/* Popover light dismiss: notes clicked popover on pointerdown, hides above it on match. */
 static void
 ns_js_popover_light_dismiss(ns_js *js, const ns_node *target, gboolean up)
 {
@@ -40003,6 +41383,7 @@ ns_js_popover_light_dismiss(ns_js *js, const ns_node *target, gboolean up)
 
 static void ns_dialog_removing_steps(ns_js *js, ns_node *dialog);
 
+/* Removing steps for popovers/dialogs: hides a showing popover without firing events. */
 static void
 ns_popover_removing_steps(ns_js *js, ns_node *el)
 {
@@ -40016,6 +41397,7 @@ ns_popover_removing_steps(ns_js *js, ns_node *el)
 static void ns_dialog_setup(ns_js *js, ns_node *dialog);
 static void ns_dialog_cleanup(ns_js *js, ns_node *dialog);
 
+/* Attribute-change hook for popover, dialog open, script src, invoker target and type attrs. */
 static void
 ns_popover_attr_changed(ns_js *js, ns_node *el, const char *attr,
                         const char *old_value, const char *new_value)
@@ -40062,6 +41444,7 @@ ns_dialog_is_modal(JSContext *ctx, ns_node *dialog)
     return pi && pi->dialog_modal;
 }
 
+/* Sets the dialog modal flag and mirrors it to data-nd-modal for styling; marks restyle. */
 static void
 ns_dialog_set_modal(ns_js *js, ns_node *dialog, gboolean modal)
 {
@@ -40075,6 +41458,7 @@ ns_dialog_set_modal(ns_js *js, ns_node *dialog, gboolean modal)
     ns_js_note_layout_unscoped(js, G_STRFUNC);
 }
 
+/* Recomputes the active modal as the last open modal dialog in the current document. */
 static void
 ns_js_refresh_top_layer(ns_js *js)
 {
@@ -40091,6 +41475,7 @@ ns_js_refresh_top_layer(ns_js *js)
     ns_dom_set_active_modal(modal);
 }
 
+/* TRUE for subtrees skipped in focus search: hidden, template, closed dialog or popover. */
 static gboolean
 ns_node_hides_focus_subtree(const ns_node *n)
 {
@@ -40102,6 +41487,7 @@ ns_node_hides_focus_subtree(const ns_node *n)
     return ns_popover_type_of(n) != NS_POPOVER_NONE && !ns_popover_is_showing(n);
 }
 
+/* Focusable, not inert, and without a negative tabindex. */
 static gboolean
 ns_node_is_sequentially_focusable(const ns_node *n)
 {
@@ -40111,6 +41497,7 @@ ns_node_is_sequentially_focusable(const ns_node *n)
            !(has_ti && ti < 0);
 }
 
+/* Depth-first search for the first sequentially focusable descendant, skipping hidden ones. */
 static const ns_node *
 ns_first_sequentially_focusable(const ns_node *root, int depth)
 {
@@ -40125,6 +41512,7 @@ ns_first_sequentially_focusable(const ns_node *root, int depth)
     return NULL;
 }
 
+/* Dialog focusing steps: focuses autofocus delegate, first focusable, or the dialog itself. */
 static void
 ns_dialog_focusing_steps(ns_js *js, ns_node *dialog)
 {
@@ -40159,6 +41547,7 @@ ns_close_watcher_remove(ns_js *js, const ns_node *el)
     if (js->close_watchers) g_ptr_array_remove(js->close_watchers, (gpointer)el);
 }
 
+/* Adds open dialogs missing from the close-watcher stack at its bottom, in tree order. */
 static void
 ns_dialog_sync_open_dialogs(ns_js *js)
 {
@@ -40183,6 +41572,7 @@ typedef enum {
     NS_CLOSEDBY_NONE,
 } ns_closedby;
 
+/* Computed closedby state; missing/invalid means closerequest for modals, none otherwise. */
 static ns_closedby
 ns_dialog_closedby(JSContext *ctx, ns_node *dialog)
 {
@@ -40210,6 +41600,7 @@ ns_dialog_set_closedBy(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return ns_element_reflect_str_set(ctx, this_val, val, "closedby");
 }
 
+/* Whether the dialog's close watcher may act: requestClose pending or closedby is not none. */
 static gboolean
 ns_dialog_close_watcher_enabled(ns_js *js, ns_node *dialog)
 {
@@ -40230,6 +41621,7 @@ ns_dialog_cleanup(ns_js *js, ns_node *dialog)
     ns_close_watcher_remove(js, dialog);
 }
 
+/* Task callback firing a non-bubbling, non-cancelable event at the bound element. */
 static JSValue
 ns_queued_event_task_fn(JSContext *ctx, JSValueConst this_val, int argc,
                         JSValueConst *argv, int magic, JSValueConst *data)
@@ -40248,6 +41640,7 @@ ns_queued_event_task_fn(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* Queues a simple event named type at el as a zero-delay timer task. */
 static void
 ns_queue_event_task(ns_js *js, ns_node *el, const char *type)
 {
@@ -40263,6 +41656,7 @@ ns_queue_event_task(ns_js *js, ns_node *el, const char *type)
     JS_FreeValue(ctx, id);
 }
 
+/* Fires a non-bubbling event at el; returns TRUE only if cancelable and canceled. */
 static gboolean
 ns_js_fire_simple_event(ns_js *js, ns_node *el, const char *type,
                         gboolean cancelable)
@@ -40277,6 +41671,7 @@ ns_js_fire_simple_event(ns_js *js, ns_node *el, const char *type,
     return cancelable && prevented;
 }
 
+/* Close-the-dialog steps: beforetoggle, drop open/modal, returnValue, focus, queue close. */
 static void
 ns_dialog_close_steps(ns_js *js, ns_node *dialog, const char *result,
                       ns_node *source)
@@ -40314,6 +41709,7 @@ ns_dialog_close_steps(ns_js *js, ns_node *dialog, const char *result,
     ns_js_note_layout_unscoped(js, G_STRFUNC);
 }
 
+/* Runs close steps on a copy of result, holding a wrapper so the dialog survives handlers. */
 static void
 ns_dialog_close(ns_js *js, ns_node *dialog, const char *result,
                 ns_node *source)
@@ -40325,6 +41721,7 @@ ns_dialog_close(ns_js *js, ns_node *dialog, const char *result,
     JS_FreeValue(js->ctx, hold);
 }
 
+/* Close-watcher request close: fires cancel and closes unless prevented; returns !prevented. */
 static gboolean
 ns_dialog_request_close_watcher(ns_js *js, ns_node *dialog,
                                 gboolean can_prevent)
@@ -40353,6 +41750,7 @@ ns_dialog_request_close_watcher(ns_js *js, ns_node *dialog,
     return !prevented;
 }
 
+/* dialog.requestClose() steps: stores pending return value and source, then requests close. */
 static void
 ns_dialog_request_close(ns_js *js, ns_node *dialog, const char *rv,
                         ns_node *source)
@@ -40370,6 +41768,7 @@ ns_dialog_request_close(ns_js *js, ns_node *dialog, const char *rv,
     if (pi) pi->dialog_enable_request_close = FALSE;
 }
 
+/* showModal() steps: validates state, fires beforetoggle, opens in top layer, runs focusing. */
 static JSValue
 ns_dialog_show_modal(ns_js *js, ns_node *dialog, ns_node *source)
 {
@@ -40410,6 +41809,7 @@ ns_dialog_show_modal(ns_js *js, ns_node *dialog, ns_node *source)
     return JS_UNDEFINED;
 }
 
+/* HTMLDialogElement.show(): opens non-modally after a cancelable beforetoggle, then focuses. */
 static JSValue
 ns_element_show(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -40453,6 +41853,7 @@ ns_element_showModal(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Returns a new copy of argv[0] as a string, or NULL when absent/undefined; caller frees. */
 static char *
 ns_dialog_optional_string(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -40491,6 +41892,7 @@ ns_element_requestClose(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Nearest flat-tree inclusive ancestor that is an open dialog. */
 static ns_node *
 ns_dialog_nearest_clicked(const ns_node *target)
 {
@@ -40502,6 +41904,7 @@ ns_dialog_nearest_clicked(const ns_node *target)
     return NULL;
 }
 
+/* Topmost dialog in the close-watcher stack, or NULL. */
 static ns_node *
 ns_dialog_topmost_open(ns_js *js)
 {
@@ -40512,6 +41915,7 @@ ns_dialog_topmost_open(ns_js *js)
     return NULL;
 }
 
+/* Light dismiss for closedby=any: requests close of the topmost dialog on outside click. */
 static void
 ns_js_dialog_light_dismiss(ns_js *js, const ns_node *target, gboolean up)
 {
@@ -40531,6 +41935,7 @@ ns_js_dialog_light_dismiss(ns_js *js, const ns_node *target, gboolean up)
     ns_dialog_request_close_watcher(js, topmost, FALSE);
 }
 
+/* Dialog removing steps: drops it from close watchers and modal list, clears modal flag. */
 static void
 ns_dialog_removing_steps(ns_js *js, ns_node *dialog)
 {
@@ -40541,6 +41946,7 @@ ns_dialog_removing_steps(ns_js *js, ns_node *dialog)
     if (pi) ns_dialog_set_modal(js, dialog, FALSE);
 }
 
+/* Handles a user close request (Esc) on the topmost close watcher; TRUE if consumed. */
 gboolean
 ns_js_process_close_request(ns_js *js)
 {
@@ -40586,6 +41992,7 @@ static const char *const kw_commands[] = {
     [NS_COMMAND_SHOW_MODAL]     = "show-modal",
 };
 
+/* Parses a command attribute: "--" prefix is custom, else case-insensitive keyword match. */
 static ns_command_kind
 ns_command_kind_of(const char *v)
 {
@@ -40604,6 +42011,7 @@ ns_command_is_popover(ns_command_kind cmd)
            cmd == NS_COMMAND_HIDE_POPOVER;
 }
 
+/* Whether cmd applies to target: custom always, popover commands on HTML, others on dialog. */
 static gboolean
 ns_command_is_valid(ns_command_kind cmd, const ns_node *target)
 {
@@ -40614,6 +42022,7 @@ ns_command_is_valid(ns_command_kind cmd, const ns_node *target)
     return ns_node_is_element_named(target, "dialog");
 }
 
+/* command IDL getter: canonical keyword, custom value verbatim, or "" when unknown. */
 static JSValue
 ns_button_get_command(JSContext *ctx, JSValueConst this_val)
 {
@@ -40666,6 +42075,7 @@ ns_button_type_is_auto(const ns_node *el)
            !ns_button_type_is(el, "button");
 }
 
+/* Popover a button targets via commandfor or popovertarget; NULL if form-bound. */
 static ns_node *
 ns_button_target_popover(ns_js *js, const ns_node *node)
 {
@@ -40682,6 +42092,7 @@ ns_button_target_popover(ns_js *js, const ns_node *node)
     return ns_popover_type_of(target) == NS_POPOVER_NONE ? NULL : target;
 }
 
+/* Dispatches a cancelable, composed CommandEvent at target; returns FALSE if canceled. */
 static gboolean
 ns_js_fire_command_event(ns_js *js, ns_node *target, const char *command,
                          const ns_node *source)
@@ -40701,6 +42112,7 @@ ns_js_fire_command_event(ns_js *js, ns_node *target, const char *command,
     return !prevented;
 }
 
+/* Applies close/request-close/show-modal commands to a dialog using the button's value. */
 static void
 ns_dialog_command_steps(ns_js *js, ns_node *dialog, ns_node *source,
                         ns_command_kind cmd)
@@ -40720,6 +42132,7 @@ ns_dialog_command_steps(ns_js *js, ns_node *dialog, ns_node *source,
     g_free(value);
 }
 
+/* Invoker command steps: fires command event, then runs the built-in popover/dialog action. */
 static void
 ns_button_run_command(ns_js *js, ns_node *button, ns_node *target)
 {
@@ -40754,6 +42167,7 @@ static JSValue ns_js_request_submit_form(JSContext *ctx, const ns_node *form,
                                          const ns_node *submitter);
 static JSValue ns_js_reset_form(JSContext *ctx, ns_node *form);
 
+/* Button activation: submit/reset its form owner, else run commandfor or popovertarget. */
 static void
 ns_button_activation(ns_js *js, ns_node *button, const ns_node *event_target)
 {
@@ -40778,6 +42192,7 @@ ns_button_activation(ns_js *js, ns_node *button, const ns_node *event_target)
         ns_popover_target_activation(js, button, event_target);
 }
 
+/* TRUE for form control elements (button, input, select, ...) that are effectively disabled. */
 static gboolean
 ns_node_is_disabled_form_control(const ns_node *el)
 {
@@ -40789,6 +42204,7 @@ ns_node_is_disabled_form_control(const ns_node *el)
            ns_element_effectively_disabled(el);
 }
 
+/* Handles method=dialog submission by closing the ancestor dialog; TRUE if handled. */
 static gboolean
 ns_maybe_close_dialog_form(JSContext *ctx, const ns_node *form,
                            const ns_node *submitter)
@@ -40810,6 +42226,7 @@ ns_maybe_close_dialog_form(JSContext *ctx, const ns_node *form,
     return TRUE;
 }
 
+/* TRUE for submit buttons (incl. auto type without command) and input submit/image. */
 static gboolean
 ns_node_is_submit_trigger(const ns_node *el)
 {
@@ -40842,6 +42259,7 @@ ns_form_submission_skips_validation(const ns_node *form,
     return FALSE;
 }
 
+/* Interactive validation: fires invalid at the first invalid control; FALSE blocks submit. */
 static gboolean
 ns_js_form_validation_allows_submit(JSContext *ctx, const ns_node *form,
                                     const ns_node *submitter)
@@ -40864,6 +42282,7 @@ ns_js_form_submission_allowed(ns_js *js, const ns_node *form,
     return ns_js_form_validation_allows_submit(js->ctx, form, submitter);
 }
 
+/* Form submission: validate, fire submit, method=dialog, sandbox check, submit callback. */
 static JSValue
 ns_js_request_submit_form(JSContext *ctx, const ns_node *form,
                           const ns_node *submitter)
@@ -40902,6 +42321,7 @@ ns_node_is_reset_trigger(const ns_node *el)
            g_ascii_strcasecmp(el->name, "input")  == 0;
 }
 
+/* Restores dirty <output> elements owned by form to their saved default text. */
 static void
 ns_js_reset_owned_outputs(ns_js *js, ns_node *form, ns_node *scan,
                           const ns_node *doc, int depth)
@@ -40923,6 +42343,7 @@ ns_js_reset_owned_outputs(ns_js *js, ns_node *form, ns_node *scan,
         ns_js_reset_owned_outputs(js, form, c, doc, depth + 1);
 }
 
+/* Form reset: fires cancelable reset, then resets owned controls and outputs. */
 static JSValue
 ns_js_reset_form(JSContext *ctx, ns_node *form)
 {
@@ -40959,6 +42380,7 @@ ns_js_form_owner_for(const ns_node *el, ns_js *js)
     return ns_form_owner(el, doc);
 }
 
+/* Unchecks other radios of the same name and form owner; returns the one that was checked. */
 static ns_node *
 ns_js_clear_radio_group(ns_js *js, const ns_node *radio)
 {
@@ -40991,6 +42413,7 @@ ns_js_clear_radio_group(ns_js *js, const ns_node *radio)
     return checked;
 }
 
+/* Records an input's checkedness in the data-nd-checked attribute. */
 static void
 ns_js_set_checkedness(ns_js *js, ns_node *n, gboolean checked)
 {
@@ -41005,6 +42428,7 @@ ns_node_owner_iframe(const ns_node *n)
     return NULL;
 }
 
+/* Navigates the enclosing iframe's window to href via its location; TRUE if done. */
 static gboolean
 ns_iframe_follow_href(JSContext *ctx, const ns_node *el, const char *href)
 {
@@ -41025,6 +42449,7 @@ ns_iframe_follow_href(JSContext *ctx, const ns_node *el, const char *href)
     return followed;
 }
 
+/* Returns 1 for checkbox inputs, 2 for radio inputs, 0 otherwise. */
 static int
 ns_checkable_input_kind(const ns_node *el)
 {
@@ -41035,6 +42460,7 @@ ns_checkable_input_kind(const ns_node *el)
     return 0;
 }
 
+/* Legacy-pre-activation: toggles a checkbox or checks a radio, saving prior state. */
 static void
 ns_checkable_pre_click(ns_js *js, ns_node *el, int kind,
                        ns_js_click_state *state)
@@ -41052,6 +42478,7 @@ ns_checkable_pre_click(ns_js *js, ns_node *el, int kind,
     }
 }
 
+/* Restores state if the click was canceled; otherwise fires input and change when connected. */
 static void
 ns_checkable_post_click(ns_js *js, ns_node *el, int kind,
                         const ns_js_click_state *state,
@@ -41085,6 +42512,7 @@ ns_checkable_post_click(ns_js *js, ns_node *el, int kind,
     ns_js_dispatch_event(js, el, "change", &ch_prevented);
 }
 
+/* HTML interactive content test, used to suppress label activation forwarding. */
 static gboolean
 ns_node_is_interactive_content(const ns_node *el)
 {
@@ -41111,6 +42539,7 @@ ns_node_is_interactive_content(const ns_node *el)
            ns_node_is_element_named(el, "textarea");
 }
 
+/* TRUE for elements with activation behavior: links, inputs, buttons, labels, summary. */
 static gboolean
 ns_node_has_activation_behavior(const ns_node *cur)
 {
@@ -41128,6 +42557,7 @@ ns_node_has_activation_behavior(const ns_node *cur)
            ns_summary_toggle_target(cur) != NULL;
 }
 
+/* Nearest inclusive ancestor of el that has activation behavior, or NULL. */
 static const ns_node *
 ns_click_activation_target(const ns_node *el)
 {
@@ -41136,6 +42566,7 @@ ns_click_activation_target(const ns_node *el)
     return NULL;
 }
 
+/* Label activation: forwards to its labeled control unless interactive content was hit. */
 static void
 ns_js_activate_label(ns_js *js, const ns_node *label, const ns_node *target)
 {
@@ -41147,6 +42578,7 @@ ns_js_activate_label(ns_js *js, const ns_node *label, const ns_node *target)
     ns_js_activate_element(js, control);
 }
 
+/* Same-document fragment navigation: updates URL, notifies, fires hashchange; else FALSE. */
 static gboolean
 ns_js_anchor_fragment_navigate(ns_js *js, const char *abs_url)
 {
@@ -41178,6 +42610,7 @@ ns_js_anchor_fragment_navigate(ns_js *js, const char *abs_url)
     return TRUE;
 }
 
+/* Runs activation behavior: summary, label, links (javascript:, download, nav), controls. */
 static JSValue
 ns_element_activation_behavior(JSContext *ctx, const ns_node *act,
                                const ns_node *target)
@@ -41264,6 +42697,7 @@ ns_element_activation_behavior(JSContext *ctx, const ns_node *act,
     return JS_UNDEFINED;
 }
 
+/* Fires a click with legacy pre-activation and runs activation behavior unless canceled. */
 static void
 ns_js_click_with_activation(ns_js *js, const ns_node *el)
 {
@@ -41291,6 +42725,7 @@ ns_js_click_with_activation(ns_js *js, const ns_node *el)
     ns_element_activation_behavior(js->ctx, act, el);
 }
 
+/* HTMLElement.click(): untrusted synthetic click, guarded against per-element reentrancy. */
 static JSValue
 ns_element_click(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -41315,6 +42750,7 @@ ns_js_activate_element(ns_js *js, const ns_node *el)
     ns_js_click_with_activation(js, el);
 }
 
+/* Activates el on Enter keydown (link, button, summary) or Space keyup (button, checkable). */
 gboolean
 ns_js_keyboard_activate(ns_js *js, const ns_node *el, const char *key,
                         gboolean keyup)
@@ -41340,6 +42776,7 @@ ns_js_keyboard_activate(ns_js *js, const ns_node *el, const char *key,
     return TRUE;
 }
 
+/* Whether Space would activate el (button, checkbox/radio or toggling summary). */
 gboolean
 ns_js_keyboard_activates(const ns_node *el, const char *key)
 {
@@ -41348,6 +42785,7 @@ ns_js_keyboard_activates(const ns_node *el, const char *key)
            ns_summary_toggle_target(el) != NULL;
 }
 
+/* Starts a native click: applies checkbox/radio pre-activation, saving state for click_end. */
 void
 ns_js_click_begin(ns_js *js, const ns_node *node, ns_js_click_state *state)
 {
@@ -41365,6 +42803,7 @@ ns_js_click_begin(ns_js *js, const ns_node *node, ns_js_click_state *state)
     ns_checkable_pre_click(js, (ns_node *)act, kind, state);
 }
 
+/* Finishes a native click: checkable post-activation or label activation; TRUE if handled. */
 gboolean
 ns_js_click_end(ns_js *js, const ns_node *node, const ns_js_click_state *state,
                 gboolean prevented)
@@ -41388,6 +42827,7 @@ ns_js_click_end(ns_js *js, const ns_node *node, const ns_js_click_state *state,
     return TRUE;
 }
 
+/* Selects option in its select and fires input and change; FALSE if disabled or orphaned. */
 gboolean
 ns_js_select_choose_option(ns_js *js, ns_node *option)
 {
@@ -41406,6 +42846,7 @@ ns_js_select_choose_option(ns_js *js, ns_node *option)
     return TRUE;
 }
 
+/* Toggles an option's selectedness and fires input and change on its select. */
 gboolean
 ns_js_select_toggle_option(ns_js *js, ns_node *option)
 {
@@ -41424,6 +42865,7 @@ ns_js_select_toggle_option(ns_js *js, ns_node *option)
     return TRUE;
 }
 
+/* Index of the last selected option in opts, else of the chosen option; -1 if none. */
 static int
 ns_select_current_index(ns_node *select, GPtrArray *opts)
 {
@@ -41440,6 +42882,7 @@ ns_select_current_index(ns_node *select, GPtrArray *opts)
     return cur;
 }
 
+/* Selects the next/previous enabled option in direction dir, without wrapping. */
 gboolean
 ns_js_select_step(ns_js *js, ns_node *select, int dir)
 {
@@ -41464,6 +42907,7 @@ ns_js_select_step(ns_js *js, ns_node *select, int dir)
     return done;
 }
 
+/* Selects the first (or last) enabled option of a select. */
 gboolean
 ns_js_select_edge(ns_js *js, ns_node *select, gboolean last)
 {
@@ -41483,6 +42927,7 @@ ns_js_select_edge(ns_js *js, ns_node *select, gboolean last)
     return done;
 }
 
+/* Selects the next enabled option after the current whose label starts with key. */
 gboolean
 ns_js_select_typeahead(ns_js *js, ns_node *select, const char *key)
 {
@@ -41513,6 +42958,7 @@ ns_js_select_typeahead(ns_js *js, ns_node *select, const char *key)
     return done;
 }
 
+/* form.requestSubmit(): validates the submitter, then runs full form submission. */
 static JSValue
 ns_element_form_requestSubmit(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -41535,6 +42981,7 @@ ns_element_form_requestSubmit(JSContext *ctx, JSValueConst this_val,
     return ns_js_request_submit_form(ctx, form, submitter);
 }
 
+/* form.submit(): submits without validation or submit event; honors method=dialog, sandbox. */
 static JSValue
 ns_element_form_submit(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -41598,6 +43045,7 @@ typedef struct ns_js_image_load {
     guint      ready_idle;
 } ns_js_image_load;
 
+/* URL of the nearest enclosing frame's document (data-nd-frame-url), else the page URL. */
 static const char *
 ns_js_node_doc_base(ns_js *js, const ns_node *el)
 {
@@ -41623,6 +43071,7 @@ ns_js_node_frame(const ns_node *node)
     return NULL;
 }
 
+/* JS realm of the frame containing node, or NULL when not in a frame with a realm. */
 static JSContext *
 ns_js_node_realm_context(ns_js *js, const ns_node *node)
 {
@@ -41648,6 +43097,7 @@ ns_js_handler_realm(ns_js *js, const ns_node *n)
         ? g_hash_table_lookup(js->frame_contexts, frame) : NULL;
 }
 
+/* Base URL of node's owner document, falling back to frame/page URL; caller frees. */
 static char *
 ns_js_node_document_base_url(ns_js *js, const ns_node *node)
 {
@@ -41662,6 +43112,7 @@ ns_js_node_document_base_url(ns_js *js, const ns_node *node)
     return ns_js_document_base_url(js, doc, fallback);
 }
 
+/* Restarts loads for imgs whose src now resolves to a different URL than requested. */
 static void
 ns_js_rescan_subtree_images(ns_js *js, ns_node *root, int depth)
 {
@@ -41686,6 +43137,7 @@ ns_js_rescan_subtree_images(ns_js *js, ns_node *root, int depth)
         ns_js_rescan_subtree_images(js, c, depth + 1);
 }
 
+/* Fires pending load/error events for tracked imgs whose image finished but has not fired. */
 static void
 ns_js_flush_ready_images(ns_js *js)
 {
@@ -41726,6 +43178,7 @@ ns_js_image_load_free(gpointer data)
     g_free(r);
 }
 
+/* Idle task for a finished image: restarts if src changed, else records timing, fires load. */
 static gboolean
 ns_js_image_ready_idle(gpointer data)
 {
@@ -41776,6 +43229,7 @@ ns_js_image_ready_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Image cache callback: stores the image and schedules ns_js_image_ready_idle once. */
 static void
 ns_js_on_image_ready(ns_image *img, gpointer user_data)
 {
@@ -41789,6 +43243,7 @@ ns_js_on_image_ready(ns_image *img, gpointer user_data)
         r->ready_idle = ns_engine_idle_add(ns_js_image_ready_idle, r);
 }
 
+/* Idle task firing the error event for an image load blocked by fetch policy. */
 static gboolean
 ns_js_image_refused_idle(gpointer data)
 {
@@ -41802,6 +43257,7 @@ ns_js_image_refused_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Starts (or restarts) an img load: resolves src, checks fetch policy, queries the cache. */
 static void
 ns_js_start_image_load(ns_js *js, ns_node *el, const char *src)
 {
@@ -41845,6 +43301,7 @@ ns_js_start_image_load(ns_js *js, ns_node *el, const char *src)
         r->ready_idle = ns_engine_idle_add(ns_js_image_ready_idle, r);
 }
 
+/* Image for an element: tracked JS load, cached image by resolved src, or layout box media. */
 const ns_image *
 ns_js_image_for_node(ns_js *js, const ns_node *el)
 {
@@ -41875,6 +43332,7 @@ ns_js_image_for_node(ns_js *js, const ns_node *el)
     return NULL;
 }
 
+/* Fast path: TRUE if b begins with a's http(s) scheme and authority up to a delimiter. */
 static gboolean
 ns_js_urls_share_http_authority(const char *a, const char *b)
 {
@@ -41887,6 +43345,7 @@ ns_js_urls_share_http_authority(const char *a, const char *b)
            (b[n] == '\0' || b[n] == '/' || b[n] == '?' || b[n] == '#');
 }
 
+/* Same-origin test; file: never matches, other non-http schemes compare scheme only. */
 static gboolean
 ns_js_urls_same_origin(const char *a, const char *b)
 {
@@ -41902,6 +43361,7 @@ ns_js_urls_same_origin(const char *a, const char *b)
            g_ascii_strncasecmp(a, b, (gsize)(ca - a)) == 0;
 }
 
+/* URL of the document that requested im for el, falling back to the frame/page URL. */
 static const char *
 ns_js_image_client_url(ns_js *js, const ns_node *el, const ns_image *im)
 {
@@ -41911,6 +43371,7 @@ ns_js_image_client_url(ns_js *js, const ns_node *el, const ns_image *im)
     return ns_js_node_doc_base(js, el);
 }
 
+/* Whether im is origin-clean for el: data/blob, same origin, or CORS-allowed if requested. */
 gboolean
 ns_js_image_origin_clean(ns_js *js, const ns_node *el, const ns_image *im,
                          gboolean cors_requested)
@@ -41932,6 +43393,7 @@ ns_arg_d(JSContext *ctx, JSValueConst v)
     double d = 0; JS_ToFloat64(ctx, &d, v); return d;
 }
 
+/* canvas.toDataURL(): PNG data URL of the surface; SecurityError if the canvas is tainted. */
 static JSValue
 ns_element_toDataURL(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -41960,6 +43422,7 @@ ns_element_toDataURL(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* canvas.toBlob(): synchronously calls back with a PNG Blob, or null without a surface. */
 static JSValue
 ns_element_toBlob(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -41983,6 +43446,7 @@ ns_element_toBlob(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Recomputes offsetX/offsetY of a mouse event relative to target's bounding client rect. */
 static void
 ns_mouse_event_retarget_offsets(JSContext *ctx, JSValueConst event,
                                 JSValueConst target)
@@ -42008,6 +43472,7 @@ ns_mouse_event_retarget_offsets(JSContext *ctx, JSValueConst event,
     JS_FreeValue(ctx, rect);
 }
 
+/* Element dispatchEvent(): untrusted dispatch, with click activation for mouse events. */
 static JSValue
 ns_element_dispatchEvent(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -42068,6 +43533,7 @@ ns_element_dispatchEvent(JSContext *ctx, JSValueConst this_val,
     return prevented ? JS_FALSE : JS_TRUE;
 }
 
+/* selectionStart getter: stored _selStart clamped to value length; null if not applicable. */
 static JSValue
 ns_element_get_selection_start(JSContext *ctx, JSValueConst this_val)
 {
@@ -42081,6 +43547,7 @@ ns_element_get_selection_start(JSContext *ctx, JSValueConst this_val)
     return JS_NewUint32(ctx, MIN(position, length));
 }
 
+/* selectionEnd getter: stored _selEnd clamped to value length; null if not applicable. */
 static JSValue
 ns_element_get_selection_end(JSContext *ctx, JSValueConst this_val)
 {
@@ -42094,6 +43561,7 @@ ns_element_get_selection_end(JSContext *ctx, JSValueConst this_val)
     return JS_NewUint32(ctx, MIN(position, length));
 }
 
+/* Reads a stored selection offset property, clamped to the control's value length. */
 static uint32_t
 ns_text_selection_position(JSContext *ctx, JSValueConst this_val,
                            const char *property)
@@ -42106,6 +43574,7 @@ ns_text_selection_position(JSContext *ctx, JSValueConst this_val,
     return MIN(position, length);
 }
 
+/* Normalizes a selectionDirection value to forward/backward/none; caller frees. */
 static char *
 ns_text_selection_direction_arg(JSContext *ctx, JSValueConst value)
 {
@@ -42131,6 +43600,7 @@ typedef struct ns_text_selection {
     int      direction;
 } ns_text_selection;
 
+/* Captures the current clamped selection start, end and direction of a text control. */
 static ns_text_selection
 ns_text_selection_snapshot(JSContext *ctx, JSValueConst this_val)
 {
@@ -42155,6 +43625,7 @@ typedef struct ns_select_event_task {
     guint   source;
 } ns_select_event_task;
 
+/* Idle task firing a non-cancelable select event; reschedules while the engine is pumping. */
 static gboolean
 ns_text_selection_fire(gpointer user_data)
 {
@@ -42179,6 +43650,7 @@ ns_text_selection_fire(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* Queues a select event task if the selection changed from the before snapshot. */
 static void
 ns_text_selection_dispatch(JSContext *ctx, JSValueConst this_val,
                            ns_text_selection before)
@@ -42198,6 +43670,7 @@ ns_text_selection_dispatch(JSContext *ctx, JSValueConst this_val,
     task->source = ns_engine_idle_add(ns_text_selection_fire, task);
 }
 
+/* selectionStart setter: clamps, pushes end forward if needed, queues select event. */
 static JSValue
 ns_element_set_selection_start(JSContext *ctx, JSValueConst this_val,
                                JSValueConst value)
@@ -42217,6 +43690,7 @@ ns_element_set_selection_start(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* selectionEnd setter: clamps, pulls start back if needed, queues select event. */
 static JSValue
 ns_element_set_selection_end(JSContext *ctx, JSValueConst this_val,
                              JSValueConst value)
@@ -42236,6 +43710,7 @@ ns_element_set_selection_end(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* selectionDirection setter: stores the normalized direction and queues select event. */
 static JSValue
 ns_element_set_selection_dir(JSContext *ctx, JSValueConst this_val,
                              JSValueConst value)
@@ -42263,6 +43738,7 @@ ns_text_control_get_text_length(JSContext *ctx, JSValueConst this_val)
     return JS_NewUint32(ctx, ns_text_control_value_length(ctx, this_val));
 }
 
+/* select(): selects the whole value of a text control and queues a select event. */
 static JSValue
 ns_input_select(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -42277,6 +43753,7 @@ ns_input_select(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* setSelectionRange(start, end, dir): clamps offsets, collapses if end <= start. */
 static JSValue
 ns_input_setSelectionRange(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -42305,6 +43782,7 @@ ns_input_setSelectionRange(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* stepUp/stepDown core: applies n steps via ns_input_step_apply, throws InvalidStateError. */
 static JSValue
 ns_input_step(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv, int sign)
@@ -42331,6 +43809,7 @@ ns_input_step(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* showPicker(): validates mutability and user activation, consumes it; no picker is shown. */
 static JSValue
 ns_element_show_picker(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -42366,6 +43845,7 @@ ns_input_stepDown(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
 { return ns_input_step(ctx, this_val, argc, argv, -1); }
 
+/* Calls JS String.prototype.slice(start, end) on string; returns a new value. */
 static JSValue
 ns_text_string_slice(JSContext *ctx, JSValueConst string,
                      uint32_t start, uint32_t end)
@@ -42379,6 +43859,7 @@ ns_text_string_slice(JSContext *ctx, JSValueConst string,
     return result;
 }
 
+/* setRangeText(): replaces a range of the value and adjusts selection per SelectionMode. */
 static JSValue
 ns_input_setRangeText(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -42517,6 +43998,7 @@ ns_first_descendant_named_rec(ns_node *root, const char *name, int depth)
     return NULL;
 }
 
+/* First descendant element with the given name (case-insensitive), depth-first. */
 static ns_node *
 ns_first_descendant_named(ns_node *root, const char *name)
 {
@@ -42536,12 +44018,14 @@ ns_collect_descendants_named_rec(ns_node *root, const char *name,
     }
 }
 
+/* Appends all descendant elements with the given name, in tree order, to out. */
 static void
 ns_collect_descendants_named(ns_node *root, const char *name, GPtrArray *out)
 {
     ns_collect_descendants_named_rec(root, name, out, 0);
 }
 
+/* createTHead/createTBody/createTFoot core: returns existing section or inserts a new one. */
 static JSValue
 ns_table_create_section(JSContext *ctx, JSValueConst this_val, const char *name,
                         gboolean before_body)
@@ -42581,6 +44065,7 @@ ns_table_createTFoot(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
 { (void)argc; (void)argv; return ns_table_create_section(ctx, this_val, "tfoot", FALSE); }
 
+/* createCaption(): returns the existing caption or inserts one as the first child. */
 static JSValue
 ns_table_createCaption(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -42601,6 +44086,7 @@ ns_table_createCaption(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, cap);
 }
 
+/* Removes the first descendant section named name (thead/tfoot/caption) from the table. */
 static void
 ns_table_delete_section(JSContext *ctx, JSValueConst this_val, const char *name)
 {
@@ -42630,6 +44116,7 @@ ns_table_deleteCaption(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
 { (void)argc; (void)argv; ns_table_delete_section(ctx, this_val, "caption"); return JS_UNDEFINED; }
 
+/* options.item(i): i-th option among direct children and optgroup children. */
 static JSValue
 ns_options_item(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -42659,6 +44146,7 @@ ns_options_item(JSContext *ctx, JSValueConst this_val,
     return JS_NULL;
 }
 
+/* options.namedItem(name): first option whose id or name equals name. */
 static JSValue
 ns_options_namedItem(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -42694,6 +44182,7 @@ done:
     return result;
 }
 
+/* insertRow(i): inserts a tr at index i, or appends to the last row's parent/last tbody. */
 static JSValue
 ns_table_insertRow(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -42740,6 +44229,7 @@ ns_table_insertRow(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, new_tr);
 }
 
+/* deleteRow(i): removes the i-th row (-1 means last) and records the mutation. */
 static JSValue
 ns_table_deleteRow(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -42767,6 +44257,7 @@ ns_table_deleteRow(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* insertCell(i): inserts a new td before the i-th cell, or appends when -1/len. */
 static JSValue
 ns_tr_insertCell(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -42800,6 +44291,7 @@ ns_tr_insertCell(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, cell);
 }
 
+/* deleteCell(i): removes the i-th td/th (-1 means last) and records the mutation. */
 static JSValue
 ns_tr_deleteCell(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -42832,6 +44324,7 @@ ns_tr_deleteCell(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* HTMLSelectElement.add(option, before): inserts before an option index or element. */
 static JSValue
 ns_select_add(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -42872,6 +44365,7 @@ ns_select_add(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* setCustomValidity(): stores the message in an attribute (removed when empty). */
 static JSValue
 ns_element_setCustomValidity(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -42888,6 +44382,7 @@ ns_element_setCustomValidity(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Media element kind for type support checks: audio for <audio>, otherwise video. */
 static ns_media_element
 ns_media_element_kind(JSValueConst this_val)
 {
@@ -42896,6 +44391,7 @@ ns_media_element_kind(JSValueConst this_val)
         ? NS_MEDIA_ELEMENT_AUDIO : NS_MEDIA_ELEMENT_VIDEO;
 }
 
+/* canPlayType(type): returns "", "maybe" or "probably" from the media type table. */
 static JSValue
 ns_media_canPlayType(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -42909,6 +44405,7 @@ ns_media_canPlayType(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, ns_media_answer_string(answer));
 }
 
+/* TimeRanges start/end for the single [0, dur] range; RangeError when out of bounds. */
 static JSValue
 ns_time_ranges_edge(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv, int magic,
@@ -42926,6 +44423,7 @@ ns_time_ranges_edge(JSContext *ctx, JSValueConst this_val,
     return JS_NewFloat64(ctx, magic == 0 ? 0.0 : dur);
 }
 
+/* TimeRanges start/end over a flat edge array; magic 0 selects start, 1 end. */
 static JSValue
 ns_time_ranges_list_edge(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv, int magic,
@@ -42941,6 +44439,7 @@ ns_time_ranges_list_edge(JSContext *ctx, JSValueConst this_val,
     return JS_GetPropertyUint32(ctx, func_data[0], (uint32_t)(idx * 2 + magic));
 }
 
+/* Builds a TimeRanges object from n_ranges start/end pairs in edges. */
 JSValue
 ns_media_time_ranges_from(JSContext *ctx, const double *edges, guint n_ranges)
 {
@@ -42960,6 +44459,7 @@ ns_media_time_ranges_from(JSContext *ctx, const double *edges, guint n_ranges)
     return obj;
 }
 
+/* Sets obj's prototype to the global interface iface's prototype, if it exists. */
 void
 ns_obj_adopt_global_proto(JSContext *ctx, JSValueConst obj, const char *iface)
 {
@@ -42974,6 +44474,7 @@ ns_obj_adopt_global_proto(JSContext *ctx, JSValueConst obj, const char *iface)
     JS_FreeValue(ctx, global);
 }
 
+/* Builds a TimeRanges with one [0, dur] range, or empty when dur <= 0. */
 JSValue
 ns_media_time_ranges_for(JSContext *ctx, double dur)
 {
@@ -43023,6 +44524,7 @@ ns_media_get_playbackRate(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, 1.0);
 }
 
+/* playbackRate setter: stores the rate (NaN becomes 1) and fires ratechange. */
 static JSValue
 ns_media_set_playbackRate(JSContext *ctx, JSValueConst this_val,
                           JSValueConst val)
@@ -43059,6 +44561,7 @@ ns_media_set_defaultPlaybackRate(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* getVideoPlaybackQuality(): real frame counts if known, else estimates 30 fps. */
 static JSValue
 ns_media_get_video_playback_quality(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -43089,6 +44592,7 @@ ns_media_get_srcObject(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* srcObject setter: stores the stream, flags camera streams, fires loadedmetadata. */
 static JSValue
 ns_media_set_srcObject(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -43118,6 +44622,7 @@ ns_media_request_video_frame_callback(JSContext *ctx, JSValueConst this_val,
     return ns_raf_request(ctx, argc, argv, TRUE);
 }
 
+/* Forwards a window action (print, stop, focus) to the embedder callback. */
 static JSValue
 ns_window_invoke_action(JSContext *ctx, const char *action)
 {
@@ -43143,6 +44648,7 @@ ns_window_stop(JSContext *ctx, JSValueConst this_val,
     return ns_window_invoke_action(ctx, "stop");
 }
 
+/* Reads scroll coordinates from (x, y) arguments or a {left, top} options dict. */
 static void
 ns_read_scroll_xy(JSContext *ctx, int argc, JSValueConst *argv,
                   double *out_x, double *out_y)
@@ -43163,6 +44669,7 @@ ns_read_scroll_xy(JSContext *ctx, int argc, JSValueConst *argv,
     *out_y = y;
 }
 
+/* Scrolls the viewport to clamped non-negative x, y via the embedder, then notes it. */
 static void
 ns_js_scroll_viewport(ns_js *js, double x, double y)
 {
@@ -43185,6 +44692,7 @@ ns_window_scroll_to(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* window.scrollBy(): scrolls the viewport relative to current scrollX/scrollY. */
 static JSValue
 ns_window_scroll_by(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -43209,6 +44717,7 @@ ns_window_scroll_by_vertical(JSContext *ctx, JSValueConst this_val, double dy)
     return r;
 }
 
+/* scrollByLines(n): scrolls vertically by n lines of 16px. */
 static JSValue
 ns_window_scroll_by_lines(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -43218,6 +44727,7 @@ ns_window_scroll_by_lines(JSContext *ctx, JSValueConst this_val,
     return ns_window_scroll_by_vertical(ctx, this_val, lines * 16.0);
 }
 
+/* scrollByPages(n): scrolls vertically by n viewport heights (innerHeight). */
 static JSValue
 ns_window_scroll_by_pages(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -43239,6 +44749,7 @@ ns_window_focus(JSContext *ctx, JSValueConst this_val,
     return ns_window_invoke_action(ctx, "focus");
 }
 
+/* Element scroll/scrollTo/scrollBy core: absolute or relative scrollLeft/Top for given axes. */
 static JSValue
 ns_element_scroll_common(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv, gboolean relative)
@@ -43296,6 +44807,7 @@ ns_element_scroll_by(JSContext *ctx, JSValueConst this_val,
     return ns_element_scroll_common(ctx, this_val, argc, argv, TRUE);
 }
 
+/* Document node child of an iframe element, or NULL if none was attached. */
 static ns_node *
 ns_iframe_document_node(const ns_node *iframe)
 {
@@ -43305,6 +44817,7 @@ ns_iframe_document_node(const ns_node *iframe)
     return NULL;
 }
 
+/* Root element of iframe content: its document's first element, or first element child. */
 static ns_node *
 ns_iframe_content_root(const ns_node *iframe)
 {
@@ -43320,6 +44833,7 @@ ns_iframe_content_root(const ns_node *iframe)
     return NULL;
 }
 
+/* Returns the iframe's content root, creating an empty html/head/body document if missing. */
 static ns_node *
 ns_iframe_ensure_content_root(ns_node *iframe)
 {
@@ -43497,6 +45011,7 @@ static const char ns_iframe_scope_bootstrap[] =
     "  return { window: win, location: loc, history: hist };"
     "})";
 
+/* Builds the lightweight iframe scope (Proxy window, location, history) via a JS bootstrap. */
 static JSValue
 ns_iframe_make_scope(JSContext *ctx, JSValue iframe_doc, const char *initial_url,
                      unsigned sandbox)
@@ -43669,6 +45184,7 @@ static const char ns_iframe_global_bootstrap[] =
     "  return { location: loc, history: hist };"
     "})";
 
+/* Null-prototype object whose keys are the platform global names, or undefined if unset. */
 static JSValue
 ns_iframe_platform_names(JSContext *fctx, ns_js *js)
 {
@@ -43682,6 +45198,7 @@ ns_iframe_platform_names(JSContext *fctx, ns_js *js)
     return names;
 }
 
+/* Creates a frame realm: new context sharing DOM protos, bootstrapped window globals. */
 static JSContext *
 ns_iframe_make_realm_context(ns_js *js, ns_node *iframe,
                              JSValueConst iframe_doc,
@@ -43791,6 +45308,7 @@ ns_iframe_make_realm_context(ns_js *js, ns_node *iframe,
     return fctx;
 }
 
+/* Holds a strong reference to an iframe's realm window, releasing any previous one. */
 static void
 ns_iframe_store_realm_window(ns_js *js, ns_node *iframe, JSValueConst window)
 {
@@ -43802,6 +45320,7 @@ ns_iframe_store_realm_window(ns_js *js, ns_node *iframe, JSValueConst window)
     g_hash_table_insert(js->frame_windows, iframe, JS_VALUE_GET_PTR(held));
 }
 
+/* New reference to the stored realm window of an iframe, or JS_NULL. */
 static JSValue
 ns_iframe_lookup_realm_window(ns_js *js, ns_node *iframe)
 {
@@ -43826,6 +45345,7 @@ ns_iframe_store_realm_doc(ns_js *js, const ns_node *iframe, JSValueConst doc)
                         JS_VALUE_GET_PTR(held));
 }
 
+/* New reference to the stored realm document wrapper of an iframe, or JS_NULL. */
 static JSValue
 ns_iframe_lookup_realm_doc(ns_js *js, const ns_node *iframe)
 {
@@ -43868,6 +45388,7 @@ ns_document_use_html_document_prototype(JSContext *ctx, JSValueConst obj)
     JS_FreeValue(ctx, global);
 }
 
+/* Gives obj the XMLDocument prototype, first chaining it to Document.prototype. */
 static void
 ns_document_use_xml_document_prototype(JSContext *ctx, JSValueConst obj)
 {
@@ -43905,6 +45426,7 @@ ns_document_define_implementation_getter(JSContext *ctx, JSValueConst obj)
     JS_FreeAtom(ctx, atom);
 }
 
+/* Builds the contentDocument wrapper for an iframe, creating its document if needed. */
 static JSValue
 ns_iframe_build_content_document(JSContext *ctx, ns_node *iframe)
 {
@@ -43924,6 +45446,7 @@ ns_iframe_build_content_document(JSContext *ctx, ns_node *iframe)
     return cd;
 }
 
+/* Whether an iframe's document is cross-origin (or opaque/sandboxed) to its embedder. */
 static gboolean
 ns_iframe_is_cross_origin(ns_js *js, const ns_node *iframe)
 {
@@ -43954,6 +45477,7 @@ typedef enum {
     NS_REALM_UNTRUSTED,
 } ns_realm_kind;
 
+/* Classifies a context as main realm, same-origin frame realm, or untrusted. */
 static ns_realm_kind
 ns_js_classify_realm(ns_js *js, JSContext *c)
 {
@@ -43996,6 +45520,7 @@ ns_js_cross_realm_compile_check(JSContext *target, JSContext *caller)
     return tk != NS_REALM_UNTRUSTED && ck != NS_REALM_UNTRUSTED;
 }
 
+/* Frame document wrapper: stored realm doc, existing wrapper, or a newly built one. */
 static JSValue
 ns_iframe_content_document(JSContext *ctx, JSValueConst this_val, ns_node *n)
 {
@@ -44009,6 +45534,7 @@ ns_iframe_content_document(JSContext *ctx, JSValueConst this_val, ns_node *n)
     return ns_iframe_build_content_document(ctx, n);
 }
 
+/* contentDocument getter for iframe/object; null when the frame is cross-origin. */
 static JSValue
 ns_element_get_contentDocument(JSContext *ctx, JSValueConst this_val)
 {
@@ -44071,6 +45597,7 @@ static const char ns_cross_window_bootstrap[] =
     "  };"
     "})";
 
+/* Installs the cross-origin WindowProxy factory as a hidden global if not already present. */
 static void
 ns_install_cross_window_maker(JSContext *ctx, JSValueConst global)
 {
@@ -44092,6 +45619,7 @@ ns_install_cross_window_maker(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, maker);
 }
 
+/* Wraps target in a restricted cross-origin WindowProxy; consumes target's reference. */
 static JSValue
 ns_iframe_cross_origin_window(JSContext *ctx, JSValue target)
 {
@@ -44119,6 +45647,7 @@ ns_iframe_cross_origin_window(JSContext *ctx, JSValue target)
     return proxy;
 }
 
+/* Creates a frame realm for an iframe, storing its window and document; else global. */
 static JSValue
 ns_iframe_build_lite_window(JSContext *ctx, JSValueConst iframe_el,
                             ns_node *iframe)
@@ -44151,6 +45680,7 @@ ns_iframe_build_lite_window(JSContext *ctx, JSValueConst iframe_el,
     return fwin;
 }
 
+/* Stored realm window of an iframe, or a newly built one. */
 static JSValue
 ns_iframe_realm_window(JSContext *ctx, JSValueConst this_val, ns_node *n)
 {
@@ -44161,6 +45691,7 @@ ns_iframe_realm_window(JSContext *ctx, JSValueConst this_val, ns_node *n)
     return ns_iframe_build_lite_window(ctx, this_val, n);
 }
 
+/* contentWindow getter: the frame's realm window, wrapped in a proxy when cross-origin. */
 static JSValue
 ns_element_get_contentWindow(JSContext *ctx, JSValueConst this_val)
 {
@@ -44181,6 +45712,7 @@ ns_returns_global(JSContext *ctx, JSValueConst this_val,
     return JS_GetGlobalObject(ctx);
 }
 
+/* window.length: number of child frames in the window's document. */
 static JSValue
 ns_window_get_length(JSContext *ctx, JSValueConst this_val, int argc,
                      JSValueConst *argv)
@@ -44189,6 +45721,7 @@ ns_window_get_length(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_NewUint32(ctx, ns_frame_count(ns_window_document_for(ctx, this_val), 0));
 }
 
+/* getSVGDocument(): the content document when its root is an svg element, else null. */
 static JSValue
 ns_element_getSVGDocument(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -44214,6 +45747,7 @@ ns_element_getSVGDocument(JSContext *ctx, JSValueConst this_val,
     return JS_NULL;
 }
 
+/* SVG getNumberOfChars(): UTF-8 character count of the element's text content. */
 static JSValue
 ns_element_getNumberOfChars(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -45051,6 +46585,7 @@ static const ns_interface_member ns_interface_members[] = {
       JS_CGETSET_DEF("form", ns_element_get_form, ns_element_noop_set) },
 };
 
+/* Document node behind this_val, falling back to the current document. */
 static ns_node *
 ns_document_context_node(JSContext *ctx, JSValueConst this_val)
 {
@@ -45060,6 +46595,7 @@ ns_document_context_node(JSContext *ctx, JSValueConst this_val)
     return js ? js->current_doc : NULL;
 }
 
+/* document.getElementById(); ids containing NUL never match. */
 static JSValue
 ns_document_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -45073,6 +46609,7 @@ ns_document_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return ns_make_element(ctx, found);
 }
 
+/* getElementById() scoped to a node's subtree; ids containing NUL never match. */
 static JSValue
 ns_element_getElementById(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -45088,6 +46625,7 @@ ns_element_getElementById(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, found);
 }
 
+/* documentElement getter: first element child of the document (or this_val if element). */
 static JSValue
 ns_document_get_documentElement(JSContext *ctx, JSValueConst this_val)
 {
@@ -45108,6 +46646,7 @@ ns_document_get_documentElement(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, root);
 }
 
+/* TRUE if node is an HTML-namespace element with the given name (not SVG/foreign). */
 static gboolean
 ns_document_html_element_named(const ns_node *node, const char *name)
 {
@@ -45115,6 +46654,7 @@ ns_document_html_element_named(const ns_node *node, const char *name)
            !(node->flags & (NS_NODE_SVG_NS | NS_NODE_FOREIGN_NS));
 }
 
+/* Document element for this_val's document (or the element itself), else NULL. */
 static ns_node *
 ns_document_root_node(JSContext *ctx, JSValueConst this_val)
 {
@@ -45128,6 +46668,7 @@ ns_document_root_node(JSContext *ctx, JSValueConst this_val)
     return NULL;
 }
 
+/* The body: first HTML body or frameset child of an HTML html root, else NULL. */
 static ns_node *
 ns_document_body_node(JSContext *ctx, JSValueConst this_val)
 {
@@ -45147,6 +46688,7 @@ ns_document_get_body(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, ns_document_body_node(ctx, this_val));
 }
 
+/* document.body setter: replaces the body/frameset in place or appends it to the root. */
 static JSValue
 ns_document_set_body(JSContext *ctx, JSValueConst this_val,
                      JSValueConst value)
@@ -45199,6 +46741,7 @@ ns_document_set_body(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* scrollingElement: body in quirks mode, documentElement otherwise. */
 static JSValue
 ns_document_get_scrollingElement(JSContext *ctx, JSValueConst this_val)
 {
@@ -45218,6 +46761,7 @@ ns_document_get_head(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, head);
 }
 
+/* activeElement: the focused node if still in the document, else body (clears stale focus). */
 static JSValue
 ns_document_get_activeElement(JSContext *ctx, JSValueConst this_val)
 {
@@ -45232,6 +46776,7 @@ ns_document_get_activeElement(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, body);
 }
 
+/* Static array of elements with tag (or all for *), using the tag index when available. */
 static JSValue
 ns_document_collect_by_tag(JSContext *ctx, JSValueConst this_val,
                            const char *tag)
@@ -45298,6 +46843,7 @@ ns_document_get_designMode(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "off");
 }
 
+/* lastModified: current local time as MM/DD/YYYY HH:MM:SS. */
 static JSValue
 ns_document_get_lastModified(JSContext *ctx, JSValueConst this_val)
 {
@@ -45315,6 +46861,7 @@ ns_document_get_lastModified(JSContext *ctx, JSValueConst this_val)
     return r;
 }
 
+/* document.all: live all-elements collection marked [[IsHTMLDDA]]. */
 static JSValue
 ns_document_get_all(JSContext *ctx, JSValueConst this_val)
 {
@@ -45323,6 +46870,7 @@ ns_document_get_all(JSContext *ctx, JSValueConst this_val)
     return all;
 }
 
+/* document.anchors: static array of a elements with a name attribute. */
 static JSValue
 ns_document_get_anchors(JSContext *ctx, JSValueConst this_val)
 {
@@ -45346,6 +46894,7 @@ ns_document_get_anchors(JSContext *ctx, JSValueConst this_val)
     return arr;
 }
 
+/* Font idle callback: resolves pending font-ready promises after a layout pass. */
 static void
 ns_js_fonts_idle(gpointer user_data)
 {
@@ -45367,6 +46916,7 @@ ns_js_fonts_idle(gpointer user_data)
     ns_drain_microtasks(js);
 }
 
+/* Resolves with value now, or defers until pending web fonts finish; takes ownership. */
 static void
 ns_js_resolve_when_fonts_loaded(JSContext *ctx, ns_js *js, JSValue resolve,
                                 JSValue value)
@@ -45385,6 +46935,7 @@ ns_js_resolve_when_fonts_loaded(JSContext *ctx, ns_js *js, JSValue resolve,
     JS_FreeValue(ctx, value);
 }
 
+/* FontFaceSet.load(): flushes layout and resolves with [] once pending fonts are loaded. */
 static JSValue
 ns_fontfaceset_load(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -45400,6 +46951,7 @@ ns_fontfaceset_load(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* document.fonts: minimal FontFaceSet whose ready/status reflect pending web fonts. */
 static JSValue
 ns_document_get_fonts(JSContext *ctx, JSValueConst this_val)
 {
@@ -45426,6 +46978,7 @@ ns_document_get_fonts(JSContext *ctx, JSValueConst this_val)
     return fs;
 }
 
+/* TRUE if (x, y) lies within the viewport's right/bottom edges. */
 static gboolean
 ns_point_in_hit_bounds(double x, double y)
 {
@@ -45434,6 +46987,7 @@ ns_point_in_hit_bounds(double x, double y)
     return x <= w && y <= h;
 }
 
+/* Retargets a hit node into scope, mapping iframe and shadow content to their hosts. */
 static const ns_node *
 ns_hit_target_in_scope(const ns_node *node, const ns_node *scope)
 {
@@ -45448,6 +47002,7 @@ ns_hit_target_in_scope(const ns_node *node, const ns_node *scope)
     return scope ? NULL : target;
 }
 
+/* Converts client coordinates to layout coordinates for scope's frame; FALSE if outside. */
 static gboolean
 ns_hit_point_to_layout(JSContext *ctx, ns_js *js, const ns_node *scope,
                        double *x, double *y)
@@ -45469,6 +47024,7 @@ ns_hit_point_to_layout(JSContext *ctx, ns_js *js, const ns_node *scope,
     return TRUE;
 }
 
+/* Parses (x, y) arguments as finite numbers, throwing TypeError otherwise. */
 static gboolean
 ns_point_args(JSContext *ctx, int argc, JSValueConst *argv, double *x,
               double *y)
@@ -45487,6 +47043,7 @@ ns_point_args(JSContext *ctx, int argc, JSValueConst *argv, double *x,
     return TRUE;
 }
 
+/* elementFromPoint(): hit-tests layout at client (x, y), retargeted into the scope. */
 static JSValue
 ns_document_element_from_point(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -45508,6 +47065,7 @@ ns_document_element_from_point(JSContext *ctx, JSValueConst this_val,
     return hit ? ns_make_element(ctx, hit) : JS_NULL;
 }
 
+/* elementsFromPoint(): all elements under (x, y) top-down, ending with the root html. */
 static JSValue
 ns_document_elements_from_point(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -45579,6 +47137,7 @@ ns_range_setStart(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return JS_UNDEFINED;
 }
 
+/* Range.setEnd(): stores end container/offset and recomputes collapsed. */
 static JSValue
 ns_range_setEnd(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -45599,6 +47158,7 @@ ns_range_setEnd(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return JS_UNDEFINED;
 }
 
+/* Range.selectNode(): spans the node within its parent by child index. */
 static JSValue
 ns_range_selectNode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -45619,6 +47179,7 @@ ns_range_selectNode(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
     return JS_UNDEFINED;
 }
 
+/* Range.selectNodeContents(): spans the node's children or text bytes. */
 static JSValue
 ns_range_selectNodeContents(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -45638,6 +47199,7 @@ ns_range_selectNodeContents(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Range.collapse(toStart): moves one boundary onto the other and sets collapsed. */
 static JSValue
 ns_range_collapse(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -45662,6 +47224,7 @@ ns_range_collapse(JSContext *ctx, JSValueConst this_val,
 
 static JSValue ns_make_range_object(JSContext *ctx);
 
+/* Range.cloneRange(): new fallback range object copying boundary properties. */
 static JSValue
 ns_range_cloneRange(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -45686,6 +47249,7 @@ typedef struct {
     int            state;
 } ns_range_text_ctx;
 
+/* Tree walk appending the text that lies between the range boundaries to c->buf. */
 static void
 ns_range_text_walk(const ns_node *n, ns_range_text_ctx *c, int depth)
 {
@@ -45735,6 +47299,7 @@ ns_range_text_walk(const ns_node *n, ns_range_text_ctx *c, int depth)
     if (is_end_el && c->eoff >= idx) c->state = 2;
 }
 
+/* Range.toString(): concatenated text content between start and end boundaries. */
 static JSValue
 ns_range_toString_impl(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -45776,6 +47341,7 @@ ns_range_toString_impl(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* createContextualFragment(): parses HTML in the start container's context into a fragment. */
 static JSValue
 ns_range_createContextualFragment(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
@@ -45806,6 +47372,7 @@ ns_range_createContextualFragment(JSContext *ctx, JSValueConst this_val,
     return ns_make_element(ctx, frag);
 }
 
+/* Builds the fallback plain-object Range with basic methods and no-op stubs. */
 static JSValue
 ns_make_range_object(JSContext *ctx)
 {
@@ -45839,6 +47406,7 @@ ns_make_range_object(JSContext *ctx)
     return r;
 }
 
+/* createRange(): uses the JS __ndCreateRange factory, else the native fallback range. */
 static JSValue
 ns_document_create_range(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -45880,6 +47448,7 @@ ns_native_range(JSContext *ctx, JSValueConst this_val,
 #define NS_FILTER_REJECT 2
 #define NS_FILTER_SKIP   3
 
+/* NodeFilter.SHOW_* bit corresponding to a node's type. */
 static uint32_t
 ns_traversal_node_bit(const ns_node *n)
 {
@@ -45898,6 +47467,7 @@ ns_traversal_node_bit(const ns_node *n)
     }
 }
 
+/* DOM "filter" algorithm: whatToShow mask then NodeFilter callback; -1 on exception. */
 static int
 ns_traversal_filter(JSContext *ctx, JSValueConst obj, const ns_node *n)
 {
@@ -45967,6 +47537,7 @@ ns_tw_set_current(JSContext *ctx, JSValueConst w, ns_node *n)
     return ns_make_element(ctx, n);
 }
 
+/* TreeWalker "traverse children" algorithm toward the first or last child. */
 static ns_node *
 ns_tw_traverse_children(JSContext *ctx, JSValueConst w, ns_node *current,
                         gboolean last, int *err)
@@ -45991,6 +47562,7 @@ ns_tw_traverse_children(JSContext *ctx, JSValueConst w, ns_node *current,
     return NULL;
 }
 
+/* TreeWalker "traverse siblings" algorithm toward next or previous siblings. */
 static ns_node *
 ns_tw_traverse_siblings(JSContext *ctx, JSValueConst w, ns_node *current,
                         ns_node *root, gboolean prev, int *err)
@@ -46016,6 +47588,7 @@ ns_tw_traverse_siblings(JSContext *ctx, JSValueConst w, ns_node *current,
     }
 }
 
+/* Shared firstChild/lastChild: traverses children and updates currentNode on success. */
 static JSValue
 ns_tw_children_method(JSContext *ctx, JSValueConst w, gboolean last)
 {
@@ -46035,6 +47608,7 @@ static JSValue
 ns_tw_lastChild(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
 { (void)argc; (void)argv; return ns_tw_children_method(ctx, w, TRUE); }
 
+/* Shared nextSibling/previousSibling: traverses siblings and updates currentNode. */
 static JSValue
 ns_tw_siblings_method(JSContext *ctx, JSValueConst w, gboolean prev)
 {
@@ -46055,6 +47629,7 @@ static JSValue
 ns_tw_previousSibling(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
 { (void)argc; (void)argv; return ns_tw_siblings_method(ctx, w, TRUE); }
 
+/* TreeWalker.parentNode(): nearest accepted ancestor below or at root. */
 static JSValue
 ns_tw_parentNode(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
 {
@@ -46073,6 +47648,7 @@ ns_tw_parentNode(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
     return JS_NULL;
 }
 
+/* TreeWalker.nextNode(): next accepted node in document order within root. */
 static JSValue
 ns_tw_nextNode(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
 {
@@ -46102,6 +47678,7 @@ ns_tw_nextNode(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
     }
 }
 
+/* TreeWalker.previousNode(): previous accepted node in document order within root. */
 static JSValue
 ns_tw_previousNode(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
 {
@@ -46132,6 +47709,7 @@ ns_tw_previousNode(JSContext *ctx, JSValueConst w, int argc, JSValueConst *argv)
     return JS_NULL;
 }
 
+/* Sets read-only whatToShow and filter plus the reentrancy flag on a walker/iterator. */
 static void
 ns_traversal_init_common(JSContext *ctx, JSValueConst obj,
                          int argc, JSValueConst *argv)
@@ -46147,6 +47725,7 @@ ns_traversal_init_common(JSContext *ctx, JSValueConst obj,
     JS_SetPropertyStr(ctx, obj, "_active", JS_FALSE);
 }
 
+/* Defines obj[Symbol.toStringTag] = tag (configurable). */
 static void
 ns_set_tostring_tag(JSContext *ctx, JSValueConst obj, const char *tag)
 {
@@ -46172,6 +47751,7 @@ ns_tw_currentnode_get(JSContext *ctx, JSValueConst this_val,
     return JS_GetPropertyStr(ctx, this_val, "\xff" "cur");
 }
 
+/* TreeWalker currentNode setter; throws TypeError for non-Node values. */
 static JSValue
 ns_tw_currentnode_set(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -46184,6 +47764,7 @@ ns_tw_currentnode_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Defines currentNode as accessor pair backed by a hidden slot initialized to node. */
 static void
 ns_tw_define_current(JSContext *ctx, JSValueConst tw, JSValueConst node)
 {
@@ -46199,6 +47780,7 @@ ns_tw_define_current(JSContext *ctx, JSValueConst tw, JSValueConst node)
     JS_FreeAtom(ctx, atom);
 }
 
+/* document.createTreeWalker(root, whatToShow, filter). */
 static JSValue
 ns_document_create_tree_walker(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -46284,6 +47866,7 @@ ns_ni_skip_doc_back(ns_node *n)
     return n;
 }
 
+/* Next node in tree order within root, skipping embedded documents. */
 static ns_node *
 ns_ni_following(ns_node *node, ns_node *root)
 {
@@ -46300,6 +47883,7 @@ ns_ni_following(ns_node *node, ns_node *root)
     return NULL;
 }
 
+/* Previous node in tree order within root, skipping embedded documents. */
 static ns_node *
 ns_ni_preceding(ns_node *node, ns_node *root)
 {
@@ -46319,6 +47903,7 @@ ns_ni_preceding(ns_node *node, ns_node *root)
 static gboolean ns_ni_is_inclusive_ancestor(const ns_node *anc,
                                              const ns_node *node);
 
+/* NodeIterator traverse algorithm; retries once from the reference if a filter detaches it. */
 static JSValue
 ns_ni_traverse(JSContext *ctx, JSValueConst obj, gboolean forward)
 {
@@ -46403,6 +47988,7 @@ ns_ni_get_root(JSContext *ctx, JSValueConst this_val,
     return it ? JS_DupValue(ctx, it->root) : JS_NULL;
 }
 
+/* Defines a configurable, enumerable read-only accessor named name on obj. */
 static void
 ns_ni_define_getter(JSContext *ctx, JSValueConst obj, const char *name,
                     JSCFunction *getter)
@@ -46414,6 +48000,7 @@ ns_ni_define_getter(JSContext *ctx, JSValueConst obj, const char *name,
     JS_FreeAtom(ctx, atom);
 }
 
+/* document.createNodeIterator(): registers the iterator for removal-steps updates. */
 static JSValue
 ns_document_create_node_iterator(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -46458,6 +48045,7 @@ ns_document_create_node_iterator(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Deepest last descendant of n (n itself if childless). */
 static ns_node *
 ns_ni_last_inclusive(ns_node *n)
 {
@@ -46473,6 +48061,7 @@ ns_ni_is_inclusive_ancestor(const ns_node *anc, const ns_node *node)
     return FALSE;
 }
 
+/* First following node of node outside its subtree, within root. */
 static ns_node *
 ns_ni_following_outside(ns_node *node, ns_node *root)
 {
@@ -46481,6 +48070,7 @@ ns_ni_following_outside(ns_node *node, ns_node *root)
     return NULL;
 }
 
+/* NodeIterator pre-removing steps: moves reference nodes out of the subtree being removed. */
 static void
 ns_node_iters_pre_remove(ns_js *js, ns_node *removed)
 {
@@ -46526,6 +48116,7 @@ static const JSCFunctionListEntry ns_dom_implementation_proto_funcs[] = {
     JS_CFUNC_DEF("createDocumentType", 3, ns_impl_create_document_type),
 };
 
+/* DOMImplementation for a document, cached on it in a hidden property. */
 static JSValue
 ns_make_dom_implementation(JSContext *ctx, JSValueConst this_val)
 {
@@ -46564,6 +48155,7 @@ ns_document_implementation(JSContext *ctx, JSValueConst this_val)
     return ns_make_dom_implementation(ctx, this_val);
 }
 
+/* Retags a subtree's wrappers and attrs with doc_val as owner and syncs the XML flag. */
 static void
 ns_adopt_owner_walk(JSContext *ctx, JSValueConst doc_val, ns_node *n, int depth)
 {
@@ -46596,6 +48188,7 @@ ns_adopt_owner_walk(JSContext *ctx, JSValueConst doc_val, ns_node *n, int depth)
         ns_adopt_owner_walk(ctx, doc_val, c, depth + 1);
 }
 
+/* document.adoptNode(): detaches the node and reassigns its owner document. */
 static JSValue
 ns_document_adopt_node(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -46633,6 +48226,7 @@ ns_document_adopt_node(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, argv[0]);
 }
 
+/* document.importNode(): clones (optionally deep) into this document and upgrades CEs. */
 static JSValue
 ns_document_import_node(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -46672,6 +48266,7 @@ ns_document_get_links(JSContext *ctx, JSValueConst this_val)
     return ns_make_live(ctx, this_val, NS_LIVE_LINKS, NULL);
 }
 
+/* Applies console %s/%d/%i/%f/%o/%O/%j/%c substitutions; returns next unused arg index. */
 static int
 ns_js_emit_formatted(JSContext *ctx, GString *out, int argc, JSValueConst *argv)
 {
@@ -46712,6 +48307,7 @@ ns_js_emit_formatted(JSContext *ctx, GString *out, int argc, JSValueConst *argv)
     return next;
 }
 
+/* Formats console arguments (format string, errors with stacks) and sends to log callback. */
 static void
 ns_js_emit(ns_js *js, const char *prefix, JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -46799,6 +48395,7 @@ ns_js_console_error(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
     return JS_UNDEFINED;
 }
 
+/* console.assert(): logs the remaining arguments with [assert] when the condition is falsy. */
 static JSValue
 ns_js_console_assert(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -46808,6 +48405,7 @@ ns_js_console_assert(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
     return JS_UNDEFINED;
 }
 
+/* Console label from argv[0], default "default"; NULL on conversion error; caller frees. */
 static char *
 ns_js_console_label_dup(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -46821,6 +48419,7 @@ ns_js_console_label_dup(JSContext *ctx, int argc, JSValueConst *argv)
     return g_strdup("default");
 }
 
+/* console.count(): increments and logs the per-label counter. */
 static JSValue
 ns_js_console_count(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -46855,6 +48454,7 @@ ns_js_console_count_reset(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return JS_UNDEFINED;
 }
 
+/* console.time(): records the monotonic start time for a label. */
 static JSValue
 ns_js_console_time(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -46872,6 +48472,7 @@ ns_js_console_time(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* Logs elapsed milliseconds for a console timer label, plus optional extra arguments. */
 static void
 ns_js_console_time_emit(ns_js *js, JSContext *ctx, const char *label,
                         int extra_argc, JSValueConst *extra_argv)
@@ -46894,6 +48495,7 @@ ns_js_console_time_emit(ns_js *js, JSContext *ctx, const char *label,
     g_string_free(prefix, TRUE);
 }
 
+/* console.timeEnd(): logs elapsed time and removes the timer. */
 static JSValue
 ns_js_console_time_end(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -46907,6 +48509,7 @@ ns_js_console_time_end(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return JS_UNDEFINED;
 }
 
+/* console.timeLog(): logs elapsed time and extra arguments, keeping the timer. */
 static JSValue
 ns_js_console_time_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -46934,6 +48537,7 @@ ns_pending_rejection_free(gpointer data)
     g_free(pr);
 }
 
+/* QuickJS rejection tracker: records unhandled rejections, forgets ones later handled. */
 static void
 ns_js_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
                                 JSValueConst reason, ns_js_bool is_handled,
@@ -46959,6 +48563,7 @@ ns_js_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
     g_hash_table_replace(js->pending_rejections, key, pr);
 }
 
+/* Logs and clears all still-unhandled promise rejections as [unhandled rejection]. */
 static void
 ns_js_report_pending_rejections(ns_js *js)
 {
@@ -47005,6 +48610,7 @@ ns_js_alert(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* Valid custom element name: lowercase ASCII start, [a-z0-9._-] chars, containing a hyphen. */
 static gboolean
 ns_ce_name_valid(const char *s)
 {
@@ -47046,6 +48652,7 @@ ns_ce_pending_array_free(gpointer p)
     g_ptr_array_free(a, TRUE);
 }
 
+/* Document a CustomElementRegistry belongs to via its window, else the main document. */
 static const ns_node *
 ns_ce_registry_document(JSContext *ctx, JSValueConst win)
 {
@@ -47057,6 +48664,7 @@ ns_ce_registry_document(JSContext *ctx, JSValueConst win)
     return node ? node : (js ? js->main_document : NULL);
 }
 
+/* Owner document of node: nearest document ancestor, wrapper __ndOwnerDoc, or current doc. */
 static const ns_node *
 ns_ce_node_document(ns_js *js, const ns_node *node)
 {
@@ -47073,6 +48681,7 @@ ns_ce_node_document(ns_js *js, const ns_node *node)
     return js ? js->current_doc : NULL;
 }
 
+/* Registry key for a name: bare for the main document, else name plus document pointer. */
 static char *
 ns_ce_key(const ns_js *js, const char *lower_name, const ns_node *doc)
 {
@@ -47080,6 +48689,7 @@ ns_ce_key(const ns_js *js, const char *lower_name, const ns_node *doc)
     return g_strdup_printf("%s\x1f%p", lower_name, (const void *)doc);
 }
 
+/* Element name part of a registry key; caller frees. */
 static char *
 ns_ce_key_name(const char *key)
 {
@@ -47087,6 +48697,7 @@ ns_ce_key_name(const char *key)
     return sep ? g_strndup(key, (gsize)(sep - key)) : g_strdup(key);
 }
 
+/* Registered constructor for name in doc's registry (new reference), or undefined. */
 static JSValue
 ns_ce_lookup_klass(ns_js *js, const char *name, const ns_node *doc)
 {
@@ -47099,6 +48710,7 @@ ns_ce_lookup_klass(ns_js *js, const char *name, const ns_node *doc)
     return slot ? JS_DupValue(js->ctx, *slot) : JS_UNDEFINED;
 }
 
+/* customElements.getName(ctor): registered name for a constructor, or null. */
 static JSValue
 ns_ce_getName(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -47122,6 +48734,7 @@ ns_ce_getName(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_NULL;
 }
 
+/* TRUE if ctor is registered under any custom element name. */
 static gboolean
 ns_ce_constructor_registered(ns_js *js, JSValueConst ctor)
 {
@@ -47137,6 +48750,7 @@ ns_ce_constructor_registered(ns_js *js, JSValueConst ctor)
     return FALSE;
 }
 
+/* Logs the pending exception from a custom element callback with its stack. */
 static void
 ns_ce_log_error(ns_js *js, const char *cb_name)
 {
@@ -47163,6 +48777,7 @@ ns_ce_log_error(ns_js *js, const char *cb_name)
     JS_FreeValue(js->ctx, ex);
 }
 
+/* Invokes a lifecycle callback from klass.prototype on elem, logging exceptions. */
 static void
 ns_ce_call_callback(JSContext *ctx, JSValue elem, JSValueConst klass,
                     const char *cb_name, int argc, JSValueConst *argv)
@@ -47185,6 +48800,7 @@ ns_ce_node_connected(ns_js *js, const ns_node *node)
     return ns_js_node_in_page(js, node);
 }
 
+/* Calls connectedCallback once per connection if the node is in the page. */
 static void
 ns_ce_fire_connected_if_needed(JSContext *ctx, ns_js *js, ns_node *node,
                                JSValue elem, JSValueConst klass)
@@ -47199,6 +48815,7 @@ ns_ce_fire_connected_if_needed(JSContext *ctx, ns_js *js, ns_node *node,
     ns_ce_call_callback(ctx, elem, klass, "connectedCallback", 0, NULL);
 }
 
+/* After upgrade, re-sets own data props that shadow prototype setters so the setters run. */
 static void
 ns_ce_reclaim_shadowed_props(JSContext *ctx, JSValueConst elem)
 {
@@ -47256,6 +48873,7 @@ ns_ce_reclaim_shadowed_props(JSContext *ctx, JSValueConst elem)
 
 static void ns_ce_upgrade_subtree_all_at(ns_js *js, ns_node *root, int depth);
 
+/* CE upgrade: swaps prototype, runs constructor, initial attr callbacks, connected. */
 static void
 ns_ce_upgrade_element_with(ns_js *js, ns_node *node, JSValueConst klass_arg,
                            int depth)
@@ -47343,6 +48961,7 @@ ns_ce_upgrade_element_with(ns_js *js, ns_node *node, JSValueConst klass_arg,
     JS_FreeValue(ctx, elem);
 }
 
+/* Runs popover removing steps and disconnectedCallback for connected CEs in a subtree. */
 static void
 ns_ce_disconnect_subtree_rec(ns_js *js, ns_node *root, int depth)
 {
@@ -47369,6 +48988,7 @@ ns_ce_disconnect_subtree_rec(ns_js *js, ns_node *root, int depth)
         ns_ce_disconnect_subtree_rec(js, c, depth + 1);
 }
 
+/* Disconnect steps for a removed subtree: CE callbacks plus media disconnection. */
 static void
 ns_ce_disconnect_subtree(ns_js *js, ns_node *root)
 {
@@ -47376,6 +48996,7 @@ ns_ce_disconnect_subtree(ns_js *js, ns_node *root)
     ns_media_subtree_disconnected(js, root);
 }
 
+/* Definition matching node (autonomous name or is= with matching extends); borrowed value. */
 static JSValue
 ns_ce_class_for_node(ns_js *js, const ns_node *node)
 {
@@ -47415,6 +49036,7 @@ ns_ce_class_for_node(ns_js *js, const ns_node *node)
     return result;
 }
 
+/* Upgrades elements in a subtree whose definition is the one registered under key. */
 static void
 ns_ce_upgrade_subtree_named_rec(ns_js *js, ns_node *root,
                                 const char *target_name, int depth)
@@ -47434,6 +49056,7 @@ ns_ce_upgrade_subtree_named_rec(ns_js *js, ns_node *root,
         ns_ce_upgrade_subtree_named_rec(js, c, target_name, depth + 1);
 }
 
+/* Upgrades a connected subtree's elements matching one newly defined registry key. */
 static void
 ns_ce_upgrade_subtree_named(ns_js *js, ns_node *root, const char *target_name)
 {
@@ -47441,6 +49064,7 @@ ns_ce_upgrade_subtree_named(ns_js *js, ns_node *root, const char *target_name)
     ns_ce_upgrade_subtree_named_rec(js, root, target_name, 0);
 }
 
+/* Upgrades every element in a subtree that has a matching definition, skipping templates. */
 static void
 ns_ce_upgrade_subtree_all_rec(ns_js *js, ns_node *root, int depth)
 {
@@ -47456,6 +49080,7 @@ ns_ce_upgrade_subtree_all_rec(ns_js *js, ns_node *root, int depth)
         ns_ce_upgrade_subtree_all_rec(js, c, depth + 1);
 }
 
+/* For connected roots, upgrades all custom elements and runs media connection steps. */
 static void
 ns_ce_upgrade_subtree_all_at(ns_js *js, ns_node *root, int depth)
 {
@@ -47470,12 +49095,14 @@ ns_ce_upgrade_subtree_all(ns_js *js, ns_node *root)
     ns_ce_upgrade_subtree_all_at(js, root, 0);
 }
 
+/* Upgrades custom elements in a subtree without requiring it to be connected. */
 static void
 ns_ce_upgrade_subtree_detached(ns_js *js, ns_node *root)
 {
     ns_ce_upgrade_subtree_all_rec(js, root, 0);
 }
 
+/* Attribute-change hook: popover/media/link handling, then attributeChangedCallback. */
 static void
 ns_ce_attr_changed(ns_js *js, ns_node *node, const char *attr,
                    const char *old_value, const char *new_value)
@@ -47530,6 +49157,7 @@ ns_ce_attr_changed(ns_js *js, ns_node *node, const char *attr,
     JS_FreeValue(ctx, klass);
 }
 
+/* customElements.define() for a document: validate, register, upgrade, resolve waiters. */
 static JSValue
 ns_ce_define_in(JSContext *ctx, const ns_node *def_doc, int argc,
                 JSValueConst *argv)
@@ -47618,6 +49246,7 @@ ns_ce_define_in(JSContext *ctx, const ns_node *def_doc, int argc,
     return JS_UNDEFINED;
 }
 
+/* customElements.define bound to its registry's window. */
 static JSValue
 ns_ce_define(JSContext *ctx, JSValueConst this_val, int argc,
              JSValueConst *argv, int magic, JSValue *data)
@@ -47627,6 +49256,7 @@ ns_ce_define(JSContext *ctx, JSValueConst this_val, int argc,
                            argc, argv);
 }
 
+/* customElements.get(name) for the registry's document. */
 static JSValue
 ns_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
           int magic, JSValue *data)
@@ -47642,6 +49272,7 @@ ns_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
     return r;
 }
 
+/* customElements.whenDefined(): resolves now if defined, else queues; rejects invalid names. */
 static JSValue
 ns_ce_whenDefined(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv, int magic, JSValue *data)
@@ -47705,6 +49336,7 @@ ns_ce_whenDefined(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* Builds a CustomElementRegistry object whose methods are bound to window win. */
 static JSValue
 ns_ce_make_registry(JSContext *ctx, JSValueConst win)
 {
@@ -47730,6 +49362,7 @@ ns_ce_make_registry_for(JSContext *ctx, JSValueConst this_val,
     return ns_ce_make_registry(ctx, argv[0]);
 }
 
+/* customElements.upgrade(root): upgrades custom elements in root's subtree. */
 static JSValue
 ns_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -47742,6 +49375,7 @@ ns_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
+/* Rounds a viewport dimension to int, using fallback when non-finite or non-positive. */
 static int
 ns_js_viewport_metric(double value, int fallback)
 {
@@ -47750,6 +49384,7 @@ ns_js_viewport_metric(double value, int fallback)
     return (int)(value + 0.5);
 }
 
+/* Updates innerWidth/Height and outerWidth/Height globals from viewport and screen. */
 void
 ns_js_sync_window_metrics(ns_js *js)
 {
@@ -47769,6 +49404,7 @@ ns_js_sync_window_metrics(ns_js *js)
     JS_FreeValue(ctx, global);
 }
 
+/* Records the viewport scroll offset and fires scroll at window and document. */
 void
 ns_js_note_viewport_scroll(ns_js *js, double x, double y)
 {
@@ -47795,6 +49431,7 @@ ns_js_note_viewport_scroll(ns_js *js, double x, double y)
     ns_observer_schedule_tick(js);
 }
 
+/* Fires resize on window and document and re-evaluates media query lists. */
 void
 ns_js_dispatch_resize(ns_js *js)
 {
@@ -47810,6 +49447,7 @@ ns_js_dispatch_resize(ns_js *js)
         ns_js_dispatch_event(js, js->current_doc, "resize", NULL);
 }
 
+/* Fires a PageTransitionEvent (pageshow/pagehide) with persisted at the window. */
 void
 ns_js_fire_page_transition(ns_js *js, const char *type, gboolean persisted)
 {
@@ -47823,6 +49461,7 @@ ns_js_fire_page_transition(ns_js *js, const char *type, gboolean persisted)
     ns_js_dispatch_window_only_event(js, js->current_doc, type, ev, NULL);
 }
 
+/* Completion callback for sendBeacon requests; discards the response. */
 static void
 ns_beacon_done(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -47833,6 +49472,7 @@ ns_beacon_done(GObject *src, GAsyncResult *result, gpointer user_data)
     g_clear_error(&err);
 }
 
+/* navigator.sendBeacon(): async POST of the body to an http(s) URL subject to fetch policy. */
 static JSValue
 ns_navigator_sendBeacon(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -47918,6 +49558,7 @@ ns_illegal_constructor(JSContext *ctx, JSValueConst this_val,
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
+/* TRUE if v.nodeType equals a or b. */
 static gboolean
 ns_value_nodetype_in(JSContext *ctx, JSValueConst v, int32_t a, int32_t b)
 {
@@ -47928,6 +49569,7 @@ ns_value_nodetype_in(JSContext *ctx, JSValueConst v, int32_t a, int32_t b)
     return t == a || t == b;
 }
 
+/* StaticRange constructor: validates the init dict and rejects doctype/attr boundaries. */
 static JSValue
 ns_static_range_ctor(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -47968,6 +49610,7 @@ ns_static_range_ctor(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* VTTCue constructor: plain object with timing, text and default cue settings. */
 static JSValue
 ns_vtt_cue_ctor(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -48001,6 +49644,7 @@ ns_vtt_cue_ctor(JSContext *ctx, JSValueConst this_val,
     return c;
 }
 
+/* ClipboardItem.getType(): promise for stored data of a type, NotFoundError if absent. */
 static JSValue
 ns_clipboard_item_get_type(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -48024,6 +49668,7 @@ ns_clipboard_item_get_type(JSContext *ctx, JSValueConst this_val,
     return ns_promise_resolve_take(ctx, value);
 }
 
+/* ClipboardItem constructor: copies the type-to-data map and lists its types. */
 static JSValue
 ns_clipboard_item_ctor(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -48055,6 +49700,7 @@ ns_clipboard_item_ctor(JSContext *ctx, JSValueConst this_val,
     return item;
 }
 
+/* CustomStateSet constructor stand-in returning a new Set. */
 static JSValue
 ns_custom_state_set_ctor(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -48077,6 +49723,7 @@ ns_global_has(JSContext *ctx, JSValueConst global, const char *name)
     return has > 0;
 }
 
+/* Sets global[name] = value only when absent; otherwise frees value. */
 static void
 ns_set_if_missing(JSContext *ctx, JSValueConst global,
                   const char *name, JSValue value)
@@ -48115,6 +49762,7 @@ static const char *const ns_event_handler_names[] = {
     "onwebkittransitionend", "onwheel",
 };
 
+/* Defines every on* event handler name as null on target when absent. */
 static void
 ns_install_event_handler_props(JSContext *ctx, JSValueConst target)
 {
@@ -48122,6 +49770,7 @@ ns_install_event_handler_props(JSContext *ctx, JSValueConst target)
         ns_set_if_missing(ctx, target, ns_event_handler_names[i], JS_NULL);
 }
 
+/* on* handler getter: compiles the content attribute lazily, recompiling if it changed. */
 static JSValue
 ns_element_on_get(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv, int magic)
@@ -48165,6 +49814,7 @@ ns_element_on_get(JSContext *ctx, JSValueConst this_val,
     return fn;
 }
 
+/* on* handler setter: stores a function (non-functions become null), dropping attr source. */
 static JSValue
 ns_element_on_set(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv, int magic)
@@ -48183,6 +49833,7 @@ ns_element_on_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Installs on* getter/setter pairs for all handler names on proto. */
 static void
 ns_install_event_handler_accessors(JSContext *ctx, JSValueConst proto)
 {
@@ -48199,6 +49850,7 @@ ns_install_event_handler_accessors(JSContext *ctx, JSValueConst proto)
     }
 }
 
+/* Installs window compat globals: SVGLength constants, bars, handlers, Intl, webkitURL. */
 static void
 ns_install_window_compat(JSContext *ctx, JSValueConst global)
 {
@@ -48294,6 +49946,7 @@ static JSClassDef ns_zlib_class = {
     .finalizer = ns_zlib_finalizer,
 };
 
+/* zlib windowBits for gzip, deflate or deflate-raw; 0 for unknown formats. */
 static int
 ns_zlib_window_bits(const char *format)
 {
@@ -48304,6 +49957,7 @@ ns_zlib_window_bits(const char *format)
     return 0;
 }
 
+/* Creates a zlib (de)compression codec object for CompressionStream/DecompressionStream. */
 static JSValue
 ns_zlib_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -48341,6 +49995,7 @@ ns_zlib_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return obj;
 }
 
+/* Feeds input through the codec and returns output as an ArrayBuffer; caps at 256 MiB. */
 static JSValue
 ns_zlib_run(JSContext *ctx, ns_zlib_codec *c, const uint8_t *in,
             size_t in_len, gboolean finish)
@@ -48390,6 +50045,7 @@ ns_zlib_unwrap(JSValueConst v)
     return ns_zlib_class_id ? JS_GetOpaque(v, ns_zlib_class_id) : NULL;
 }
 
+/* Pushes an ArrayBuffer or view chunk through a codec, returning produced bytes. */
 static JSValue
 ns_zlib_push(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -48416,6 +50072,7 @@ ns_zlib_push(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
     return ns_zlib_run(ctx, c, base + off, len, FALSE);
 }
 
+/* Flushes a codec with Z_FINISH and returns the remaining output. */
 static JSValue
 ns_zlib_finish(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -48427,6 +50084,7 @@ ns_zlib_finish(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return ns_zlib_run(ctx, c, (const uint8_t *)"", 0, TRUE);
 }
 
+/* Defines Symbol.unscopables on proto for the ChildNode/ParentNode mutation methods. */
 static void
 ns_define_element_unscopables(JSContext *ctx, JSValue proto)
 {
@@ -48451,6 +50109,7 @@ ns_define_element_unscopables(JSContext *ctx, JSValue proto)
     JS_FreeValue(ctx, gobj);
 }
 
+/* toJSON helper: plain object copy of this's own enumerable non-function properties. */
 static JSValue
 ns_own_data_props_toJSON(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -48475,6 +50134,7 @@ ns_own_data_props_toJSON(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* performance.toJSON(): object with timeOrigin, timing and navigation. */
 static JSValue
 ns_window_performance_toJSON(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -48492,6 +50152,7 @@ ns_window_performance_toJSON(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Makes the performance object inherit from EventTarget.prototype. */
 static void
 ns_performance_extend_event_target(JSContext *ctx, JSValueConst global,
                                    JSValueConst performance)
@@ -48505,6 +50166,7 @@ ns_performance_extend_event_target(JSContext *ctx, JSValueConst global,
     JS_FreeValue(ctx, et);
 }
 
+/* Returns global[ctor_name].prototype (new reference), or undefined. */
 static JSValue
 ns_proto_of(JSContext *ctx, JSValueConst global, const char *ctor_name)
 {
@@ -48515,6 +50177,7 @@ ns_proto_of(JSContext *ctx, JSValueConst global, const char *ctor_name)
     return proto;
 }
 
+/* Sets the prototype of global[child_ctor].prototype to parent_proto. */
 static void
 ns_chain_proto(JSContext *ctx, JSValueConst global, const char *child_ctor,
                JSValueConst parent_proto)
@@ -48525,6 +50188,7 @@ ns_chain_proto(JSContext *ctx, JSValueConst global, const char *child_ctor,
     JS_FreeValue(ctx, proto);
 }
 
+/* Defines a global interface object: illegal-constructor function wired to proto with tag. */
 void
 ns_make_interface_object(JSContext *ctx, JSValueConst global,
                          const char *name, JSValueConst proto)
@@ -48550,6 +50214,7 @@ ns_make_interface_object(JSContext *ctx, JSValueConst global,
                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* TRUE if v is a function whose prototype.constructor points back to v. */
 static gboolean
 ns_value_is_interface_object(JSContext *ctx, JSValueConst v, JSAtom proto_atom)
 {
@@ -48565,6 +50230,7 @@ ns_value_is_interface_object(JSContext *ctx, JSValueConst v, JSAtom proto_atom)
     return ok;
 }
 
+/* Makes configurable accessor/method members of an interface prototype enumerable. */
 static void
 ns_expose_interface_members(JSContext *ctx, JSValueConst proto)
 {
@@ -48602,6 +50268,7 @@ ns_expose_interface_members(JSContext *ctx, JSValueConst proto)
     js_free(ctx, tab);
 }
 
+/* Normalizes global interface objects: non-writable prototype, enumerable members, hidden. */
 static void
 ns_seal_interface_objects(JSContext *ctx, JSValueConst global)
 {
@@ -48628,6 +50295,7 @@ ns_seal_interface_objects(JSContext *ctx, JSValueConst global)
     js_free(ctx, tab);
 }
 
+/* Sets Symbol.toStringTag on core DOM/event prototypes and tag-based interfaces. */
 static void
 ns_install_tostringtag(JSContext *ctx, JSValueConst global)
 {
@@ -48671,6 +50339,7 @@ ns_install_tostringtag(JSContext *ctx, JSValueConst global)
     JS_FreeAtom(ctx, tag_atom);
 }
 
+/* JS pass giving history, performance, navigator etc. proper interface prototypes and tags. */
 static void
 ns_install_web_api_shapes(JSContext *ctx)
 {
@@ -48760,6 +50429,7 @@ ns_install_web_api_shapes(JSContext *ctx)
     JS_FreeValue(ctx, result);
 }
 
+/* Links global[ctor_name] and proto via prototype/constructor properties. */
 static void
 ns_set_ctor_proto(JSContext *ctx, JSValueConst global, const char *ctor_name,
                   JSValueConst proto)
@@ -48774,6 +50444,7 @@ ns_set_ctor_proto(JSContext *ctx, JSValueConst global, const char *ctor_name,
     JS_FreeValue(ctx, ctor);
 }
 
+/* Deletes the named properties from proto. */
 static void
 ns_proto_delete_names(JSContext *ctx, JSValueConst proto,
                       const char *const *names, gsize n)
@@ -48791,6 +50462,7 @@ static const char *const ns_element_only_methods[] = {
     "hasAttributes", "namespaceURI", "prefix", "localName",
 };
 
+/* navigator.userActivation.isActive: whether transient activation is in effect. */
 static JSValue
 ns_user_activation_get_is_active(JSContext *ctx, JSValueConst this_val)
 {
@@ -48798,6 +50470,7 @@ ns_user_activation_get_is_active(JSContext *ctx, JSValueConst this_val)
     return JS_NewBool(ctx, ns_js_has_transient_activation(js_from_ctx(ctx)));
 }
 
+/* navigator.userActivation.hasBeenActive: sticky user activation flag. */
 static JSValue
 ns_user_activation_get_has_been_active(JSContext *ctx, JSValueConst this_val)
 {
@@ -48806,6 +50479,7 @@ ns_user_activation_get_has_been_active(JSContext *ctx, JSValueConst this_val)
     return JS_NewBool(ctx, js && js->user_ever_activated);
 }
 
+/* Defines an enumerable, configurable getter/setter accessor on proto. */
 static void
 ns_proto_define_getset(JSContext *ctx, JSValueConst proto, const char *name,
                        JSValue (*getter)(JSContext *, JSValueConst),
@@ -48822,6 +50496,7 @@ ns_proto_define_getset(JSContext *ctx, JSValueConst proto, const char *name,
     JS_FreeAtom(ctx, atom);
 }
 
+/* Installs ns_interface_members entries onto each listed interface prototype. */
 static void
 ns_install_interface_members(JSContext *ctx, JSValueConst global)
 {
@@ -48839,6 +50514,7 @@ ns_install_interface_members(JSContext *ctx, JSValueConst global)
     }
 }
 
+/* Builds the Node/Element/HTMLElement prototype chain and per-tag protos. */
 static void
 ns_install_dom_hierarchy(ns_js *js, JSContext *ctx, JSValueConst global)
 {
@@ -49150,6 +50826,7 @@ ns_install_dom_hierarchy(ns_js *js, JSContext *ctx, JSValueConst global)
     }
 }
 
+/* chrome.loadTimes() compat stub with plausible timings derived from the time origin. */
 static JSValue
 ns_chrome_load_times(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -49175,6 +50852,7 @@ ns_chrome_load_times(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* chrome.csi() compat stub with start, onload and page times. */
 static JSValue
 ns_chrome_csi(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -49192,6 +50870,7 @@ ns_chrome_csi(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* Installs the window.chrome compat object with loadTimes and csi. */
 static void
 ns_install_window_chrome(JSContext *ctx, JSValueConst global)
 {
@@ -49202,6 +50881,7 @@ ns_install_window_chrome(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, global, "chrome", chrome);
 }
 
+/* Floors a timestamp to 0.1 ms resolution to limit timing side channels. */
 static double
 ns_js_coarsen_performance_ms(double value)
 {
@@ -49209,6 +50889,7 @@ ns_js_coarsen_performance_ms(double value)
     return floor(value * 10.0) / 10.0;
 }
 
+/* Coarsens the time origin (100 us) and all navigation timing milestones. */
 static void
 ns_js_coarsen_navigation_timing(ns_js *js)
 {
@@ -49238,6 +50919,7 @@ ns_js_coarsen_navigation_timing(ns_js *js)
         js->navigation_timing.response_end_ms);
 }
 
+/* Records a navigation milestone now and mirrors it into performance.timing[legacy_key]. */
 static void
 ns_js_set_navigation_milestone(ns_js *js, double *field,
                                const char *legacy_key)
@@ -49257,6 +50939,7 @@ ns_js_set_navigation_milestone(ns_js *js, double *field,
     JS_FreeValue(js->ctx, global);
 }
 
+/* Creates a JS engine: runtime, main realm, DOM classes and window globals; NULL on failure. */
 ns_js *
 ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
           ns_js_mutated_cb mut_cb, gpointer mut_user_data,
@@ -50592,6 +52275,7 @@ ns_js_new(ns_js_log_cb log_cb, gpointer log_user_data,
     return js;
 }
 
+/* document.getElementsByTagName(): live collection over the document. */
 static JSValue
 ns_document_getElementsByTagName(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -50605,6 +52289,7 @@ ns_document_getElementsByTagName(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* Local name of an element (part after any prefix colon), borrowed from n->name. */
 static const char *
 ns_node_local_name_ptr(const ns_node *n)
 {
@@ -50744,6 +52429,7 @@ static const char ns_node_shapes_src[] =
     "    try { delete p[0][k]; } catch (e) {} }); });"
     "})(globalThis)";
 
+/* Runs a JS pass trimming/filling Node-family prototypes to their spec member lists. */
 static void
 ns_install_node_shapes(JSContext *ctx)
 {
@@ -50754,6 +52440,7 @@ ns_install_node_shapes(JSContext *ctx)
     JS_FreeValue(ctx, r);
 }
 
+/* Appends descendants matching namespace and local name (with * wildcards) to arr. */
 static void
 ns_collect_by_tag_ns(const ns_node *n, const char *ns, gboolean ns_wild,
                      const char *local, gboolean local_wild,
@@ -50783,6 +52470,7 @@ ns_collect_by_tag_ns(const ns_node *n, const char *ns, gboolean ns_wild,
     }
 }
 
+/* getElementsByTagNameNS core: live collection by namespace (""/null = none) and local name. */
 static JSValue
 ns_getElementsByTagNameNS_in(JSContext *ctx, JSValueConst owner,
                              ns_live_kind kind, int argc, JSValueConst *argv)
@@ -50821,6 +52509,7 @@ ns_element_getElementsByTagNameNS(JSContext *ctx, JSValueConst this_val,
                                         argc, argv);
 }
 
+/* document.getElementsByClassName(): live collection over the document. */
 static JSValue
 ns_document_getElementsByClassName(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
@@ -50834,6 +52523,7 @@ ns_document_getElementsByClassName(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* TRUE for characters not allowed in element names (NUL, whitespace, > and /). */
 static gboolean
 ns_name_forbidden_char(gunichar c)
 {
@@ -50841,6 +52531,7 @@ ns_name_forbidden_char(gunichar c)
            c == '\r' || c == '\f' || c == '>' || c == '/';
 }
 
+/* TRUE if [s, end) is valid UTF-8 containing no forbidden name characters. */
 static gboolean
 ns_name_no_forbidden(const char *s, const char *end)
 {
@@ -50861,6 +52552,7 @@ ns_name_no_forbidden(const char *s, const char *end)
     return TRUE;
 }
 
+/* DOM "valid element local name": ASCII alpha start, or :/_/non-ASCII start with name chars. */
 static gboolean
 ns_valid_element_local_name(const char *s)
 {
@@ -50885,6 +52577,7 @@ ns_valid_element_local_name(const char *s)
     return TRUE;
 }
 
+/* DOM "valid attribute local name": non-empty, valid UTF-8, no whitespace, NUL, /, > or =. */
 static gboolean
 ns_valid_attr_name(const char *s)
 {
@@ -50908,6 +52601,7 @@ ns_valid_attr_name(const char *s)
     return TRUE;
 }
 
+/* Validates a qualified element name: optional non-empty prefix plus valid local name. */
 static gboolean
 ns_is_xml_qname(const char *s)
 {
@@ -50920,6 +52614,7 @@ ns_is_xml_qname(const char *s)
     return ns_valid_element_local_name(colon + 1);
 }
 
+/* Validates a qualified attribute name: optional non-empty prefix plus valid local name. */
 static gboolean
 ns_is_attr_qname(const char *s)
 {
@@ -50932,6 +52627,7 @@ ns_is_attr_qname(const char *s)
     return ns_valid_attr_name(colon + 1);
 }
 
+/* DOM "validate and extract" namespace checks for attributes; throws NamespaceError. */
 static JSValue
 ns_validate_attr_ns(JSContext *ctx, const char *ns_uri, const char *qname)
 {
@@ -50959,6 +52655,7 @@ ns_validate_attr_ns(JSContext *ctx, const char *ns_uri, const char *qname)
     return JS_UNDEFINED;
 }
 
+/* TRUE if a doctype name has no NUL, >, or ASCII whitespace. */
 static gboolean
 ns_valid_doctype_name(const char *s, size_t len)
 {
@@ -50972,6 +52669,7 @@ ns_valid_doctype_name(const char *s, size_t len)
     return TRUE;
 }
 
+/* TRUE if a document wrapper is flagged as an XML document. */
 static gboolean
 ns_doc_wrapper_is_xml(JSContext *ctx, JSValueConst doc_val)
 {
@@ -50982,6 +52680,7 @@ ns_doc_wrapper_is_xml(JSContext *ctx, JSValueConst doc_val)
     return is_xml;
 }
 
+/* TRUE if a document wrapper's contentType mentions xhtml. */
 static gboolean
 ns_doc_wrapper_is_xhtml(JSContext *ctx, JSValueConst doc_val)
 {
@@ -50994,6 +52693,7 @@ ns_doc_wrapper_is_xhtml(JSContext *ctx, JSValueConst doc_val)
     return xh;
 }
 
+/* Records doc_val as the node wrapper's owner document unless it is the current document. */
 static void
 ns_tag_owner_document(JSContext *ctx, JSValueConst doc_val,
                       JSValueConst node_val)
@@ -51016,6 +52716,7 @@ ns_tag_owner_document(JSContext *ctx, JSValueConst doc_val,
                               JS_DupValue(ctx, doc_val), JS_PROP_CONFIGURABLE);
 }
 
+/* createElement(): validates the name, lowercases in HTML docs, handles is= and CE upgrade. */
 static JSValue
 ns_document_createElement(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -51071,6 +52772,7 @@ ns_document_createElement(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* createTextNode(): new detached text node (NUL-safe) owned by this document. */
 static JSValue
 ns_document_createTextNode(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -51089,6 +52791,7 @@ ns_document_createTextNode(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* createElementNS(): validates qualified name and namespace, sets SVG/foreign flags. */
 static JSValue
 ns_document_createElementNS(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -51159,6 +52862,7 @@ ns_document_createElementNS(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* createComment(): new detached comment node owned by this document. */
 static JSValue
 ns_document_createComment(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -51181,6 +52885,7 @@ ns_document_createComment(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* createCDATASection(): XML documents only; rejects data containing "]]>". */
 static JSValue
 ns_document_createCDATASection(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -51211,6 +52916,7 @@ ns_document_createCDATASection(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* XML 1.0 NameStartChar test. */
 static gboolean
 ns_is_xml_name_start(gunichar c)
 {
@@ -51233,6 +52939,7 @@ ns_is_xml_name_start(gunichar c)
     return FALSE;
 }
 
+/* XML 1.0 NameChar test. */
 static gboolean
 ns_is_xml_name_char(gunichar c)
 {
@@ -51245,6 +52952,7 @@ ns_is_xml_name_char(gunichar c)
     return FALSE;
 }
 
+/* TRUE if s is a valid UTF-8 XML Name. */
 static gboolean
 ns_is_xml_name(const char *s)
 {
@@ -51263,6 +52971,7 @@ ns_is_xml_name(const char *s)
     return TRUE;
 }
 
+/* createProcessingInstruction(): validates target as XML Name and data without "?>". */
 static JSValue
 ns_document_createProcessingInstruction(JSContext *ctx,
                                         JSValueConst this_val,
@@ -51302,6 +53011,7 @@ ns_document_createProcessingInstruction(JSContext *ctx,
     return wrapper;
 }
 
+/* Calls fn on an Attr's ownerElement, returning none when it has no owner. */
 static JSValue
 ns_attr_owner_delegate(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv,
@@ -51328,6 +53038,7 @@ ns_attr_lookupPrefix(JSContext *ctx, JSValueConst this_val,
 { return ns_attr_owner_delegate(ctx, this_val, argc, argv,
                                 ns_element_lookupPrefix, JS_NULL); }
 
+/* Attr.isDefaultNamespace(): delegates to owner; ownerless attrs match only empty/null. */
 static JSValue
 ns_attr_isDefaultNamespace(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -51354,6 +53065,7 @@ static JSValue
 ns_make_attr_node(JSContext *ctx, const char *ns_uri, const char *prefix,
                   const char *local, const char *qname);
 
+/* Attr.cloneNode(): new detached Attr copying namespace, prefix, names and value. */
 static JSValue
 ns_attr_cloneNode(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv)
@@ -51388,6 +53100,7 @@ ns_attr_cloneNode(JSContext *ctx, JSValueConst this_val, int argc,
     return copy;
 }
 
+/* Creates a detached Attr object with empty value and namespace lookup methods. */
 static JSValue
 ns_make_attr_node(JSContext *ctx, const char *ns_uri, const char *prefix,
                   const char *local, const char *qname)
@@ -51407,6 +53120,7 @@ ns_make_attr_node(JSContext *ctx, const char *ns_uri, const char *prefix,
     return out;
 }
 
+/* createAttribute(): validates the name, lowercases it in HTML documents. */
 static JSValue
 ns_document_createAttribute(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -51430,6 +53144,7 @@ ns_document_createAttribute(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* createAttributeNS(): validates qualified name and namespace, splits prefix/local name. */
 static JSValue
 ns_document_createAttributeNS(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -51467,6 +53182,7 @@ ns_document_createAttributeNS(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Event.initEvent(): sets type, bubbles, cancelable, resets flags; no-op while dispatching. */
 static JSValue
 ns_event_initEvent(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -51495,6 +53211,7 @@ ns_event_initEvent(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* UIEvent.initUIEvent(): initEvent plus view and detail; no-op while dispatching. */
 static JSValue
 ns_event_initUIEvent(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -51516,6 +53233,7 @@ ns_event_initUIEvent(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* TRUE if the event is currently being dispatched. */
 static gboolean
 ns_event_init_in_dispatch(JSContext *ctx, JSValueConst this_val)
 {
@@ -51525,6 +53243,7 @@ ns_event_init_in_dispatch(JSContext *ctx, JSValueConst this_val)
     return in;
 }
 
+/* MouseEvent.initMouseEvent(): legacy init of coordinates, modifiers, button, relatedTarget. */
 static JSValue
 ns_event_initMouseEvent(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -51555,6 +53274,7 @@ ns_event_initMouseEvent(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* KeyboardEvent.initKeyboardEvent(): legacy init of key, location and modifiers. */
 static JSValue
 ns_event_initKeyboardEvent(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -51580,6 +53300,7 @@ ns_event_initKeyboardEvent(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* document.createEvent(): maps legacy interface aliases to constructors. */
 static JSValue
 ns_document_createEvent(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -51644,6 +53365,7 @@ ns_document_createEvent(JSContext *ctx, JSValueConst this_val,
     return ev;
 }
 
+/* createDocumentFragment(): new detached fragment owned by this document. */
 static JSValue
 ns_document_createDocumentFragment(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
@@ -51661,6 +53383,7 @@ ns_document_createDocumentFragment(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_synthdoc_get_doctype(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv);
 
+/* DOMImplementation.createHTMLDocument(): inert doc with doctype, html/head/title/body. */
 static JSValue
 ns_impl_create_html_document(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -51706,6 +53429,7 @@ ns_impl_create_html_document(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* documentElement getter for synthetic documents: first element child. */
 static JSValue
 ns_synthdoc_get_documentElement(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -51718,6 +53442,7 @@ ns_synthdoc_get_documentElement(JSContext *ctx, JSValueConst this_val,
     return JS_NULL;
 }
 
+/* doctype getter for synthetic documents: first doctype child. */
 static JSValue
 ns_synthdoc_get_doctype(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -51754,6 +53479,7 @@ ns_synthdoc_define_accessor(JSContext *ctx, JSValueConst obj,
     JS_FreeAtom(ctx, atom);
 }
 
+/* First element child of a synthetic document wrapper, or NULL. */
 static ns_node *
 ns_synthdoc_html_node(JSValueConst this_val)
 {
@@ -51780,6 +53506,7 @@ ns_synthdoc_set_body(JSContext *ctx, JSValueConst this_val,
     return ns_document_set_body(ctx, this_val, argv[0]);
 }
 
+/* head getter for synthetic documents: head child of the root element. */
 static JSValue
 ns_synthdoc_get_head(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -51793,6 +53520,7 @@ ns_synthdoc_get_head(JSContext *ctx, JSValueConst this_val,
     return JS_NULL;
 }
 
+/* Title text with ASCII whitespace collapsed and trimmed; caller frees. */
 static char *
 ns_document_title_text(const ns_node *title)
 {
@@ -51815,6 +53543,7 @@ ns_document_title_text(const ns_node *title)
     return g_string_free(out, FALSE);
 }
 
+/* title getter for synthetic documents using the first title element. */
 static JSValue
 ns_synthdoc_get_title(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -51828,6 +53557,7 @@ ns_synthdoc_get_title(JSContext *ctx, JSValueConst this_val,
     return v;
 }
 
+/* title setter for synthetic documents: replaces or creates the title element's text. */
 static JSValue
 ns_synthdoc_set_title(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -51880,6 +53610,7 @@ ns_realmdoc_url(JSContext *ctx, JSValueConst bound_url)
     return url;
 }
 
+/* document.cookie getter for a realm document, bound to its creation URL. */
 static JSValue
 ns_realmdoc_cookie_get(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv, int magic,
@@ -51891,6 +53622,7 @@ ns_realmdoc_cookie_get(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, cookies ? cookies : "");
 }
 
+/* document.cookie setter bound to the creation URL; ignores values over 4096 bytes. */
 static JSValue
 ns_realmdoc_cookie_set(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv, int magic,
@@ -51906,6 +53638,7 @@ ns_realmdoc_cookie_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Replaces document.cookie with a getter that always returns "". */
 static void
 ns_realmdoc_deny_cookie(JSContext *ctx, JSValueConst doc)
 {
@@ -51918,6 +53651,7 @@ ns_realmdoc_deny_cookie(JSContext *ctx, JSValueConst doc)
     JS_FreeAtom(ctx, atom);
 }
 
+/* getElementById() on a realm document's own subtree. */
 static JSValue
 ns_realmdoc_getElementById(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -51932,6 +53666,7 @@ ns_realmdoc_getElementById(JSContext *ctx, JSValueConst this_val,
     return found ? ns_make_element(ctx, found) : JS_NULL;
 }
 
+/* activeElement for a realm document: focused node inside it, else its body. */
 static JSValue
 ns_realmdoc_get_activeElement(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -51955,6 +53690,7 @@ static JSValue ns_realmdoc_write(JSContext *ctx, JSValueConst this_val,
 static JSValue ns_realmdoc_writeln(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv);
 
+/* getSelection() on a realm document, forwarding to the global getSelection. */
 static JSValue
 ns_realmdoc_get_selection(JSContext *ctx, JSValueConst this_val, int argc,
                           JSValueConst *argv)
@@ -51969,6 +53705,7 @@ ns_realmdoc_get_selection(JSContext *ctx, JSValueConst this_val, int argc,
     return sel;
 }
 
+/* Wraps doc_node as a standalone Document with URL, cookie, charset and DOM methods. */
 static JSValue
 ns_make_realm_document(JSContext *ctx, ns_node *doc_node, const char *url,
                        const char *charset, const char *content_type,
@@ -52085,6 +53822,7 @@ ns_make_realm_document(JSContext *ctx, ns_node *doc_node, const char *url,
     return w;
 }
 
+/* Creates an inert empty XMLDocument wrapper at about:blank. */
 static JSValue
 ns_make_synth_xml_document(JSContext *ctx)
 {
@@ -52105,6 +53843,7 @@ ns_make_synth_xml_document(JSContext *ctx)
     return wrapper;
 }
 
+/* DOMImplementation.createDocumentType(): validated detached doctype node. */
 static JSValue
 ns_impl_create_document_type(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -52144,6 +53883,7 @@ ns_impl_create_document_type(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* DOMImplementation.createDocument(): XML document with optional doctype and root element. */
 static JSValue
 ns_impl_create_document(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -52224,6 +53964,7 @@ ns_impl_create_document(JSContext *ctx, JSValueConst this_val,
     return wrapper;
 }
 
+/* new Document(): inert empty document with the Document prototype. */
 static JSValue
 ns_document_ctor(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -52287,6 +54028,7 @@ ns_window_removeEventListener(JSContext *ctx, JSValueConst this_val,
         ns_window_document_for(ctx, this_val), argc, argv, TRUE);
 }
 
+/* window.dispatchEvent(): untrusted dispatch targeted at the window only. */
 static JSValue
 ns_window_dispatchEvent(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -52322,6 +54064,7 @@ ns_window_dispatchEvent(JSContext *ctx, JSValueConst this_val,
     return prevented ? JS_FALSE : JS_TRUE;
 }
 
+/* document.dispatchEvent(): untrusted dispatch at the current document. */
 static JSValue
 ns_document_dispatchEvent(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -52356,6 +54099,7 @@ ns_doc_find_title_node(ns_node *doc)
     return doc ? ns_node_find_first_element(doc, "title") : NULL;
 }
 
+/* Appends descendant elements whose name attribute equals name, skipping templates/frames. */
 static void
 ns_collect_by_name(const ns_node *root, const char *name,
                    JSContext *ctx, JSValue arr, uint32_t *idx, int depth)
@@ -52373,6 +54117,7 @@ ns_collect_by_name(const ns_node *root, const char *name,
     }
 }
 
+/* document.getElementsByName(): live NodeList by name attribute. */
 static JSValue
 ns_document_getElementsByName(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -52388,6 +54133,7 @@ ns_document_getElementsByName(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* document.title getter: whitespace-collapsed text of the first title element. */
 static JSValue
 ns_document_get_title(JSContext *ctx, JSValueConst this_val)
 {
@@ -52400,6 +54146,7 @@ ns_document_get_title(JSContext *ctx, JSValueConst this_val)
     return v;
 }
 
+/* document.title setter: replaces title text, creating a title in head if missing. */
 static JSValue
 ns_document_set_title(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -52808,6 +54555,7 @@ static const char ns_element_shapes_src[] =
     "  });"
     "})(globalThis)";
 
+/* Runs a JS pass moving members onto their spec Element/HTML*Element prototypes. */
 static void
 ns_install_element_shapes(JSContext *ctx)
 {
@@ -52830,6 +54578,7 @@ ns_js_current_url_is_main_origin(ns_js *js)
     return cur && strcmp(cur, js->document_origin) == 0;
 }
 
+/* Refreshes the cached document.cookie string when the cookie jar version changed. */
 static void
 ns_document_refresh_cookie(ns_js *js)
 {
@@ -52844,6 +54593,7 @@ ns_document_refresh_cookie(ns_js *js)
     js->cookie_version = version;
 }
 
+/* document.cookie getter, restricted to allowed callers on the main document's origin. */
 static JSValue
 ns_document_get_cookie(JSContext *ctx, JSValueConst this_val)
 {
@@ -52855,6 +54605,7 @@ ns_document_get_cookie(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, js->cookie_value ? js->cookie_value : "");
 }
 
+/* Removes every name=value pair for name from a "; "-separated cookie string in place. */
 static void
 ns_cookie_remove_named(char **jar, const char *name, gsize name_len)
 {
@@ -52891,6 +54642,7 @@ typedef struct {
     gboolean has_max_age;
 } ns_cookie_attrs;
 
+/* Parses cookie attributes (Secure, Max-Age, Expires, Domain, Path, SameSite=None). */
 static void
 ns_cookie_parse_attrs(const char *attrs, ns_cookie_attrs *out)
 {
@@ -52945,6 +54697,7 @@ ns_cookie_parse_attrs(const char *attrs, ns_cookie_attrs *out)
     }
 }
 
+/* Enforces __Secure-/__Host- prefix rules and SameSite=None requiring Secure. */
 static gboolean
 ns_cookie_prefix_ok(const char *name, gsize name_len,
                     const ns_cookie_attrs *attrs, gboolean is_https)
@@ -52961,6 +54714,7 @@ ns_cookie_prefix_ok(const char *name, gsize name_len,
     return TRUE;
 }
 
+/* document.cookie setter: validates attributes and prefixes, stores via the network jar. */
 static JSValue
 ns_document_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -53018,6 +54772,7 @@ ns_document_get_referrer(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, js_from_ctx(ctx)->referrer ? js_from_ctx(ctx)->referrer : "");
 }
 
+/* document.readyState: loading, interactive or complete. */
 static JSValue
 ns_document_get_readyState(JSContext *ctx, JSValueConst this_val)
 {
@@ -53057,6 +54812,7 @@ ns_document_get_visibilityState(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "visible");
 }
 
+/* document.compatMode: BackCompat in quirks mode, else CSS1Compat. */
 static JSValue
 ns_document_get_compatMode(JSContext *ctx, JSValueConst this_val)
 {
@@ -53083,6 +54839,7 @@ ns_document_write_state_free(gpointer data)
     g_free(state);
 }
 
+/* Insertion point for document.write: after the running script, else end of body. */
 static ns_node *
 ns_document_write_parent(ns_js *js, ns_node *script, ns_node **out_ref)
 {
@@ -53097,6 +54854,7 @@ ns_document_write_parent(ns_js *js, ns_node *script, ns_node **out_ref)
     return body;
 }
 
+/* Most recent document.write state for script, or NULL. */
 static ns_document_write_state *
 ns_document_write_state_find(ns_js *js, ns_node *script)
 {
@@ -53109,6 +54867,7 @@ ns_document_write_state_find(ns_js *js, ns_node *script)
     return NULL;
 }
 
+/* Creates a document.write state with a fragment parser in the insertion context. */
 static ns_document_write_state *
 ns_document_write_state_new(ns_js *js, ns_node *script)
 {
@@ -53142,6 +54901,7 @@ ns_document_write_state_new(ns_js *js, ns_node *script)
     return state;
 }
 
+/* Defines obj[name] = value (enumerable) unless the property already exists. */
 static void
 ns_define_missing_named_value(JSContext *ctx, JSValueConst obj,
                               const char *name, JSValueConst value)
@@ -53154,6 +54914,7 @@ ns_define_missing_named_value(JSContext *ctx, JSValueConst obj,
     JS_FreeAtom(ctx, atom);
 }
 
+/* Exposes named forms and named img (by id and name) as document properties. */
 static void
 ns_document_expose_legacy_named_in(JSContext *ctx, JSValueConst document,
                                    const ns_node *n, int depth)
@@ -53178,6 +54939,7 @@ ns_document_expose_legacy_named_in(JSContext *ctx, JSValueConst document,
         ns_document_expose_legacy_named_in(ctx, document, c, depth + 1);
 }
 
+/* Exposes legacy named form/img properties on document for a subtree. */
 static void
 ns_document_expose_legacy_named(ns_js *js, const ns_node *root,
                                 JSValueConst document)
@@ -53186,6 +54948,7 @@ ns_document_expose_legacy_named(ns_js *js, const ns_node *root,
     ns_document_expose_legacy_named_in(js->ctx, document, root, 0);
 }
 
+/* Moves parsed document.write output into place, then upgrades CEs and runs scripts. */
 static void
 ns_document_write_insert_output(ns_js *js, ns_document_write_state *state)
 {
@@ -53228,6 +54991,7 @@ ns_document_write_insert_output(ns_js *js, ns_document_write_state *state)
     g_ptr_array_free(inserted, TRUE);
 }
 
+/* Feeds input (or finish) to a document.write parser and inserts the output. */
 static gboolean
 ns_document_write_process(ns_js *js, ns_document_write_state *state,
                           const char *input, gsize len, gboolean finish)
@@ -53240,6 +55004,7 @@ ns_document_write_process(ns_js *js, ns_document_write_state *state,
     return ok;
 }
 
+/* Finishes a document.write state's parser, inserts the rest and drops the state. */
 static void
 ns_document_write_finish_state(ns_js *js, ns_document_write_state *state)
 {
@@ -53253,6 +55018,7 @@ ns_document_write_finish_state(ns_js *js, ns_document_write_state *state)
     }
 }
 
+/* Finishes the current script's document.write parser if it needs no more input. */
 static void
 ns_js_flush_document_write(ns_js *js)
 {
@@ -53264,6 +55030,7 @@ ns_js_flush_document_write(ns_js *js)
         ns_document_write_finish_state(js, state);
 }
 
+/* document.open steps: replaces children with empty html/head/body, rebuilds indexes. */
 static void
 ns_document_open_impl(ns_js *js)
 {
@@ -53285,6 +55052,7 @@ ns_document_open_impl(ns_js *js)
     ns_node_arm_js_invalidate(js->current_doc);
 }
 
+/* document.open(): window.open with 3 args; ignored while parsing; else resets document. */
 static JSValue
 ns_document_open(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -53302,6 +55070,7 @@ ns_document_open(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* document.close(): finishes all pending document.write parsers and closes the stream. */
 static JSValue
 ns_document_close(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -53325,6 +55094,7 @@ ns_document_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* document.write/writeln core: incremental parse at the insertion point; implicit open. */
 static JSValue
 ns_document_write_common(JSContext *ctx, int argc, JSValueConst *argv,
                          gboolean newline)
@@ -53373,6 +55143,7 @@ ns_document_writeln(JSContext *ctx, JSValueConst this_val,
     return ns_document_write_common(ctx, argc, argv, TRUE);
 }
 
+/* document.open() on a realm document: clears it and starts a write buffer. */
 static JSValue
 ns_realmdoc_open(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -53401,6 +55172,7 @@ ns_realmdoc_open(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* Appends write() arguments to a realm document's write buffer, opening if needed. */
 static void
 ns_realmdoc_append_write(JSContext *ctx, JSValueConst this_val, int argc,
                          JSValueConst *argv, gboolean newline)
@@ -53446,6 +55218,7 @@ ns_realmdoc_writeln(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* document.close() on a realm document: parses the write buffer and queues frame load. */
 static JSValue
 ns_realmdoc_close(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -53503,6 +55276,7 @@ ns_document_get_currentScript(JSContext *ctx, JSValueConst this_val)
     return ns_make_element(ctx, jsx->current_script);
 }
 
+/* document.dir: canonical dir attribute of the html element. */
 static JSValue
 ns_document_get_dir(JSContext *ctx, JSValueConst this_val)
 {
@@ -53515,6 +55289,7 @@ ns_document_get_dir(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, ns_dir_canonical_len(v, len));
 }
 
+/* document.dir setter: sets the html element's dir attribute. */
 static JSValue
 ns_document_set_dir(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -53532,6 +55307,7 @@ ns_document_set_dir(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* Body color attribute name for the fgColor/bgColor/link/vlink/alinkColor magic. */
 static const char *
 ns_doc_color_attr(int magic)
 {
@@ -53545,6 +55321,7 @@ ns_doc_color_attr(int magic)
     }
 }
 
+/* Legacy document color getter reading the body's color attribute. */
 static JSValue
 ns_document_get_color(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -53558,6 +55335,7 @@ ns_document_get_color(JSContext *ctx, JSValueConst this_val, int magic)
     return v ? JS_NewStringLen(ctx, v, len) : JS_NewString(ctx, "");
 }
 
+/* Legacy document color setter writing the body's color attribute (null as ""). */
 static JSValue
 ns_document_set_color(JSContext *ctx, JSValueConst this_val,
                       JSValueConst val, int magic)
@@ -53706,6 +55484,7 @@ ns_location_toString(JSContext *ctx, JSValueConst this_val,
     return ns_location_get_href(ctx, this_val);
 }
 
+/* Whether location may navigate to s: relative URLs or http(s)/about/data/mailto. */
 static gboolean
 ns_location_target_allowed(ns_js *js, const char *s)
 {
@@ -53726,6 +55505,7 @@ ns_location_target_allowed(ns_js *js, const char *s)
     return FALSE;
 }
 
+/* Logs a navigation blocked because of its URL scheme. */
 static void
 ns_location_log_blocked(ns_js *js, const char *s)
 {
@@ -53742,6 +55522,7 @@ ns_location_nav_in_iframe(ns_js *js)
     return js && js->iframe_load_depth > 0;
 }
 
+/* Navigates via location: checks scheme, skips in iframes, handles fragment-only changes. */
 static void
 ns_location_navigate(ns_js *js, const char *url)
 {
@@ -53755,6 +55536,7 @@ ns_location_navigate(ns_js *js, const char *url)
         js->nav_cb(url, FALSE, js->nav_user_data);
 }
 
+/* location.href setter: throws SyntaxError on unparsable URLs, then navigates. */
 static JSValue
 ns_location_set_href(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -53773,6 +55555,7 @@ ns_location_set_href(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* location.assign()/replace(): navigates to the given URL. */
 static JSValue
 ns_location_assign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -53786,6 +55569,7 @@ ns_location_assign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* location.reload(): asks the embedder to reload unless running inside an iframe load. */
 static JSValue
 ns_location_reload(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -53796,6 +55580,7 @@ ns_location_reload(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* location.hash setter: same-document fragment change with soft nav and hashchange. */
 static JSValue
 ns_location_set_hash(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -53829,6 +55614,7 @@ ns_location_set_hash(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* Sets one URL component of the current URL and navigates if it changed. */
 static JSValue
 ns_location_set_component(JSContext *ctx, JSValueConst val, const char *comp)
 {
@@ -53847,6 +55633,7 @@ ns_location_set_component(JSContext *ctx, JSValueConst val, const char *comp)
     return JS_UNDEFINED;
 }
 
+/* Location component getter for magic part; pathname falls back to "/". */
 static JSValue
 ns_location_get_field(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -53860,6 +55647,7 @@ ns_location_get_field(JSContext *ctx, JSValueConst this_val, int magic)
     return out;
 }
 
+/* Location component setter: hash via fragment navigation, others via URL rewrite. */
 static JSValue
 ns_location_set_field(JSContext *ctx, JSValueConst this_val, JSValueConst val,
                       int magic)
@@ -53885,6 +55673,7 @@ static const JSCFunctionListEntry ns_location_funcs[] = {
     JS_CFUNC_DEF("toString", 0, ns_location_toString),
 };
 
+/* Detaches and releases every pinned node wrapper. */
 static void
 ns_release_pinned_wrappers(ns_js *js)
 {
@@ -53904,6 +55693,7 @@ ns_release_pinned_wrappers(ns_js *js)
     g_list_free(pinned);
 }
 
+/* Disconnects all PerformanceObservers, clearing records and releasing pins. */
 static void
 ns_perf_observers_disconnect_all(ns_js *js)
 {
@@ -53920,6 +55710,7 @@ ns_perf_observers_disconnect_all(ns_js *js)
     }
 }
 
+/* Clears per-document runtime state (timers, listeners, observers, frames, CEs) and runs GC. */
 static void
 ns_js_reset_runtime_state(ns_js *js)
 {
@@ -54096,6 +55887,7 @@ ns_js_reset_runtime_state(ns_js *js)
     ns_trace_complete("script", "GC", gc_start, "frame contexts freed");
 }
 
+/* TRUE if a "; "-separated cookie string already contains a pair for name. */
 static gboolean
 ns_cookie_jar_has_name(const char *jar, const char *name, gsize name_len)
 {
@@ -54110,6 +55902,7 @@ ns_cookie_jar_has_name(const char *jar, const char *name, gsize name_len)
     return FALSE;
 }
 
+/* Seeds the cached document.cookie from the jar, merging pairs not already present. */
 static void
 ns_js_seed_cookies_from_jar(ns_js *js)
 {
@@ -54145,6 +55938,7 @@ ns_js_seed_cookies_from_jar(ns_js *js)
     js->cookie_value = g_string_free(merged, FALSE);
 }
 
+/* Moves own method properties of the document object onto its prototype. */
 static void
 ns_document_lift_methods_to_proto(JSContext *ctx, JSValueConst document)
 {
@@ -54183,6 +55977,7 @@ ns_document_lift_methods_to_proto(JSContext *ctx, JSValueConst document)
     JS_FreeValue(ctx, proto);
 }
 
+/* Binds a document to the realm: resets state, builds document/location, polyfills. */
 static void
 ns_js_install_document(ns_js *js, ns_node *doc, const char *base_url,
                        const char *charset, const char *content_type)
@@ -54565,6 +56360,7 @@ ns_js_install_document(ns_js *js, ns_node *doc, const char *base_url,
     ns_install_element_shapes(ctx);
 }
 
+/* Tears down a JS engine: releases all JS values, pending work, frames, context and runtime. */
 void
 ns_js_free(ns_js *js)
 {
@@ -55005,6 +56801,7 @@ ns_js_free(ns_js *js)
     g_free(js);
 }
 
+/* TRUE when the NS_PROFILE environment variable is set (cached). */
 static gboolean
 ns_js_profile_enabled(void)
 {
@@ -55014,6 +56811,7 @@ ns_js_profile_enabled(void)
     return cached == 1;
 }
 
+/* Evaluates cached bytecode for scripts of 1 KiB or more; FALSE on cache miss. */
 static gboolean
 ns_js_eval_bytecode_cached(ns_js *js, const char *name, const char *src,
                            gsize len, JSValue *out_value,
@@ -55036,6 +56834,7 @@ ns_js_eval_bytecode_cached(ns_js *js, const char *name, const char *src,
     return TRUE;
 }
 
+/* Serializes compiled script bytecode into the cache for sources of 1 KiB or more. */
 static void
 ns_js_bytecode_cache_store(ns_js *js, JSValue fn_obj, const char *name,
                            const char *src, gsize len)
@@ -55052,6 +56851,7 @@ ns_js_bytecode_cache_store(ns_js *js, JSValue fn_obj, const char *name,
     js_free(js->ctx, bc);
 }
 
+/* String form of an exception, or "Script error." if conversion fails; caller frees. */
 static char *
 ns_js_exception_message(JSContext *ctx, JSValueConst ex)
 {
@@ -55065,6 +56865,7 @@ ns_js_exception_message(JSContext *ctx, JSValueConst ex)
     return out;
 }
 
+/* "Report an exception": fires a cancelable ErrorEvent at window; TRUE if canceled. */
 static gboolean
 ns_js_report_exception_at(ns_js *js, JSValueConst ex, const char *filename,
                           int lineno, int colno)
@@ -55103,12 +56904,14 @@ ns_js_report_exception_at(ns_js *js, JSValueConst ex, const char *filename,
     return prevented;
 }
 
+/* Reports an uncaught exception from origin as a window error event. */
 static void
 ns_js_report_uncaught(ns_js *js, JSValueConst ex, const char *origin)
 {
     ns_js_report_exception_at(js, ex, origin, 0, 0);
 }
 
+/* Parses the first file:line:col frame from a fresh Error stack; caller frees *file. */
 static gboolean
 ns_js_caller_position(JSContext *ctx, char **file, int *line, int *col)
 {
@@ -55144,6 +56947,7 @@ ns_js_caller_position(JSContext *ctx, char **file, int *line, int *col)
     return found;
 }
 
+/* Evaluates a classic script with time budget and bytecode cache; logs and reports errors. */
 static void
 ns_js_eval(ns_js *js, const char *src, gsize len, const char *origin)
 {
@@ -55281,6 +57085,7 @@ ns_import_map_entry_free(gpointer p)
     g_free(e);
 }
 
+/* Adds or replaces an import map entry, resolving the address against base. */
 static void
 ns_js_import_map_add(ns_js *js, const char *key, const char *value,
                      const char *base)
@@ -55304,6 +57109,7 @@ ns_js_import_map_add(ns_js *js, const char *key, const char *value,
     g_ptr_array_add(js->import_map, e);
 }
 
+/* Parses import map JSON and registers each "imports" specifier mapping. */
 static void
 ns_js_register_import_map_json(ns_js *js, const char *text, gsize len,
                                const char *base)
@@ -55334,6 +57140,7 @@ ns_js_register_import_map_json(ns_js *js, const char *text, gsize len,
     JS_FreeValue(js->ctx, root);
 }
 
+/* Registers inline importmap scripts once, top-level document only and CSP-checked. */
 static void
 ns_js_register_import_maps_rec(ns_js *js, ns_node *root, int depth)
 {
@@ -55380,6 +57187,7 @@ ns_js_register_import_maps(ns_js *js, ns_node *root)
     ns_js_register_import_maps_rec(js, root, 0);
 }
 
+/* Resolves a specifier via exact or longest trailing-slash prefix match; caller frees. */
 static char *
 ns_js_import_map_resolve(ns_js *js, const char *name)
 {
@@ -55402,6 +57210,7 @@ ns_js_import_map_resolve(ns_js *js, const char *name)
     return NULL;
 }
 
+/* QuickJS module name normalizer: import map first, else URL resolution against base. */
 static char *
 ns_js_module_normalize(JSContext *ctx, const char *base_name,
                        const char *name, void *opaque)
@@ -55421,6 +57230,7 @@ ns_js_module_normalize(JSContext *ctx, const char *base_name,
     return out;
 }
 
+/* Decodes a data: URL body into a NUL-terminated buffer (size-capped); caller frees. */
 static char *
 ns_js_decode_data_url(const char *url, gsize *out_len)
 {
@@ -55436,6 +57246,7 @@ ns_js_decode_data_url(const char *url, gsize *out_len)
     return (char *)g_byte_array_free(body, FALSE);
 }
 
+/* Logs a module compile failure and rethrows the pending exception. */
 static void
 ns_js_log_module_compile_error(ns_js *js, JSContext *ctx, const char *module_name)
 {
@@ -55450,6 +57261,7 @@ ns_js_log_module_compile_error(ns_js *js, JSContext *ctx, const char *module_nam
     JS_Throw(ctx, exc);
 }
 
+/* TRUE if import attributes have type equal to want. */
 static gboolean
 ns_js_attrs_type_is(JSContext *ctx, JSValueConst attributes, const char *want)
 {
@@ -55465,6 +57277,7 @@ ns_js_attrs_type_is(JSContext *ctx, JSValueConst attributes, const char *want)
     return match;
 }
 
+/* JSON module init: exports the parsed JSON value as default. */
 static int
 ns_js_json_module_init(JSContext *ctx, JSModuleDef *m)
 {
@@ -55472,6 +57285,7 @@ ns_js_json_module_init(JSContext *ctx, JSModuleDef *m)
                               JS_GetModulePrivateValue(ctx, m));
 }
 
+/* Creates a synthetic JSON module whose default export is the parsed body. */
 static JSModuleDef *
 ns_js_make_json_module(JSContext *ctx, const char *module_name,
                        const char *body, gsize body_len)
@@ -55490,6 +57304,7 @@ ns_js_make_json_module(JSContext *ctx, const char *module_name,
     return m;
 }
 
+/* Sets import.meta.url on a compiled module. */
 static void
 ns_js_set_import_meta_url(JSContext *ctx, JSValueConst module,
                           const char *module_name)
@@ -55507,6 +57322,7 @@ ns_js_set_import_meta_url(JSContext *ctx, JSValueConst module,
     JS_FreeValue(ctx, meta);
 }
 
+/* Compiles a module, using and filling the bytecode cache for sources of 1 KiB or more. */
 static JSValue
 ns_js_compile_module_cached(JSContext *ctx, const char *src, gsize len,
                             const char *module_name)
@@ -55559,6 +57375,7 @@ ns_js_compile_module_cached(JSContext *ctx, const char *src, gsize len,
     return func_val;
 }
 
+/* QuickJS module loader for data:/blob:/http(s) under CSP and load caps; JSON modules. */
 static JSModuleDef *
 ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
                     JSValueConst attributes)
@@ -55710,6 +57527,7 @@ ns_js_module_loader(JSContext *ctx, const char *module_name, void *opaque,
     return m;
 }
 
+/* Compiles and evaluates a module script, logging errors and rejected evaluation promises. */
 static void
 ns_js_eval_module(ns_js *js, const char *src, gsize len, const char *origin)
 {
@@ -55785,6 +57603,7 @@ typedef struct ns_parser_tail {
     GPtrArray *nodes;
 } ns_parser_tail;
 
+/* Effective script type: trimmed type attr, else language attr; FALSE if absent/empty. */
 static gboolean
 ns_script_type_string(const ns_node *n, const char **out, size_t *out_len)
 {
@@ -55807,6 +57626,7 @@ ns_script_type_string(const ns_node *n, const char **out, size_t *out_len)
     return TRUE;
 }
 
+/* TRUE if s is one of the HTML JavaScript MIME type essences. */
 static gboolean
 ns_js_mime_essence_match(const char *s, size_t len)
 {
@@ -55827,6 +57647,7 @@ ns_js_mime_essence_match(const char *s, size_t len)
     return FALSE;
 }
 
+/* TRUE if the script's type attribute is "module". */
 static gboolean
 ns_script_type_is_module(const ns_node *n)
 {
@@ -55837,6 +57658,7 @@ ns_script_type_is_module(const ns_node *n)
     return len == 6 && g_ascii_strncasecmp(s, "module", 6) == 0;
 }
 
+/* Whether a script's type/language denotes classic JS or module, per the HTML rules. */
 static gboolean
 ns_script_type_supported(const ns_node *n)
 {
@@ -55854,6 +57676,7 @@ ns_script_type_supported(const ns_node *n)
     return ns_js_mime_essence_match(joined, len + 5);
 }
 
+/* TRUE if a Content-Type header's essence is a JavaScript MIME type. */
 static gboolean
 content_type_is_javascript(const char *ct)
 {
@@ -55864,6 +57687,7 @@ content_type_is_javascript(const char *ct)
     return ns_js_mime_essence_match(ct, (size_t)(end - ct));
 }
 
+/* TRUE for classic scripts carrying nomodule. */
 static gboolean
 ns_script_skipped_by_nomodule(const ns_node *n)
 {
@@ -55871,6 +57695,7 @@ ns_script_skipped_by_nomodule(const ns_node *n)
            ns_element_get_attr(n, "nomodule") != NULL;
 }
 
+/* Chooses async, deferred or blocking execution from type, src, async and defer. */
 static ns_script_schedule
 ns_script_schedule_for(const ns_node *n)
 {
@@ -55884,6 +57709,7 @@ ns_script_schedule_for(const ns_node *n)
     return NS_SCRIPT_BLOCKING;
 }
 
+/* Marks every script in a subtree as already started. */
 static void
 ns_js_mark_scripts_already_started_rec(ns_node *n, int depth)
 {
@@ -55902,6 +57728,7 @@ ns_js_mark_scripts_already_started(ns_node *n)
     ns_js_mark_scripts_already_started_rec(n, 0);
 }
 
+/* Collects runnable scripts in tree order with schedules; marks unsupported started. */
 static void
 ns_js_collect_script_tasks_rec(ns_node *n, GArray *tasks, int depth)
 {
@@ -55931,6 +57758,7 @@ ns_js_collect_script_tasks(ns_node *n, GArray *tasks)
     ns_js_collect_script_tasks_rec(n, tasks, 0);
 }
 
+/* Runs script source in the realm of its document, swapping current doc/script/URL. */
 static void
 ns_js_eval_script_source(ns_js *js, ns_node *script, const char *source,
                          gsize length, const char *origin,
@@ -56013,6 +57841,7 @@ ns_js_eval_script_source(ns_js *js, ns_node *script, const char *source,
     js->current_doc = previous_doc;
 }
 
+/* TRUE if a script element has no non-empty text children. */
 static gboolean
 ns_script_source_is_empty(const ns_node *n)
 {
@@ -56021,6 +57850,7 @@ ns_script_source_is_empty(const ns_node *n)
     return TRUE;
 }
 
+/* Prepares and runs a script: data/blob/external fetch with CSP, nosniff, SRI; or inline. */
 static void
 ns_js_run_script_element(ns_js *js, ns_node *n, const char *origin)
 {
@@ -56221,6 +58051,7 @@ ns_parser_tail_free(gpointer data)
     g_free(tail);
 }
 
+/* Detaches nodes after the script (per ancestor) to emulate a parser pause; returns tails. */
 static GPtrArray *
 ns_js_parser_pause_after(ns_js *js, ns_node *script)
 {
@@ -56258,6 +58089,7 @@ ns_js_parser_pause_after(ns_js *js, ns_node *script)
     return tails;
 }
 
+/* Feeds detached text/comment tail nodes into the script's document.write parser. */
 static void
 ns_document_write_consume_parser_tail(ns_js *js, ns_node *script,
                                       GPtrArray *tails)
@@ -56299,6 +58131,7 @@ ns_document_write_consume_parser_tail(ns_js *js, ns_node *script,
     ns_document_write_finish_state(js, state);
 }
 
+/* Resumes after a blocking script: flushes document.write state and reattaches tails. */
 static void
 ns_js_parser_resume(ns_js *js, ns_node *script, GPtrArray *tails)
 {
@@ -56319,6 +58152,7 @@ ns_js_parser_resume(ns_js *js, ns_node *script, GPtrArray *tails)
     if (js) js->parser_write_body = NULL;
 }
 
+/* Runs all tasks of one schedule in order, pausing the parser around blocking ones. */
 static void
 ns_js_run_script_schedule(ns_js *js, GArray *tasks, ns_script_schedule schedule,
                           const char *origin)
@@ -56337,6 +58171,7 @@ ns_js_run_script_schedule(ns_js *js, GArray *tasks, ns_script_schedule schedule,
     ns_ce_upgrade_subtree_all(js, js->current_doc);
 }
 
+/* Runs the first not-yet-started task of the given schedule; TRUE if one ran. */
 static gboolean
 ns_js_run_next_script_schedule(ns_js *js, GArray *tasks,
                                ns_script_schedule schedule,
@@ -56355,6 +58190,7 @@ ns_js_run_next_script_schedule(ns_js *js, GArray *tasks,
     return FALSE;
 }
 
+/* Scans a subtree for script, link and iframe/object elements, skipping templates. */
 static void
 ns_subtree_scan_special(const ns_node *n, int depth, gboolean *script,
                         gboolean *link, gboolean *frame)
@@ -56372,6 +58208,7 @@ ns_subtree_scan_special(const ns_node *n, int depth, gboolean *script,
         ns_subtree_scan_special(c, depth + 1, script, link, frame);
 }
 
+/* TRUE if a subtree contains a script element not yet started. */
 static gboolean
 ns_subtree_has_pending_script_rec(const ns_node *n, int depth)
 {
@@ -56398,6 +58235,7 @@ typedef enum {
     NS_LINK_FETCH_PRELOAD_SCRIPT,
 } ns_link_fetch_kind;
 
+/* Classifies a link: non-alternate stylesheet, or preload as style/script. */
 static ns_link_fetch_kind
 ns_link_fetch_kind_of(const ns_node *n)
 {
@@ -56423,6 +58261,7 @@ ns_link_fetch_kind_of(const ns_node *n)
     return NS_LINK_FETCH_NONE;
 }
 
+/* TRUE for fetchable links whose load event has not fired. */
 static gboolean
 ns_link_needs_load(const ns_node *n)
 {
@@ -56430,6 +58269,7 @@ ns_link_needs_load(const ns_node *n)
     return ns_link_fetch_kind_of(n) != NS_LINK_FETCH_NONE;
 }
 
+/* Collects links needing a load in tree order, skipping templates. */
 static void
 ns_js_collect_pending_stylesheets_rec(ns_node *n, GPtrArray *out, int depth)
 {
@@ -56449,6 +58289,7 @@ ns_js_collect_pending_stylesheets(ns_node *n, GPtrArray *out)
     ns_js_collect_pending_stylesheets_rec(n, out, 0);
 }
 
+/* Fetches a stylesheet/preload link under CSP and fires load or error (once). */
 static void
 ns_js_load_link_element(ns_js *js, ns_node *n, const char *origin)
 {
@@ -56509,6 +58350,7 @@ ns_js_load_link_element(ns_js *js, ns_node *n, const char *origin)
     ns_js_dispatch_resource_event(js, n, loaded ? "load" : "error");
 }
 
+/* Loads every pending stylesheet/preload link in doc against its document base URL. */
 static void
 ns_js_load_document_stylesheets(ns_js *js, ns_node *doc)
 {
@@ -56522,6 +58364,7 @@ ns_js_load_document_stylesheets(ns_js *js, ns_node *doc)
     g_ptr_array_free(sheets, TRUE);
 }
 
+/* TRUE if a rel token list contains "stylesheet". */
 static gboolean
 ns_link_rel_is_stylesheet(const char *rel)
 {
@@ -56534,6 +58377,7 @@ ns_link_rel_is_stylesheet(const char *rel)
     return found;
 }
 
+/* Link rel/href/as change: restyles stylesheet changes and schedules a link rescan. */
 static void
 ns_js_link_attr_changed(ns_js *js, ns_node *link, const char *attr,
                         const char *old_value, const char *new_value)
@@ -56560,6 +58404,7 @@ ns_js_link_attr_changed(ns_js *js, ns_node *link, const char *attr,
     ns_js_schedule_pending_script_drain(js);
 }
 
+/* Performs a scheduled link rescan of the current document. */
 static void
 ns_js_load_pending_links(ns_js *js)
 {
@@ -56575,6 +58420,7 @@ ns_js_root_connected(ns_js *js, const ns_node *root)
     return ns_js_node_in_page(js, root);
 }
 
+/* TRUE if any task in tasks has the given schedule. */
 static gboolean
 ns_js_tasks_have_schedule(GArray *tasks, ns_script_schedule schedule)
 {
@@ -56586,6 +58432,7 @@ ns_js_tasks_have_schedule(GArray *tasks, ns_script_schedule schedule)
     return FALSE;
 }
 
+/* Timer draining pending links, deferred and async script roots outside script execution. */
 static gboolean
 ns_js_async_script_timer(gpointer data)
 {
@@ -56603,6 +58450,7 @@ ns_js_async_script_timer(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Arms the 4 ms drain timer when links or script roots are pending. */
 static void
 ns_js_schedule_pending_script_drain(ns_js *js)
 {
@@ -56615,6 +58463,7 @@ ns_js_schedule_pending_script_drain(ns_js *js)
             ns_js_attach_timeout(js, 4, ns_js_async_script_timer, js);
 }
 
+/* Queues root (once) for async script processing and arms the drain timer. */
 static void
 ns_js_schedule_async_script_root(ns_js *js, ns_node *root)
 {
@@ -56627,6 +58476,7 @@ ns_js_schedule_async_script_root(ns_js *js, ns_node *root)
     ns_js_schedule_pending_script_drain(js);
 }
 
+/* Processes one connected queued async root: import maps then all script schedules. */
 static void
 ns_js_drain_async_script_roots(ns_js *js)
 {
@@ -56649,6 +58499,7 @@ ns_js_drain_async_script_roots(ns_js *js)
     }
 }
 
+/* Re-prepares a script inserted with empty source once it gains content or src. */
 static void
 ns_js_script_needs_prepare(ns_js *js, ns_node *script)
 {
@@ -56662,6 +58513,7 @@ ns_js_script_needs_prepare(ns_js *js, ns_node *script)
     ns_js_run_inserted_scripts(js, script);
 }
 
+/* Handles inserted subtrees: runs inline scripts, defers external ones, loads links/frames. */
 static void
 ns_js_run_inserted_scripts(ns_js *js, ns_node *root)
 {
@@ -56726,6 +58578,7 @@ ns_js_run_inserted_scripts(ns_js *js, ns_node *root)
     g_ptr_array_free(sheets, TRUE);
 }
 
+/* Processes one deferred root: blocking and deferred scripts, async queue, stylesheets. */
 static void
 ns_js_drain_deferred_scripts(ns_js *js)
 {
@@ -56759,6 +58612,7 @@ ns_js_drain_deferred_scripts(ns_js *js)
     }
 }
 
+/* Records an iframe's srcdoc or resolved URL in data-nd-frame-* attributes. */
 static void
 ns_js_mark_iframe_source(ns_node *iframe, const char *origin, const char *abs_url)
 {
@@ -56774,6 +58628,7 @@ ns_js_mark_iframe_source(ns_node *iframe, const char *origin, const char *abs_ur
     if (abs_url && *abs_url) ns_css_mark_visited(abs_url);
 }
 
+/* Source attribute name for frame elements: src for iframe, data for object. */
 static const char *
 ns_frame_src_attr(const ns_node *n)
 {
@@ -56782,6 +58637,7 @@ ns_frame_src_attr(const ns_node *n)
     return NULL;
 }
 
+/* TRUE if the iframe's loaded srcdoc/URL matches its current source. */
 static gboolean
 ns_js_iframe_source_loaded(ns_js *js, ns_node *iframe)
 {
@@ -56806,6 +58662,7 @@ ns_js_iframe_source_loaded(ns_js *js, ns_node *iframe)
     return same;
 }
 
+/* Queues an iframe load; lazy ones beyond viewport+1500px are deferred unless forced. */
 static void
 ns_js_schedule_iframe_load_full(ns_js *js, ns_node *iframe, gboolean force)
 {
@@ -56847,6 +58704,7 @@ ns_js_schedule_iframe_load(ns_js *js, ns_node *iframe)
     ns_js_schedule_iframe_load_full(js, iframe, FALSE);
 }
 
+/* Moves deferred lazy iframes within 1500px of the viewport to the load queue. */
 static void
 ns_js_promote_deferred_iframes(ns_js *js)
 {
@@ -56865,6 +58723,7 @@ ns_js_promote_deferred_iframes(ns_js *js)
     }
 }
 
+/* TRUE if any node in the subtree (incl. template content) has a JS wrapper. */
 static gboolean
 ns_subtree_has_wrapper(ns_node *root)
 {
@@ -56883,6 +58742,7 @@ ns_subtree_has_wrapper(ns_node *root)
     return found;
 }
 
+/* Removes a subtree's iframes from the pending and deferred load queues. */
 static void
 ns_js_purge_subtree_pending_iframes(ns_js *js, ns_node *root)
 {
@@ -56905,6 +58765,7 @@ ns_js_purge_subtree_pending_iframes(ns_js *js, ns_node *root)
         ns_js_purge_subtree_pending_iframes(js, c);
 }
 
+/* Rate-limited GC pass freeing detached orphan subtrees that no wrapper references. */
 static void
 ns_js_sweep_orphans(ns_js *js)
 {
@@ -56937,6 +58798,7 @@ ns_js_sweep_orphans(ns_js *js)
     g_ptr_array_free(to_free, TRUE);
 }
 
+/* Releases pinned wrapper references for every node in a subtree. */
 static void
 ns_js_unpin_subtree(ns_js *js, ns_node *root)
 {
@@ -56956,6 +58818,7 @@ ns_js_unpin_subtree(ns_js *js, ns_node *root)
     g_ptr_array_free(stack, TRUE);
 }
 
+/* Clears an iframe's document: purges its rAFs/timers/globals and orphans the doc. */
 static void
 ns_js_iframe_clear_content(ns_js *js, ns_node *iframe)
 {
@@ -56996,6 +58859,7 @@ ns_js_skip_space(const char *p, const char *end)
     return p;
 }
 
+/* TRUE if word occurs at p as a whole identifier token. */
 static gboolean
 ns_js_word_at(const char *start, const char *p, const char *end,
               const char *word)
@@ -57008,6 +58872,7 @@ ns_js_word_at(const char *start, const char *p, const char *end,
     return TRUE;
 }
 
+/* TRUE for names never re-exposed as frame globals (window, document, eval, ...). */
 static gboolean
 ns_js_iframe_exposed_name_blocked(const char *name)
 {
@@ -57020,6 +58885,7 @@ ns_js_iframe_exposed_name_blocked(const char *name)
     return FALSE;
 }
 
+/* Adds a valid, unblocked, unseen identifier (<= 128 chars) to names. */
 static void
 ns_js_iframe_add_exposed_name(GPtrArray *names, GHashTable *seen,
                               const char *start, gsize len)
@@ -57039,6 +58905,7 @@ ns_js_iframe_add_exposed_name(GPtrArray *names, GHashTable *seen,
     g_ptr_array_add(names, name);
 }
 
+/* Skips a quoted string literal (with escapes), returning the position after it. */
 static const char *
 ns_js_skip_quoted(const char *p, const char *end, char quote)
 {
@@ -57054,6 +58921,7 @@ ns_js_skip_quoted(const char *p, const char *end, char quote)
     return end;
 }
 
+/* Skips a // comment up to the line end. */
 static const char *
 ns_js_skip_line_comment(const char *p, const char *end)
 {
@@ -57062,6 +58930,7 @@ ns_js_skip_line_comment(const char *p, const char *end)
     return p;
 }
 
+/* Skips a block comment, returning the position after its terminator. */
 static const char *
 ns_js_skip_block_comment(const char *p, const char *end)
 {
@@ -57073,6 +58942,7 @@ ns_js_skip_block_comment(const char *p, const char *end)
     return end;
 }
 
+/* Collects top-level binding names from a var declaration list; returns after it. */
 static const char *
 ns_js_iframe_collect_var_names(GPtrArray *names, GHashTable *seen,
                                const char *p, const char *end)
@@ -57129,6 +58999,7 @@ ns_js_iframe_collect_var_names(GPtrArray *names, GHashTable *seen,
     return p;
 }
 
+/* Heuristic lexer collecting function and var names declared in frame script source. */
 static void
 ns_js_iframe_collect_exposed_names(GPtrArray *names, GHashTable *seen,
                                    const char *src, gsize len)
@@ -57168,6 +59039,7 @@ ns_js_iframe_collect_exposed_names(GPtrArray *names, GHashTable *seen,
     }
 }
 
+/* TRUE if the first 4 KiB of source mention webpackChunk or webpackJsonp. */
 static gboolean
 ns_js_iframe_source_is_webpack_chunk(const char *src, gsize len)
 {
@@ -57180,6 +59052,7 @@ ns_js_iframe_source_is_webpack_chunk(const char *src, gsize len)
            g_strstr_len(p, (gssize)prefix_len, "webpackJsonp");
 }
 
+/* Appends JS that exposes the collected names as window accessors via eval. */
 static void
 ns_js_iframe_append_exposed_globals(GString *w, GPtrArray *names)
 {
@@ -57199,6 +59072,7 @@ ns_js_iframe_append_exposed_globals(GString *w, GPtrArray *names)
         "}catch(e){}})(n[i]);}})();\n");
 }
 
+/* Snapshots enumerable own keys of builtin prototypes before running frame script. */
 static JSValue
 ns_js_iframe_proto_snapshot(JSContext *ctx)
 {
@@ -57224,6 +59098,7 @@ ns_js_iframe_proto_snapshot(JSContext *ctx)
     return v;
 }
 
+/* Makes builtin prototype keys added since the snapshot non-enumerable. */
 static void
 ns_js_iframe_proto_cleanup(JSContext *ctx, JSValueConst before)
 {
@@ -57260,6 +59135,7 @@ ns_js_iframe_proto_cleanup(JSContext *ctx, JSValueConst before)
     JS_FreeValue(ctx, fn);
 }
 
+/* Deletes (or sets undefined) the global Zone left by frame scripts. */
 static void
 ns_js_iframe_clear_global_zone(JSContext *ctx)
 {
@@ -57273,6 +59149,7 @@ ns_js_iframe_clear_global_zone(JSContext *ctx)
     JS_FreeValue(ctx, g);
 }
 
+/* Rebinds native customElements methods on the global registry. */
 static void
 ns_js_iframe_restore_custom_elements(JSContext *ctx)
 {
@@ -57293,6 +59170,7 @@ ns_js_iframe_restore_custom_elements(JSContext *ctx)
     JS_FreeValue(ctx, g);
 }
 
+/* Restores native listener methods on window and node prototypes plus a JS EventTarget. */
 static void
 ns_js_iframe_restore_event_targets(JSContext *ctx)
 {
@@ -57362,6 +59240,7 @@ ns_js_iframe_restore_event_targets(JSContext *ctx)
     JS_FreeValue(ctx, g);
 }
 
+/* Deletes a global property, swallowing any exception. */
 static void
 ns_js_iframe_delete_global(JSContext *ctx, JSValueConst g, const char *name)
 {
@@ -57371,6 +59250,7 @@ ns_js_iframe_delete_global(JSContext *ctx, JSValueConst g, const char *name)
     JS_FreeAtom(ctx, a);
 }
 
+/* Restores pristine Promise and native timer/rAF/microtask globals; drops setImmediate. */
 static void
 ns_js_iframe_restore_scheduling(JSContext *ctx)
 {
@@ -57392,6 +59272,7 @@ ns_js_iframe_restore_scheduling(JSContext *ctx)
     JS_FreeValue(ctx, g);
 }
 
+/* Runs frame module scripts with window/document/location temporarily swapped on the global. */
 static void
 ns_js_run_iframe_modules(ns_js *js, GPtrArray *modules, const char *origin,
                          JSValue iframe_doc, JSValueConst iframe_scope,
@@ -57494,6 +59375,7 @@ ns_iframe_classic_source_free(gpointer data)
     g_free(source);
 }
 
+/* Queues a copy of a frame classic script's source with its URL and element. */
 static void
 ns_iframe_classic_source_add(GPtrArray *sources, const char *text, gsize len,
                              const char *url, ns_node *script)
@@ -57516,6 +59398,7 @@ ns_iframe_sandbox_isolates(unsigned sandbox)
             !(sandbox & NS_SANDBOX_ALLOW_SAME_ORIGIN));
 }
 
+/* Runs a frame's scripts in its own realm, or wrapped in the shared global if same-origin. */
 static void
 ns_js_run_iframe_scripts(ns_js *js, ns_node *content_root,
                          const char *origin, JSValue iframe_doc,
@@ -57785,6 +59668,7 @@ ns_js_run_iframe_scripts(ns_js *js, ns_node *content_root,
     g_array_free(tasks, TRUE);
 }
 
+/* TRUE if X-Frame-Options or CSP frame-ancestors forbids this embedding. */
 static gboolean
 ns_iframe_framing_blocked(const char *embedder_url, const char *framed_url,
                           ns_response *resp)
@@ -57809,6 +59693,7 @@ ns_iframe_framing_blocked(const char *embedder_url, const char *framed_url,
     return FALSE;
 }
 
+/* Nearest inclusive ancestor document with its own registered CSP, or NULL. */
 static const ns_node *
 ns_js_csp_owner(ns_js *js, const ns_node *n)
 {
@@ -57818,6 +59703,7 @@ ns_js_csp_owner(ns_js *js, const ns_node *n)
     return NULL;
 }
 
+/* Fetch policy for node's document (frame or page), cached and refreshed on URL change. */
 ns_fetch_policy *
 ns_js_fetch_policy(ns_js *js, const ns_node *node)
 {
@@ -57845,6 +59731,7 @@ ns_js_fetch_policy(ns_js *js, const ns_node *node)
     return policy;
 }
 
+/* CSP governing node: the nearest frame document's policy, else the page's. */
 static const ns_csp *
 ns_js_csp_for_node(ns_js *js, const ns_node *n)
 {
@@ -57858,6 +59745,7 @@ ns_js_csp_for_node(ns_js *js, const ns_node *n)
     return js->csp;
 }
 
+/* Adds every meta http-equiv=Content-Security-Policy in a subtree to js->csp. */
 static void
 ns_js_frame_collect_meta_csp(ns_js *js, const ns_node *node, int depth)
 {
@@ -57877,6 +59765,7 @@ ns_js_frame_collect_meta_csp(ns_js *js, const ns_node *node, int depth)
     }
 }
 
+/* Applies all meta Content-Security-Policy elements of doc to the page policy. */
 void
 ns_js_apply_meta_csp(ns_js *js, const ns_node *doc)
 {
@@ -57905,6 +59794,7 @@ ns_js_frame_register_csp(ns_js *js, ns_node *content_doc, const char *header,
         g_hash_table_remove(js->doc_fetch_policy, content_doc);
 }
 
+/* Loads an iframe/object: CSP, nesting and framing checks, parse, run scripts, fire load. */
 static void
 ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
 {
@@ -58333,6 +60223,7 @@ ns_js_load_iframe_now(ns_js *js, ns_node *iframe)
     g_free(abs_url);
 }
 
+/* Loads queued iframes one by one outside script execution, each at most once. */
 static void
 ns_js_process_pending_iframes(ns_js *js)
 {
@@ -58349,6 +60240,7 @@ ns_js_process_pending_iframes(ns_js *js)
     g_hash_table_destroy(loaded);
 }
 
+/* Queues loads for not-yet-loaded iframes/objects with a source in a subtree. */
 static void
 ns_js_schedule_static_iframes_rec(ns_js *js, ns_node *n, int depth)
 {
@@ -58374,6 +60266,7 @@ ns_js_schedule_static_iframes(ns_js *js, ns_node *n)
     ns_js_schedule_static_iframes_rec(js, n, 0);
 }
 
+/* Cancels the document lifecycle task and resets its state. */
 static void
 ns_js_lifecycle_clear(ns_js *js)
 {
@@ -58394,6 +60287,7 @@ ns_js_lifecycle_clear(ns_js *js)
 
 static gboolean ns_js_lifecycle_tick(gpointer data);
 
+/* Arms the lifecycle tick timer if not already pending. */
 static void
 ns_js_lifecycle_schedule(ns_js *js)
 {
@@ -58402,6 +60296,7 @@ ns_js_lifecycle_schedule(ns_js *js)
         ns_js_attach_timeout(js, 0, ns_js_lifecycle_tick, js);
 }
 
+/* TRUE while scripts, iframe loads or embedder load delays should hold off the load event. */
 static gboolean
 ns_js_lifecycle_has_blockers(ns_js *js)
 {
@@ -58455,6 +60350,7 @@ ns_js_run_content_scripts(ns_js *js, const char *src)
     ns_drain_microtasks(js);
 }
 
+/* Document lifecycle: interactive, deferred scripts, DOMContentLoaded, async, then load. */
 static gboolean
 ns_js_lifecycle_tick(gpointer data)
 {
@@ -58553,6 +60449,7 @@ ns_js_lifecycle_tick(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Installs doc into the realm, runs early injects and blocking scripts, queues lifecycle. */
 void
 ns_js_run_scripts_in_doc(ns_js *js, ns_node *doc,
                          const char *base_url_borrowed, const char *charset,
@@ -58650,6 +60547,7 @@ ns_js_set_selection_cmd_cb(ns_js *js, ns_js_selection_cmd_cb cb,
     js->selection_cmd_user_data = user_data;
 }
 
+/* Records the current text selection string and its bounding rectangle. */
 void
 ns_js_set_selection(ns_js *js, const char *text, gboolean has_range,
                     double x, double y, double w, double h)
@@ -58697,6 +60595,7 @@ ns_js_set_early_inject_src(ns_js *js, const char *src)
     js->early_inject_src = g_strdup(src);
 }
 
+/* Parses a CSP header and merges it into the page policy; invalidates the fetch policy. */
 void
 ns_js_add_csp_header(ns_js *js, const char *header_value)
 {
@@ -58712,6 +60611,7 @@ ns_js_add_csp_header(ns_js *js, const char *header_value)
     g_clear_pointer(&js->fetch_policy, ns_fetch_policy_unref);
 }
 
+/* Whether the page CSP's form-action allows submitting to action_url. */
 gboolean
 ns_js_csp_form_action_allowed(const ns_js *js, const char *action_url)
 {
@@ -58759,6 +60659,7 @@ ns_js_set_load_delay_cb(ns_js *js, gboolean (*cb)(gpointer), gpointer user_data)
     js->load_delay_user_data = user_data;
 }
 
+/* Marks layout dirty if web font loads changed the font generation since last layout. */
 static void
 ns_js_note_font_loads(ns_js *js)
 {
@@ -58766,6 +60667,7 @@ ns_js_note_font_loads(ns_js *js)
         ns_js_note_layout_unscoped(js, G_STRFUNC);
 }
 
+/* Forces a synchronous layout via the embedder, tracing reflows over 50 us. */
 static void
 ns_js_flush_layout_from(ns_js *js, const char *api)
 {
@@ -58787,6 +60689,7 @@ ns_js_set_style_flush_cb(ns_js *js, ns_js_layout_flush_cb cb, gpointer user_data
     js->style_flush_user_data = user_data;
 }
 
+/* Forces a style flush (falls back to a full layout flush when no style callback). */
 static void
 ns_js_flush_style(ns_js *js)
 {
@@ -58813,6 +60716,7 @@ ns_js_storage_partition(const ns_js *js)
     return js ? js->partition_key : NULL;
 }
 
+/* Fires hashchange with oldURL/newURL at the document (or onhashchange); non-reentrant. */
 static void
 ns_js_dispatch_hashchange(ns_js *js, const char *old_url, const char *new_url)
 {
@@ -58853,6 +60757,7 @@ layout_target_node_freed(ns_node *node)
     if (g_layout_targets) g_hash_table_remove(g_layout_targets, node);
 }
 
+/* Records a detached parent as a layout target owned by no particular realm. */
 static void
 layout_target_node_detached(ns_node *parent)
 {
@@ -58861,6 +60766,7 @@ layout_target_node_detached(ns_node *parent)
         g_hash_table_insert(g_layout_targets, parent, NULL);
 }
 
+/* Creates the layout target table and installs node free/detach hooks. */
 static void
 layout_targets_ensure(void)
 {
@@ -58870,6 +60776,7 @@ layout_targets_ensure(void)
     ns_node_detach_hook = layout_target_node_detached;
 }
 
+/* Marks the page mutated with a full-layout invalidation, remembering the first reason. */
 static void
 ns_js_note_layout_unscoped(ns_js *js, const char *why)
 {
@@ -58879,6 +60786,7 @@ ns_js_note_layout_unscoped(ns_js *js, const char *why)
     js->layout_mutated = TRUE;
 }
 
+/* Records target for scoped relayout, or falls back to full layout invalidation. */
 static void
 ns_js_note_layout_target_from(ns_js *js, const ns_node *target,
                               const char *why)
@@ -58893,6 +60801,7 @@ ns_js_note_layout_target_from(ns_js *js, const ns_node *target,
     g_hash_table_insert(g_layout_targets, (gpointer)target, js);
 }
 
+/* Removes and returns layout targets for this realm's page; caller frees the array. */
 GPtrArray *
 ns_js_take_layout_targets(ns_js *js)
 {
@@ -58930,6 +60839,7 @@ ns_js_layout_mutated_by(ns_js *js)
     return js && js->layout_mutated ? js->layout_mutated_by : NULL;
 }
 
+/* Returns and clears the layout-mutated flag. */
 gboolean
 ns_js_consume_layout_mutated(ns_js *js)
 {
@@ -58939,6 +60849,7 @@ ns_js_consume_layout_mutated(ns_js *js)
     return m;
 }
 
+/* Returns and clears the DOM-mutated flag. */
 gboolean
 ns_js_consume_mutated(ns_js *js)
 {
@@ -58948,6 +60859,7 @@ ns_js_consume_mutated(ns_js *js)
     return m;
 }
 
+/* Evaluates src in the current realm; returns result string or "error: ..."; caller frees. */
 char *
 ns_js_eval_source(ns_js *js, const char *src, const char *origin)
 {

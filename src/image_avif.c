@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — AVIF decode via libavif.
+/* Nordstjernen Web Browser — AVIF decode via libavif to premultiplied BGRA textures.
+ * Sniffs the ftyp AVIF/HEIF brand; decodes the first frame only, within size limits.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -13,6 +14,7 @@ enum {
     NS_AVIF_MAX_INPUT  = 32 * 1024 * 1024,
 };
 
+/* True if the data has an ftyp box with an AVIF/HEIF image brand. */
 gboolean
 ns_image_avif_supports_bytes(const guchar *data, gsize len)
 {
@@ -24,6 +26,7 @@ ns_image_avif_supports_bytes(const guchar *data, gsize len)
     return FALSE;
 }
 
+/* Decodes the first AVIF frame to a premultiplied BGRA texture within size limits. */
 ns_texture *
 ns_image_decode_avif(const guchar *data, gsize len, int *out_w, int *out_h)
 {

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — WebSocket client over libcurl's native WebSocket API.
+ * One worker thread per socket; frames, ping/pong and close handshake, callbacks posted back.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -63,6 +64,7 @@ ns_ws_ref(ns_ws *ws)
     return ws;
 }
 
+/* Frees the socket's strings, queued outgoing messages and receive buffer. */
 static void
 ns_ws_destroy(ns_ws *ws)
 {
@@ -96,6 +98,7 @@ typedef struct {
     void   (*payload_free)(gpointer);
 } ns_ws_dispatch;
 
+/* Engine-thread callback: defers while the page is busy, then invokes unless detached. */
 static gboolean
 ns_ws_dispatch_run(gpointer data)
 {
@@ -115,6 +118,7 @@ ns_ws_dispatch_run(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Queues a callback to the engine thread; droppable posts are discarded when backlogged. */
 static void
 ns_ws_post(ns_ws *ws,
            void (*invoke)(ns_ws *, gpointer),
@@ -173,6 +177,7 @@ ns_ws_invoke_open(ns_ws *ws, gpointer payload)
     if (ws->cbs.on_open) ws->cbs.on_open(ws->user_data);
 }
 
+/* Delivers a received text or binary message to the page callback. */
 static void
 ns_ws_invoke_msg(ns_ws *ws, gpointer payload)
 {
@@ -206,6 +211,7 @@ ns_ws_invoke_error(ns_ws *ws, gpointer payload)
     if (ws->cbs.on_error) ws->cbs.on_error(msg, ws->user_data);
 }
 
+/* Marks the socket open and posts the open callback. */
 static void
 ns_ws_dispatch_open(ns_ws *ws)
 {
@@ -213,6 +219,7 @@ ns_ws_dispatch_open(ns_ws *ws)
     ns_ws_post(ws, ns_ws_invoke_open, NULL, NULL, FALSE);
 }
 
+/* Copies a received message and posts it; may be dropped under backlog. */
 static void
 ns_ws_dispatch_message(ns_ws *ws, gboolean is_text,
                        const guint8 *data, gsize len)
@@ -224,6 +231,7 @@ ns_ws_dispatch_message(ns_ws *ws, gboolean is_text,
     ns_ws_post(ws, ns_ws_invoke_msg, m, ns_ws_msg_payload_free, TRUE);
 }
 
+/* Marks the socket closed and posts the close callback with code and reason. */
 static void
 ns_ws_dispatch_close(ns_ws *ws, int code, const char *reason, gboolean clean)
 {
@@ -241,6 +249,7 @@ ns_ws_dispatch_error(ns_ws *ws, const char *msg)
     ns_ws_post(ws, ns_ws_invoke_error, g_strdup(msg ? msg : ""), g_free, FALSE);
 }
 
+/* Sends a whole frame via curl_ws_send, retrying on EAGAIN with a stall limit. */
 static gboolean
 ns_ws_send_curl(ns_ws *ws, CURL *curl, const guint8 *data, gsize len,
                 unsigned int flags)
@@ -271,6 +280,7 @@ ns_ws_send_curl(ns_ws *ws, CURL *curl, const guint8 *data, gsize len,
     }
 }
 
+/* Returns the peer close code if it may be echoed back, else 0. */
 static int
 ns_ws_echo_close_code(int code)
 {
@@ -280,6 +290,7 @@ ns_ws_echo_close_code(int code)
     return 0;
 }
 
+/* Sends a Close frame with optional code and reason truncated to fit 125 bytes. */
 static gboolean
 ns_ws_send_close_frame(CURL *curl, int code, const char *reason)
 {
@@ -302,6 +313,7 @@ ns_ws_send_close_frame(CURL *curl, int code, const char *reason)
     return rc == CURLE_OK;
 }
 
+/* Sends queued messages from the worker; stops at a queued close request. */
 static void
 ns_ws_drain_outgoing(ns_ws *ws, CURL *curl, gboolean *want_close,
                      int *close_code, char **close_reason)
@@ -331,6 +343,7 @@ ns_ws_drain_outgoing(ns_ws *ws, CURL *curl, gboolean *want_close,
     }
 }
 
+/* Handles a received frame: close, ping-to-pong, and fragmented message reassembly. */
 static void
 ns_ws_handle_frame(ns_ws *ws, const guint8 *data, gsize len,
                    const struct curl_ws_frame *meta,
@@ -403,6 +416,7 @@ ns_ws_handle_frame(ns_ws *ws, const guint8 *data, gsize len,
     }
 }
 
+/* Waits on the condition until new outgoing data, exit, or the poll interval. */
 static void
 ns_ws_worker_wait(ns_ws *ws)
 {
@@ -416,6 +430,7 @@ ns_ws_worker_wait(ns_ws *ws)
     g_mutex_unlock(&ws->lock);
 }
 
+/* Curl progress callback that aborts the handshake once exit is requested. */
 static int
 ns_ws_handshake_progress(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
                          curl_off_t ultotal, curl_off_t ulnow)
@@ -425,6 +440,7 @@ ns_ws_handshake_progress(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
     return g_atomic_int_get(&ws->exit_requested) ? 1 : 0;
 }
 
+/* Worker thread: performs the WebSocket handshake via curl and runs the send/receive loop. */
 static gpointer
 ns_ws_worker_curl(gpointer data)
 {
@@ -595,6 +611,7 @@ ns_ws_worker_curl(gpointer data)
     return NULL;
 }
 
+/* Returns TRUE if the linked libcurl supports the ws or wss protocol. */
 static gboolean
 ns_ws_curl_native(void)
 {
@@ -613,6 +630,7 @@ ns_ws_available(void)
     return ns_ws_curl_native();
 }
 
+/* Creates a WebSocket and starts its connection worker; NULL without curl ws support. */
 ns_ws *
 ns_ws_new(const char        *url,
           const char        *origin,
@@ -644,6 +662,7 @@ ns_ws_new(const char        *url,
     return ws;
 }
 
+/* Queues an outgoing message or close for the worker; FALSE if closing or too large. */
 static gboolean
 ns_ws_enqueue(ns_ws *ws, ns_ws_out_kind kind,
               const guint8 *data, gsize len, int close_code)
@@ -681,6 +700,7 @@ ns_ws_send_binary(ns_ws *ws, const guint8 *data, gsize len)
     return ns_ws_enqueue(ws, NS_WS_OUT_BINARY, data, len, 0);
 }
 
+/* Requests a close handshake (default code 1000) and moves to CLOSING. */
 void
 ns_ws_close(ns_ws *ws, int code, const char *reason)
 {
@@ -700,6 +720,7 @@ ns_ws_state_get(ns_ws *ws)
     return g_atomic_int_get(&ws->state);
 }
 
+/* Detaches callbacks, stops and joins the worker, then drops the caller's reference. */
 void
 ns_ws_free(ns_ws *ws)
 {

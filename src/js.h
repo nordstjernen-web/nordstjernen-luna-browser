@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — JavaScript engine binding (QuickJS).
+/* Nordstjernen Web Browser — JavaScript runtime API used by the page: scripts, events, focus.
+ * Host callbacks for navigation, repaint and layout; form, select and media-control helpers.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

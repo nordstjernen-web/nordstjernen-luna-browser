@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — Media Source Extensions: source buffers holding demuxed coded frames.
+ * MP4/WebM demux, codec support checks, frame eviction, buffered ranges; also file playback.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -44,6 +45,7 @@ struct ns_mse_source {
     double     live_seekable_end;
 };
 
+/* TRUE if a dotted codec string has the given 2nd (profile) and 4th (bit depth) fields. */
 static gboolean
 codec_parts_are(const char *codec, const char *profile, const char *depth)
 {
@@ -54,6 +56,7 @@ codec_parts_are(const char *codec, const char *profile, const char *depth)
     return ok;
 }
 
+/* TRUE for avc1/avc3 codec strings with Baseline, Main or High profile. */
 static gboolean
 avc_profile_supported(const char *codec)
 {
@@ -67,6 +70,7 @@ avc_profile_supported(const char *codec)
     return profile == 66 || profile == 77 || profile == 100;
 }
 
+/* Maps an RFC 6381 codec string to an internal decoder fourcc; sets *video. NULL if none. */
 static const char *
 decoder_for_codec(const char *codec, gboolean webm, gboolean *video)
 {
@@ -89,6 +93,7 @@ decoder_for_codec(const char *codec, gboolean webm, gboolean *video)
     return NULL;
 }
 
+/* MediaSource.isTypeSupported: MP4/WebM MIME with codecs all decodable here. */
 gboolean
 ns_mse_type_supported(const char *type)
 {
@@ -173,6 +178,7 @@ frame_clear(gpointer data)
     if (frame->config) g_bytes_unref(frame->config);
 }
 
+/* Frees a source buffer and its companion; the companion shares and so skips the demuxer. */
 static void
 buffer_free(gpointer data)
 {
@@ -268,6 +274,7 @@ buffer_new(ns_mse_source *source)
     return buffer;
 }
 
+/* addSourceBuffer: creates a buffer with an MP4 or WebM demuxer for a supported type. */
 ns_mse_buffer *
 ns_mse_source_add_buffer(ns_mse_source *source, const char *type)
 {
@@ -281,6 +288,7 @@ ns_mse_source_add_buffer(ns_mse_source *source, const char *type)
     return buffer;
 }
 
+/* Creates a buffer for whole-file (non-MSE) playback with the given demuxer kind. */
 ns_mse_buffer *
 ns_mse_source_add_file_buffer(ns_mse_source *source, gboolean webm)
 {
@@ -299,6 +307,7 @@ ns_mse_source_remove_buffer(ns_mse_source *source, ns_mse_buffer *buffer)
     g_ptr_array_remove(source->buffers, buffer);
 }
 
+/* Finds the buffer, or companion, carrying the given track kind. */
 ns_mse_buffer *
 ns_mse_source_track_buffer(ns_mse_source *source, ns_mse_track_kind kind)
 {
@@ -312,6 +321,7 @@ ns_mse_source_track_buffer(ns_mse_source *source, ns_mse_track_kind kind)
     return NULL;
 }
 
+/* Orders coded frames by decode timestamp, then presentation timestamp. */
 static int
 frame_dts_cmp(gconstpointer a, gconstpointer b)
 {
@@ -321,6 +331,7 @@ frame_dts_cmp(gconstpointer a, gconstpointer b)
     return 0;
 }
 
+/* Classifies a demuxed track as video/audio if its codec has a decoder here. */
 static ns_mse_track_kind
 track_kind(const ns_mp4_track *track)
 {
@@ -332,6 +343,7 @@ track_kind(const ns_mp4_track *track)
     return NS_MSE_TRACK_NONE;
 }
 
+/* After init, picks the first playable track; a track of the other kind gets a companion. */
 static void
 buffer_choose_track(ns_mse_buffer *buffer)
 {
@@ -354,6 +366,7 @@ buffer_choose_track(ns_mse_buffer *buffer)
     }
 }
 
+/* Demuxer track descriptor for the buffer's selected track id. */
 const ns_mp4_track *
 ns_mse_buffer_track(const ns_mse_buffer *buffer)
 {
@@ -365,6 +378,7 @@ ns_mse_buffer_track(const ns_mse_buffer *buffer)
     return NULL;
 }
 
+/* Removes frames with PTS in [start, end); for video also drops dependents until a keyframe. */
 static void
 buffer_remove_range(ns_mse_buffer *buffer, double start, double end)
 {
@@ -396,6 +410,7 @@ batch_bytes(GArray *batch)
     return bytes;
 }
 
+/* TRUE if adding the batch keeps the buffer under its audio/video byte quota. */
 static gboolean
 batch_fits(const ns_mse_buffer *buffer, GArray *batch)
 {
@@ -404,6 +419,7 @@ batch_fits(const ns_mse_buffer *buffer, GArray *batch)
     return buffer->bytes + batch_bytes(batch) <= quota;
 }
 
+/* Coded frame processing: overlap removal against the coded frame group, merge, re-sort. */
 static void
 buffer_commit(ns_mse_buffer *buffer, GArray *batch)
 {
@@ -442,6 +458,7 @@ batch_new(void)
     return batch;
 }
 
+/* Drains demuxed samples into timestamped frame batches, applying offset and append window. */
 static ns_mse_append_result
 buffer_take_samples(ns_mse_buffer *buffer, double *timestamp_offset,
                     gboolean sequence_mode, double window_start,
@@ -498,6 +515,7 @@ buffer_take_samples(ns_mse_buffer *buffer, double *timestamp_offset,
     return NS_MSE_APPEND_OK;
 }
 
+/* appendBuffer: demuxes the bytes and commits frames; parse error or quota results. */
 ns_mse_append_result
 ns_mse_buffer_append(ns_mse_buffer *buffer, const guint8 *data, gsize len,
                      double *timestamp_offset, gboolean sequence_mode,
@@ -510,6 +528,7 @@ ns_mse_buffer_append(ns_mse_buffer *buffer, const guint8 *data, gsize len,
                                window_start, window_end);
 }
 
+/* Feeds bytes at a file position through the MP4 sample index; sets the next position. */
 ns_mse_append_result
 ns_mse_buffer_append_indexed(ns_mse_buffer *buffer, guint64 position,
                              const guint8 *data, gsize len,
@@ -523,6 +542,7 @@ ns_mse_buffer_append_indexed(ns_mse_buffer *buffer, guint64 position,
     return buffer_take_samples(buffer, NULL, FALSE, -INFINITY, INFINITY);
 }
 
+/* Flushes buffered WebM demuxer data into frames at end of stream. */
 void
 ns_mse_buffer_flush(ns_mse_buffer *buffer)
 {
@@ -531,6 +551,7 @@ ns_mse_buffer_flush(ns_mse_buffer *buffer)
     buffer_take_samples(buffer, NULL, FALSE, -INFINITY, INFINITY);
 }
 
+/* Whole-file duration in seconds from the WebM header or MP4 sample index. */
 double
 ns_mse_buffer_file_duration(const ns_mse_buffer *buffer)
 {
@@ -539,6 +560,7 @@ ns_mse_buffer_file_duration(const ns_mse_buffer *buffer)
     return ns_mp4_demuxer_index_duration(buffer->demuxer);
 }
 
+/* File byte position to fetch from to seek to seconds via the MP4 index. */
 guint64
 ns_mse_buffer_file_seek(const ns_mse_buffer *buffer, double seconds)
 {
@@ -546,6 +568,7 @@ ns_mse_buffer_file_seek(const ns_mse_buffer *buffer, double seconds)
                   : NS_MP4_INDEX_END;
 }
 
+/* SourceBuffer.remove(start, end) on the buffer and its companion; resets DTS continuity. */
 void
 ns_mse_buffer_remove(ns_mse_buffer *buffer, double start, double end)
 {
@@ -555,6 +578,7 @@ ns_mse_buffer_remove(ns_mse_buffer *buffer, double start, double end)
     if (buffer->companion) ns_mse_buffer_remove(buffer->companion, start, end);
 }
 
+/* SourceBuffer.abort(): resets the demuxer parser and coded frame group state. */
 void
 ns_mse_buffer_abort(ns_mse_buffer *buffer)
 {
@@ -576,6 +600,7 @@ range_start_cmp(gconstpointer a, gconstpointer b)
     return ra[0] < rb[0] ? -1 : ra[0] > rb[0] ? 1 : 0;
 }
 
+/* Buffered ranges of one track as flat [start, end] pairs, merging gaps up to 0.15 s. */
 static GArray *
 track_ranges(const ns_mse_buffer *buffer)
 {
@@ -608,6 +633,7 @@ track_ranges(const ns_mse_buffer *buffer)
     return ranges;
 }
 
+/* Intersects two sorted flat range arrays; consumes both inputs. */
 static GArray *
 ranges_intersect(GArray *first, GArray *second)
 {
@@ -630,6 +656,7 @@ ranges_intersect(GArray *first, GArray *second)
     return both;
 }
 
+/* SourceBuffer.buffered: intersection of the buffer's and companion's track ranges. */
 GArray *
 ns_mse_buffer_ranges(const ns_mse_buffer *buffer)
 {
@@ -639,6 +666,7 @@ ns_mse_buffer_ranges(const ns_mse_buffer *buffer)
     return ranges;
 }
 
+/* MediaSource buffered: intersection of all active buffers' ranges; caller frees. */
 GArray *
 ns_mse_source_buffered(ns_mse_source *source)
 {
@@ -654,6 +682,7 @@ ns_mse_source_buffered(ns_mse_source *source)
     return result ? result : g_array_new(FALSE, FALSE, sizeof(double));
 }
 
+/* HTMLMediaElement seekable for MSE: [0, duration], or live/buffered range for infinite. */
 GArray *
 ns_mse_source_seekable(ns_mse_source *source)
 {
@@ -697,6 +726,7 @@ ns_mse_buffer_frame(const ns_mse_buffer *buffer, guint index)
     return &g_array_index(buffer->frames, ns_mse_frame, index);
 }
 
+/* Index of the frame presented at time t (latest PTS <= t back to a keyframe); -1 if gap. */
 gssize
 ns_mse_buffer_frame_at(const ns_mse_buffer *buffer, double t)
 {
@@ -724,6 +754,7 @@ ns_mse_buffer_frame_at(const ns_mse_buffer *buffer, double t)
     return best_index;
 }
 
+/* Index of the first frame whose presentation ends after t; -1 if none. */
 gssize
 ns_mse_buffer_frame_from(const ns_mse_buffer *buffer, double t)
 {
@@ -735,6 +766,7 @@ ns_mse_buffer_frame_from(const ns_mse_buffer *buffer, double t)
     return -1;
 }
 
+/* Index of the nearest keyframe at or before index; -1 if none. */
 gssize
 ns_mse_buffer_keyframe_at_or_before(const ns_mse_buffer *buffer, gssize index)
 {

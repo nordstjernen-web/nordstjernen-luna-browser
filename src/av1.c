@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — AV1 video decoding over libdav1d, to BGRA textures.
+ * Wraps demuxed samples for dav1d and converts pictures by layout, bit depth and color matrix.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -22,6 +23,7 @@ struct ns_av1_decoder {
     Dav1dContext *context;
 };
 
+/* dav1d data free callback: drops the GBytes reference held for a wrapped sample. */
 static void
 release_sample(const uint8_t *data, void *cookie)
 {
@@ -29,6 +31,7 @@ release_sample(const uint8_t *data, void *cookie)
     g_bytes_unref(cookie);
 }
 
+/* Converts a dav1d picture to a BGRA texture, mapping layout, depth and color matrix. */
 static ns_texture *
 picture_to_texture(const Dav1dPicture *picture)
 {
@@ -57,6 +60,7 @@ ns_av1_available(void)
     return TRUE;
 }
 
+/* Creates a dav1d decoder (up to 4 threads, 1 frame delay); NULL without AV1 support. */
 ns_av1_decoder *
 ns_av1_decoder_new(void)
 {
@@ -86,6 +90,7 @@ ns_av1_decoder_flush(ns_av1_decoder *decoder)
     if (decoder) dav1d_flush(decoder->context);
 }
 
+/* Decodes one AV1 sample; returns the latest picture as a texture if wanted, else NULL. */
 ns_texture *
 ns_av1_decoder_decode(ns_av1_decoder *decoder, GBytes *sample,
                       gint64 timestamp, gboolean want_texture)

@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — minimal EventSource / Server-Sent Events client (libcurl).
+/* Nordstjernen Web Browser — Server-Sent Events connection API with engine-thread callbacks.
+ * Backs the JS EventSource binding; each connection runs on its own worker thread.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

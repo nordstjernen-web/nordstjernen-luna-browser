@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — minimal EventSource / Server-Sent Events client (libcurl).
+/* Nordstjernen Web Browser — EventSource (Server-Sent Events) client on libcurl worker threads.
+ * Parses the event stream, checks CORS and MIME type, reconnects with Last-Event-ID.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -62,6 +63,7 @@ typedef struct {
     void   (*payload_free)(gpointer);
 } ns_es_dispatch;
 
+/* Engine-thread delivery of a worker event; re-queued while the page is busy. */
 static gboolean
 ns_es_dispatch_run(gpointer data)
 {
@@ -81,6 +83,7 @@ ns_es_dispatch_run(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Queues a callback to the engine thread; dropped once detached or 256 are pending. */
 static void
 ns_es_post(ns_es *es, void (*invoke)(ns_es *, gpointer), gpointer payload,
            void (*payload_free)(gpointer))
@@ -139,6 +142,7 @@ ns_es_invoke_error(ns_es *es, gpointer payload)
     if (es->cbs.on_error) es->cbs.on_error(GPOINTER_TO_INT(payload), es->user_data);
 }
 
+/* Posts an error event to the engine thread; fatal means no reconnect. */
 static void
 ns_es_emit_error(ns_es *es, gboolean fatal)
 {
@@ -159,6 +163,7 @@ typedef struct {
     char       *cur_url;
 } ns_es_parse;
 
+/* SSE "dispatch the event": posts buffered data (trailing LF stripped) with type and id. */
 static void
 ns_es_dispatch_event(ns_es_parse *p)
 {
@@ -182,6 +187,7 @@ ns_es_dispatch_event(ns_es_parse *p)
     ns_es_post(p->es, ns_es_invoke_message, m, ns_es_msg_free);
 }
 
+/* Interprets one SSE line: data, event, id, retry fields, comments, or blank to dispatch. */
 static void
 ns_es_process_line(ns_es_parse *p, const char *line)
 {
@@ -231,6 +237,7 @@ ns_es_process_line(ns_es_parse *p, const char *line)
     g_free(value);
 }
 
+/* Splits the stream into lines on CR, LF or CRLF; marks fatal past the 1 MiB line cap. */
 static void
 ns_es_feed(ns_es_parse *p, const char *buf, gsize len)
 {
@@ -251,6 +258,7 @@ ns_es_feed(ns_es_parse *p, const char *buf, gsize len)
     }
 }
 
+/* curl header callback: tracks status, vets redirects, checks CORS and content type. */
 static size_t
 ns_es_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
 {
@@ -325,6 +333,7 @@ ns_es_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
     return g_atomic_int_get(&p->es->exit_requested) ? 0 : total;
 }
 
+/* curl body callback feeding the SSE parser; aborts on close or fatal error. */
 static size_t
 ns_es_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
@@ -336,6 +345,7 @@ ns_es_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     return total;
 }
 
+/* curl progress callback that aborts the transfer once close is requested. */
 static int
 ns_es_progress(void *clientp, curl_off_t dt, curl_off_t dn, curl_off_t ut,
                curl_off_t un)
@@ -345,6 +355,7 @@ ns_es_progress(void *clientp, curl_off_t dt, curl_off_t dn, curl_off_t ut,
     return g_atomic_int_get(&es->exit_requested) ? 1 : 0;
 }
 
+/* Performs one SSE connection with Last-Event-ID; returns FALSE if the failure is fatal. */
 static gboolean
 ns_es_connect_once(ns_es *es, gboolean *opened_out)
 {
@@ -414,6 +425,7 @@ ns_es_connect_once(ns_es *es, gboolean *opened_out)
     return !fatal;
 }
 
+/* Worker thread loop: connect, report errors, wait the retry interval, reconnect. */
 static gpointer
 ns_es_worker(gpointer data)
 {
@@ -441,6 +453,7 @@ ns_es_worker(gpointer data)
     return NULL;
 }
 
+/* Creates an EventSource connection and starts its worker thread. */
 ns_es *
 ns_es_new(const char *url, const char *origin, const char *last_event_id,
           ns_fetch_policy *policy,
@@ -461,6 +474,7 @@ ns_es_new(const char *url, const char *origin, const char *last_event_id,
     return es;
 }
 
+/* Requests the worker to stop; callbacks may still be pending. */
 void
 ns_es_close(ns_es *es)
 {
@@ -468,6 +482,7 @@ ns_es_close(ns_es *es)
     g_atomic_int_set(&es->exit_requested, 1);
 }
 
+/* Detaches callbacks, stops and joins the worker, and drops the owner's reference. */
 void
 ns_es_free(ns_es *es)
 {

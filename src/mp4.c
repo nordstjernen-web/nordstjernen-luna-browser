@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — MP4 (ISO BMFF) demuxing: fragmented streams for Media Source Extensions, sample tables for whole files.
+/* Nordstjernen Web Browser — MP4 (ISO BMFF) demuxer: fragments for MSE, sample tables for files.
+ * Init segments and moof/trun fragments become queued samples; stbl tables a sorted sample index.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -153,6 +154,7 @@ cursor_position(const byte_cursor *c)
     return c->data ? c->data + c->offset : NULL;
 }
 
+/* Advances the cursor by n bytes; on overrun marks it exhausted and returns FALSE. */
 static gboolean
 cursor_skip(byte_cursor *c, gsize n)
 {
@@ -165,6 +167,7 @@ cursor_skip(byte_cursor *c, gsize n)
     return TRUE;
 }
 
+/* Reads an n-byte big-endian integer; returns 0 and sets overrun if too short. */
 static guint64
 cursor_read_be(byte_cursor *c, gsize n)
 {
@@ -210,6 +213,7 @@ cursor_u64(byte_cursor *c)
     return cursor_read_be(c, 8);
 }
 
+/* Reads the next child box (size, largesize, uuid); 1 found, 0 at end, -1 malformed. */
 static int
 cursor_next_box(byte_cursor *c, child_box *out)
 {
@@ -239,6 +243,7 @@ cursor_next_box(byte_cursor *c, child_box *out)
     return 1;
 }
 
+/* Peeks a top-level box header in a partial stream buffer without consuming it. */
 static peek_result
 peek_top_level_box(const guint8 *data, gsize available, guint32 *type,
                    guint64 *total_size, gsize *header_length,
@@ -267,6 +272,7 @@ peek_top_level_box(const guint8 *data, gsize available, guint32 *type,
     return PEEK_COMPLETE;
 }
 
+/* Renders a fourcc as a 4-char string, replacing unprintable bytes with '?'. */
 static void
 fourcc_to_string(guint32 fourcc, char out[5])
 {
@@ -297,6 +303,7 @@ ns_mp4_sample_free(gpointer data)
     g_free(sample);
 }
 
+/* Finds a demux track by its track ID. */
 static demux_track *
 find_track(GPtrArray *tracks, guint32 id)
 {
@@ -308,6 +315,7 @@ find_track(GPtrArray *tracks, guint32 id)
     return NULL;
 }
 
+/* True if ISO BMFF sample flags mark a sync sample (not non-sync, not dependent). */
 static gboolean
 sample_flags_mean_sync(guint32 flags)
 {
@@ -316,6 +324,7 @@ sample_flags_mean_sync(guint32 flags)
     return !is_non_sync && depends_on != 1;
 }
 
+/* Reads an MPEG-4 descriptor tag and its 7-bit varint length (clamped to data). */
 static gboolean
 read_descriptor_header(byte_cursor *c, guint8 *tag, gsize *length)
 {
@@ -331,6 +340,7 @@ read_descriptor_header(byte_cursor *c, guint8 *tag, gsize *length)
     return TRUE;
 }
 
+/* Scans sibling descriptors for wanted_tag and returns a cursor over its body. */
 static gboolean
 find_descriptor(byte_cursor *c, guint8 wanted_tag, byte_cursor *found)
 {
@@ -348,6 +358,7 @@ find_descriptor(byte_cursor *c, guint8 wanted_tag, byte_cursor *found)
     return FALSE;
 }
 
+/* Stores the DecoderSpecificInfo (e.g. AudioSpecificConfig) as codec config. */
 static void
 parse_decoder_config_descriptor(demux_track *track, byte_cursor *c)
 {
@@ -360,6 +371,7 @@ parse_decoder_config_descriptor(demux_track *track, byte_cursor *c)
                     cursor_remaining(&specific_info));
 }
 
+/* Parses an esds box to extract the decoder-specific config. */
 static void
 parse_esds(demux_track *track, const guint8 *payload, gsize length)
 {
@@ -388,6 +400,7 @@ parse_esds(demux_track *track, const guint8 *payload, gsize length)
         parse_decoder_config_descriptor(track, &decoder_config);
 }
 
+/* Replaces the track's codec config with a copy of the box payload. */
 static void
 store_codec_config(demux_track *track, const child_box *box)
 {
@@ -395,6 +408,7 @@ store_codec_config(demux_track *track, const child_box *box)
     track->public.codec_config = g_bytes_new(box->payload, box->payload_length);
 }
 
+/* True for codec configuration boxes (avcC, hvcC, vpcC, dOps, av1C, esds, ...). */
 static gboolean
 box_type_is_codec_config(guint32 type)
 {
@@ -415,6 +429,7 @@ box_type_is_codec_config(guint32 type)
     }
 }
 
+/* Finds codec config inside a sample entry, descending into a QuickTime wave box. */
 static void
 parse_sample_entry_children(demux_track *track, guint32 entry_type,
                             byte_cursor *c, int depth)
@@ -448,6 +463,7 @@ parse_sample_entry_children(demux_track *track, guint32 entry_type,
     }
 }
 
+/* Parses a visual/audio sample entry: codec fourcc, dimensions or channels/rate. */
 static void
 parse_sample_entry(demux_track *track, guint32 handler, const child_box *entry)
 {
@@ -486,6 +502,7 @@ parse_sample_entry(demux_track *track, guint32 handler, const child_box *entry)
     parse_sample_entry_children(track, entry->type, &c, 0);
 }
 
+/* Parses the first sample description entry of an stsd box. */
 static void
 parse_stsd(demux_track *track, guint32 handler, const child_box *stsd)
 {
@@ -499,6 +516,7 @@ parse_stsd(demux_track *track, guint32 handler, const child_box *stsd)
         parse_sample_entry(track, handler, &entry);
 }
 
+/* Finds the first child box of the given type inside a container box. */
 static gboolean
 parse_container_for(const child_box *parent, guint32 wanted, child_box *found)
 {
@@ -514,6 +532,7 @@ parse_container_for(const child_box *parent, guint32 wanted, child_box *found)
     return FALSE;
 }
 
+/* Opens a full-box table and checks its entry count fits the remaining payload. */
 static gboolean
 table_open(const child_box *box, gsize skip, gsize entry_size, byte_cursor *c,
            guint32 *count)
@@ -524,6 +543,7 @@ table_open(const child_box *box, gsize skip, gsize entry_size, byte_cursor *c,
     return !c->overrun && *count <= cursor_remaining(c) / entry_size;
 }
 
+/* Collects pointers to the sample table boxes inside an stbl. */
 static void
 collect_sample_tables(const child_box *stbl, sample_tables *tables)
 {
@@ -555,6 +575,7 @@ typedef struct {
     guint8      pending_nibble;
 } size_reader;
 
+/* Opens an stsz or stz2 sample-size table, validating field size and count. */
 static gboolean
 size_reader_open(const sample_tables *tables, size_reader *r)
 {
@@ -580,6 +601,7 @@ size_reader_open(const sample_tables *tables, size_reader *r)
            (guint64)cursor_remaining(&r->cursor) * 8;
 }
 
+/* Returns the next sample size (constant, or 4/8/16/32-bit field). */
 static guint32
 size_reader_next(size_reader *r)
 {
@@ -605,6 +627,7 @@ typedef struct {
     guint32     value;
 } run_reader;
 
+/* Opens a run-length (count, value) table such as stts or ctts; absent is OK. */
 static gboolean
 run_reader_open(const child_box *box, run_reader *r)
 {
@@ -613,6 +636,7 @@ run_reader_open(const child_box *box, run_reader *r)
     return table_open(box, 4, 8, &r->cursor, &r->entries);
 }
 
+/* Returns the next per-sample value from a run-length table. */
 static guint32
 run_reader_next(run_reader *r)
 {
@@ -625,6 +649,7 @@ run_reader_next(run_reader *r)
     return r->value;
 }
 
+/* Builds a flat sample index (offset, size, dts/pts, sync) from stbl tables. */
 static GArray *
 build_sample_index(const sample_tables *tables)
 {
@@ -708,6 +733,7 @@ build_sample_index(const sample_tables *tables)
     return samples;
 }
 
+/* Parses stsd and the sample tables of a media information box. */
 static void
 parse_minf(demux_track *track, guint32 handler, const child_box *minf)
 {
@@ -722,6 +748,7 @@ parse_minf(demux_track *track, guint32 handler, const child_box *minf)
     track->samples = build_sample_index(&tables);
 }
 
+/* Reads the media timescale from an mdhd box. */
 static gboolean
 parse_mdhd(demux_track *track, const child_box *box)
 {
@@ -734,6 +761,7 @@ parse_mdhd(demux_track *track, const child_box *box)
     return !c.overrun;
 }
 
+/* Returns the handler type fourcc (vide, soun, ...) of an hdlr box, or 0. */
 static guint32
 parse_hdlr(const child_box *box)
 {
@@ -744,6 +772,7 @@ parse_hdlr(const child_box *box)
     return c.overrun ? 0 : handler;
 }
 
+/* Parses mdhd, hdlr and minf of a media box into the track. */
 static gboolean
 parse_mdia(demux_track *track, const child_box *mdia)
 {
@@ -767,6 +796,7 @@ parse_mdia(demux_track *track, const child_box *mdia)
     return TRUE;
 }
 
+/* Reads track ID and 16.16 display width/height from a tkhd box. */
 static gboolean
 parse_tkhd(demux_track *track, const child_box *box, int *width, int *height)
 {
@@ -787,6 +817,7 @@ parse_tkhd(demux_track *track, const child_box *box, int *width, int *height)
     return TRUE;
 }
 
+/* Records the first non-empty edit list entry's media time as the track's start offset. */
 static void
 parse_elst(demux_track *track, const child_box *box)
 {
@@ -816,6 +847,7 @@ parse_elst(demux_track *track, const child_box *box)
     }
 }
 
+/* Parses a trak box into a new track; NULL if tkhd/mdia are missing or invalid. */
 static demux_track *
 parse_trak(const child_box *trak)
 {
@@ -856,6 +888,7 @@ parse_trak(const child_box *trak)
     return track;
 }
 
+/* Collects trex per-track fragment defaults from an mvex box. */
 static gboolean
 parse_mvex(GArray *extends, const child_box *mvex)
 {
@@ -881,6 +914,7 @@ parse_mvex(GArray *extends, const child_box *mvex)
     return status == 0;
 }
 
+/* Orders indexed samples by file position, then track ID, then decode time. */
 static int
 indexed_sample_cmp(gconstpointer a, gconstpointer b)
 {
@@ -890,6 +924,7 @@ indexed_sample_cmp(gconstpointer a, gconstpointer b)
     return sa->dts < sb->dts ? -1 : sa->dts > sb->dts;
 }
 
+/* Merges per-track sample tables into one position-sorted index, consuming them. */
 static GArray *
 merge_sample_indexes(GPtrArray *tracks)
 {
@@ -915,6 +950,7 @@ merge_sample_indexes(GPtrArray *tracks)
     return index;
 }
 
+/* Adds a track's samples to the index budget; drops all tables if it is exceeded. */
 static guint
 claim_index_budget(GPtrArray *tracks, demux_track *track, guint indexed)
 {
@@ -930,6 +966,7 @@ claim_index_budget(GPtrArray *tracks, demux_track *track, guint indexed)
     return NS_MP4_MAX_INDEXED_SAMPLES + 1;
 }
 
+/* Parses the init segment (tracks, trex defaults, sample index); replaces prior state. */
 static gboolean
 parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
 {
@@ -978,6 +1015,7 @@ parse_moov(ns_mp4_demuxer *d, const guint8 *payload, gsize length)
     return ok;
 }
 
+/* Adds a signed offset to a stream position, rejecting underflow and overflow. */
 static gboolean
 checked_position(guint64 base, gint64 offset, guint64 *out)
 {
@@ -990,6 +1028,7 @@ checked_position(guint64 base, gint64 offset, guint64 *out)
     return TRUE;
 }
 
+/* Parses a track run, queuing pending samples with dts/pts, size and stream position. */
 static gboolean
 parse_trun(ns_mp4_demuxer *d, fragment_run_context *run, const child_box *box)
 {
@@ -1069,6 +1108,7 @@ parse_trun(ns_mp4_demuxer *d, fragment_run_context *run, const child_box *box)
     return TRUE;
 }
 
+/* Parses a track fragment (tfhd, tfdt, truns), resolving base data offset rules. */
 static gboolean
 parse_traf(ns_mp4_demuxer *d, const child_box *traf, guint64 moof_position,
            gboolean first_traf, guint64 *previous_traf_data_end)
@@ -1134,6 +1174,7 @@ parse_traf(ns_mp4_demuxer *d, const child_box *traf, guint64 moof_position,
     return TRUE;
 }
 
+/* Parses a movie fragment's trafs; rolls back pending samples on error. */
 static gboolean
 parse_moof(ns_mp4_demuxer *d, const guint8 *payload, gsize length,
            guint64 moof_position)
@@ -1162,6 +1203,7 @@ parse_moof(ns_mp4_demuxer *d, const guint8 *payload, gsize length,
     return TRUE;
 }
 
+/* Discards bytes from the front of the input buffer, advancing the stream position. */
 static void
 drop_input(ns_mp4_demuxer *d, gsize count)
 {
@@ -1171,6 +1213,7 @@ drop_input(ns_mp4_demuxer *d, gsize count)
     d->input_position += count;
 }
 
+/* Removes already-emitted entries from the front of the pending sample array. */
 static void
 compact_pending(ns_mp4_demuxer *d)
 {
@@ -1183,6 +1226,7 @@ compact_pending(ns_mp4_demuxer *d)
     d->pending_head = 0;
 }
 
+/* Copies a pending sample's bytes out of the input buffer onto the ready queue. */
 static void
 emit_sample(ns_mp4_demuxer *d, const pending_sample *pending)
 {
@@ -1197,6 +1241,7 @@ emit_sample(ns_mp4_demuxer *d, const pending_sample *pending)
     g_queue_push_tail(d->ready, sample);
 }
 
+/* True if the sample's byte range lies within the current mdat payload. */
 static gboolean
 sample_fits_in_mdat(const ns_mp4_demuxer *d, const pending_sample *sample)
 {
@@ -1207,6 +1252,7 @@ sample_fits_in_mdat(const ns_mp4_demuxer *d, const pending_sample *sample)
            sample->size <= d->mdat_payload_length - relative;
 }
 
+/* Emits pending samples whose bytes are fully buffered in the current mdat. */
 static void
 emit_available_mdat_samples(ns_mp4_demuxer *d)
 {
@@ -1221,6 +1267,7 @@ emit_available_mdat_samples(ns_mp4_demuxer *d)
     }
 }
 
+/* Completes an mdat: emits its samples, keeps later ones, fails on straddling samples. */
 static gboolean
 finish_mdat(ns_mp4_demuxer *d)
 {
@@ -1247,6 +1294,7 @@ finish_mdat(ns_mp4_demuxer *d)
     return ok;
 }
 
+/* Switches the parser to skip bytes (or the rest of the stream when forever). */
 static void
 enter_skip(ns_mp4_demuxer *d, guint64 bytes, gboolean forever)
 {
@@ -1255,6 +1303,7 @@ enter_skip(ns_mp4_demuxer *d, guint64 bytes, gboolean forever)
     d->skip_forever = forever;
 }
 
+/* Handles buffered mdat data, skipping it when no samples are pending. */
 static gboolean
 process_mdat(ns_mp4_demuxer *d)
 {
@@ -1274,6 +1323,7 @@ process_mdat(ns_mp4_demuxer *d)
     return d->input->len <= NS_MP4_MAX_MDAT_BUFFER_BYTES;
 }
 
+/* Dispatches the next top-level box: mdat, moov/moof (fully buffered) or skip. */
 static gboolean
 process_top_level_box(ns_mp4_demuxer *d, gboolean *need_more)
 {
@@ -1332,6 +1382,7 @@ process_top_level_box(ns_mp4_demuxer *d, gboolean *need_more)
     return TRUE;
 }
 
+/* Runs the streaming parser state machine over buffered input until it needs more. */
 static gboolean
 process_input(ns_mp4_demuxer *d)
 {
@@ -1365,6 +1416,7 @@ process_input(ns_mp4_demuxer *d)
     }
 }
 
+/* Resets streaming parse state and pending samples, keeping tracks. */
 static void
 clear_parser_state(ns_mp4_demuxer *d)
 {
@@ -1404,6 +1456,7 @@ ns_mp4_demuxer_free(ns_mp4_demuxer *d)
     g_free(d);
 }
 
+/* Feeds bytes to the demuxer in chunks; any parse error makes it permanently failed. */
 gboolean
 ns_mp4_demuxer_append(ns_mp4_demuxer *d, const guint8 *data, gsize len)
 {
@@ -1445,6 +1498,7 @@ ns_mp4_demuxer_track(const ns_mp4_demuxer *d, guint index)
     return &track->public;
 }
 
+/* Pops the next demuxed sample; caller owns out->data. */
 gboolean
 ns_mp4_demuxer_pop_sample(ns_mp4_demuxer *d, ns_mp4_sample *out)
 {
@@ -1456,6 +1510,7 @@ ns_mp4_demuxer_pop_sample(ns_mp4_demuxer *d, ns_mp4_sample *out)
     return TRUE;
 }
 
+/* Resets parsing for a discontinuity (e.g. MSE abort), forgetting decode times. */
 void
 ns_mp4_demuxer_reset_parser(ns_mp4_demuxer *d)
 {
@@ -1468,12 +1523,14 @@ ns_mp4_demuxer_reset_parser(ns_mp4_demuxer *d)
     }
 }
 
+/* True when a non-fragmented file's sample index is available. */
 gboolean
 ns_mp4_demuxer_has_sample_index(const ns_mp4_demuxer *d)
 {
     return d && d->has_init && d->index;
 }
 
+/* Converts a sample timestamp to seconds, applying the track's edit list offset. */
 static double
 indexed_seconds(const ns_mp4_demuxer *d, const indexed_sample *sample,
                 gint64 time)
@@ -1484,6 +1541,7 @@ indexed_seconds(const ns_mp4_demuxer *d, const indexed_sample *sample,
     return ns_mp4_time_to_seconds(time - edit, track->public.timescale);
 }
 
+/* Presentation duration in seconds from the sample index. */
 double
 ns_mp4_demuxer_index_duration(const ns_mp4_demuxer *d)
 {
@@ -1497,6 +1555,7 @@ ns_mp4_demuxer_index_duration(const ns_mp4_demuxer *d)
     return duration;
 }
 
+/* Byte position to start reading so every track begins at a keyframe at or before seconds. */
 guint64
 ns_mp4_demuxer_index_seek(const ns_mp4_demuxer *d, double seconds)
 {
@@ -1529,6 +1588,7 @@ ns_mp4_demuxer_index_seek(const ns_mp4_demuxer *d, double seconds)
     return position;
 }
 
+/* Queues indexed samples fully contained in data at position; returns next needed offset. */
 guint64
 ns_mp4_demuxer_index_extract(ns_mp4_demuxer *d, guint64 position,
                              const guint8 *data, gsize len)

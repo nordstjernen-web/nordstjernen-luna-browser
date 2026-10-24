@@ -1,4 +1,5 @@
-/* audio/stub.c: Audio interface fallback for builds without SDL2.
+/* Nordstjernen Web Browser — no-op audio backend for builds without SDL2.
+ * Every player reports NS_AUDIO_PLAYER_FAILED with NS_AUDIO_ERROR_NO_DEVICE.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -41,6 +42,7 @@ void ns_audio_context_stream_restart(NsAudioContext *context, const char *token,
 void ns_audio_context_stream_end(NsAudioContext *context, const char *token, gboolean ended) { (void)context; (void)token; (void)ended; }
 void ns_audio_context_close(NsAudioContext *context, const char *token)
 { (void)context; (void)token; }
+/* Stub: always reports the player as failed with no audio device. */
 gboolean ns_audio_context_status(NsAudioContext *context, const char *token,
                                  NsAudioStatus *out)
 {

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — SQLite-backed browsing history.
+ * Upserts http(s) visits, keeps the newest 10000, serves address-bar search and about:history.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -24,6 +25,7 @@ history_exec(const char *sql)
     return ns_sqlite_exec(g_history_db, "history", sql);
 }
 
+/* TRUE for http(s) URLs without control characters; others are not stored in history. */
 static gboolean
 history_is_recordable(const char *url)
 {
@@ -35,6 +37,7 @@ history_is_recordable(const char *url)
     return TRUE;
 }
 
+/* Sets WAL pragmas and creates the visits table and its last_visit index. */
 static gboolean
 history_schema(void)
 {
@@ -49,6 +52,7 @@ history_schema(void)
                         "ON visits(last_visit)");
 }
 
+/* Deletes all but the 10000 most recently visited history rows. */
 static void
 history_prune(void)
 {
@@ -64,6 +68,7 @@ history_prune(void)
     sqlite3_finalize(st);
 }
 
+/* Opens or creates the 0600 history database; disables history if it cannot open. */
 void
 ns_history_init(void)
 {
@@ -111,6 +116,7 @@ ns_history_shutdown(void)
     g_mutex_unlock(&g_history_mutex);
 }
 
+/* Upserts a visit, bumping its count and time and keeping the old title if new is empty. */
 void
 ns_history_record(const char *url, const char *title)
 {
@@ -181,6 +187,7 @@ history_match_free(gpointer data)
     g_free(m);
 }
 
+/* Builds a %substring% LIKE pattern with %, _ and \ escaped; caller frees. */
 static char *
 history_like_pattern(const char *query)
 {
@@ -194,6 +201,7 @@ history_like_pattern(const char *query)
     return g_string_free(s, FALSE);
 }
 
+/* Substring search over URL and title, ranked by visit count then recency. */
 GPtrArray *
 ns_history_search(const char *query, guint limit)
 {
@@ -227,6 +235,7 @@ ns_history_search(const char *query, guint limit)
     return out;
 }
 
+/* Renders the about:history page of the 200 most recent visits; caller frees. */
 char *
 ns_history_html_page(void)
 {

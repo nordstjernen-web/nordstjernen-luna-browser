@@ -1,4 +1,6 @@
-/* Nordstjernen Web Browser — registered custom property <syntax> grammar and matching. */
+/* Nordstjernen Web Browser — @property <syntax> descriptor parsing and value matching.
+ * Type-checks math functions and serializes computed values for registered custom properties.
+ */
 
 #include "css_prop_syntax.h"
 
@@ -76,6 +78,7 @@ static const struct { const char *name; ns_len_unit unit; } kLengthUnits[] = {
     { "cqmax", NS_LEN_CQMAX },
 };
 
+/* True for font-relative length units (em, ex, ch, ic, cap, lh and root variants). */
 static gboolean
 len_unit_font_relative(ns_len_unit unit)
 {
@@ -109,6 +112,7 @@ typedef struct {
     double len[NS_LEN_COUNT];
 } ns_math_value;
 
+/* True if a math value has no non-zero number, percent or length terms. */
 static gboolean
 math_is_zero(const ns_math_value *v)
 {
@@ -118,6 +122,7 @@ math_is_zero(const ns_math_value *v)
     return v->number == 0;
 }
 
+/* True if any per-unit length coefficient is non-zero. */
 static gboolean
 math_has_length_terms(const ns_math_value *v)
 {
@@ -126,6 +131,7 @@ math_has_length_terms(const ns_math_value *v)
     return FALSE;
 }
 
+/* True if the value uses any font-relative length unit. */
 static gboolean
 math_font_relative(const ns_math_value *v)
 {
@@ -135,6 +141,7 @@ math_font_relative(const ns_math_value *v)
     return FALSE;
 }
 
+/* Multiplies every term of a math value by f. */
 static void
 math_scale(ns_math_value *v, double f)
 {
@@ -143,6 +150,7 @@ math_scale(ns_math_value *v, double f)
     for (int i = 0; i < NS_LEN_COUNT; i++) v->len[i] *= f;
 }
 
+/* Adds sign*b into a with calc() type checking (length+percent mixes, zero numbers). */
 static gboolean
 math_add(ns_math_value *a, const ns_math_value *b, double sign)
 {
@@ -169,6 +177,7 @@ math_add(ns_math_value *a, const ns_math_value *b, double sign)
 
 static const char *g_math_input;
 
+/* Returns a copy of the component's source text from g_math_input; caller frees. */
 static char *
 component_text(const ns_css_component *c)
 {
@@ -181,6 +190,7 @@ component_is_ws(const ns_css_component *c)
     return c->type == NS_CSS_COMPONENT_WHITESPACE;
 }
 
+/* True if name is a CSS math function (calc, min, max, clamp, trig, ...). */
 static gboolean
 math_function_name(const char *name)
 {
@@ -197,6 +207,7 @@ math_function_name(const char *name)
 static gboolean math_eval_sum(GPtrArray *items, guint *pos, guint end,
                               ns_math_value *out, int depth);
 
+/* Converts a number, percentage or dimension token to a typed math value. */
 static gboolean
 math_eval_dimension(const ns_css_component *c, ns_math_value *out)
 {
@@ -261,6 +272,7 @@ math_eval_dimension(const ns_css_component *c, ns_math_value *out)
 
 typedef struct { guint lo, hi; } math_range;
 
+/* Splits function children into comma-separated argument index ranges. */
 static void
 math_split_args(GPtrArray *children, GArray *ranges)
 {
@@ -277,6 +289,7 @@ math_split_args(GPtrArray *children, GArray *ranges)
     g_array_append_val(ranges, tail);
 }
 
+/* Evaluates a CSS math function for type checking; mixed lengths are not resolved. */
 static gboolean
 math_eval_function(const ns_css_component *fn, ns_math_value *out, int depth)
 {
@@ -428,6 +441,7 @@ math_eval_function(const ns_css_component *fn, ns_math_value *out, int depth)
     return ok;
 }
 
+/* Evaluates a parenthesized block, math function or single numeric token. */
 static gboolean
 math_eval_term(GPtrArray *items, guint *pos, guint end, ns_math_value *out,
                int depth)
@@ -455,6 +469,7 @@ math_eval_term(GPtrArray *items, guint *pos, guint end, ns_math_value *out,
     return TRUE;
 }
 
+/* Evaluates terms joined by * and /, requiring a unitless operand on one side. */
 static gboolean
 math_eval_product(GPtrArray *items, guint *pos, guint end, ns_math_value *out,
                   int depth)
@@ -496,6 +511,7 @@ math_eval_product(GPtrArray *items, guint *pos, guint end, ns_math_value *out,
     }
 }
 
+/* Evaluates a calc sum; + and - must be surrounded by whitespace per CSS Values. */
 static gboolean
 math_eval_sum(GPtrArray *items, guint *pos, guint end, ns_math_value *out,
               int depth)
@@ -525,6 +541,7 @@ math_eval_sum(GPtrArray *items, guint *pos, guint end, ns_math_value *out,
     }
 }
 
+/* Evaluates a single component as a math function or numeric token. */
 static gboolean
 math_eval_component(const ns_css_component *c, ns_math_value *out)
 {
@@ -535,6 +552,7 @@ math_eval_component(const ns_css_component *c, ns_math_value *out)
     return math_eval_dimension(c, out);
 }
 
+/* Returns the identifier text with CSS escapes decoded; caller frees. */
 static char *
 syn_ident_unescape(const char *text, gssize len)
 {
@@ -555,6 +573,7 @@ syn_ident_unescape(const char *text, gssize len)
     return g_string_free(out, FALSE);
 }
 
+/* True for initial, inherit, unset, revert and revert-layer. */
 static gboolean
 syn_css_wide_keyword(const char *ident)
 {
@@ -566,6 +585,7 @@ syn_css_wide_keyword(const char *ident)
     return FALSE;
 }
 
+/* True for CSS-wide keywords and "default", which cannot be custom idents. */
 static gboolean
 syn_reserved_ident(const char *ident)
 {
@@ -591,6 +611,7 @@ static const struct { const char *name; ns_syn_kind kind; } kSyntaxTypes[] = {
     { "string", NS_SYN_STRING },
 };
 
+/* True if text tokenizes to exactly one identifier. */
 static gboolean
 syn_ident_valid(const char *text, gsize len)
 {
@@ -606,6 +627,7 @@ syn_ident_valid(const char *text, gsize len)
     return ok;
 }
 
+/* Parses one syntax component: <type> or ident with optional + or # multiplier. */
 static gboolean
 syn_parse_component(const char *text, gsize len, ns_syn_component *out)
 {
@@ -658,6 +680,7 @@ syn_component_clear(gpointer data)
     g_free(c->ident);
 }
 
+/* Parses an @property syntax descriptor ("*" or |-separated components); NULL if invalid. */
 ns_css_syntax_def *
 ns_css_syntax_def_parse(const char *text)
 {
@@ -718,6 +741,7 @@ typedef struct {
     guint hi;
 } syn_chunk;
 
+/* Trims leading and trailing whitespace components from a chunk range. */
 static void
 chunk_trim(syn_chunk *chunk)
 {
@@ -729,6 +753,7 @@ chunk_trim(syn_chunk *chunk)
         chunk->hi--;
 }
 
+/* True if name is a CSS color function. */
 static gboolean
 syn_color_function(const char *name)
 {
@@ -741,6 +766,7 @@ syn_color_function(const char *name)
     return FALSE;
 }
 
+/* True if name is a CSS <image> function (url, gradients, image-set, ...). */
 static gboolean
 syn_image_function(const char *name)
 {
@@ -756,6 +782,7 @@ syn_image_function(const char *name)
     return FALSE;
 }
 
+/* True if name is a transform function accepting argc arguments. */
 static gboolean
 syn_transform_function(const char *name, guint argc)
 {
@@ -776,6 +803,7 @@ syn_transform_function(const char *name, guint argc)
     return FALSE;
 }
 
+/* True if a number token's source text has no fraction or exponent. */
 static gboolean
 syn_number_is_integer(const ns_css_component *c)
 {
@@ -786,6 +814,7 @@ syn_number_is_integer(const ns_css_component *c)
     return TRUE;
 }
 
+/* Matches one component against a numeric syntax type, optionally font-independent. */
 static gboolean
 syn_match_numeric(ns_syn_kind kind, const syn_chunk *chunk,
                   gboolean independent, ns_math_value *out)
@@ -848,6 +877,7 @@ static const double kAbsoluteUnitPx[] = {
     [NS_LEN_PC] = 16.0,
 };
 
+/* Pixels per unit for a length unit given font, viewport and container metrics. */
 static double
 len_unit_px(ns_len_unit unit, const ns_css_syntax_ctx *ctx)
 {
@@ -882,6 +912,7 @@ len_unit_px(ns_len_unit unit, const ns_css_syntax_ctx *ctx)
     }
 }
 
+/* Resolves a math value's length terms to absolute pixels. */
 static double
 math_length_px(const ns_math_value *v, const ns_css_syntax_ctx *ctx)
 {
@@ -891,6 +922,7 @@ math_length_px(const ns_math_value *v, const ns_css_syntax_ctx *ctx)
     return px;
 }
 
+/* Appends a number in CSS serialization form (trimmed decimals, NaN/infinity). */
 static void
 syn_append_number(GString *out, double n)
 {
@@ -917,6 +949,7 @@ syn_append_dimension(GString *out, double n, const char *unit)
     g_string_append(out, unit);
 }
 
+/* Appends a double-quoted CSS string, escaping quotes and backslashes. */
 static void
 syn_append_string(GString *out, const char *text)
 {
@@ -928,6 +961,7 @@ syn_append_string(GString *out, const char *text)
     g_string_append_c(out, '"');
 }
 
+/* Appends a color serialized as rgb() or rgba() with two-decimal alpha. */
 static void
 syn_append_color(GString *out, guint8 r, guint8 g, guint8 b, guint8 a)
 {
@@ -940,6 +974,7 @@ syn_append_color(GString *out, guint8 r, guint8 g, guint8 b, guint8 a)
     g_string_append_c(out, ')');
 }
 
+/* Appends the computed form of a math value for the given syntax type. */
 static void
 syn_append_math(GString *out, ns_syn_kind kind, const ns_math_value *v,
                 const ns_css_syntax_ctx *ctx)
@@ -988,6 +1023,7 @@ typedef struct {
     const ns_css_syntax_ctx *ctx;
 } syn_emit;
 
+/* Matches a chunk against one syntax type, optionally appending its computed value. */
 static gboolean
 syn_match_single(ns_syn_kind kind, const char *ident, syn_chunk chunk,
                  gboolean independent, const syn_emit *emit)
@@ -1105,6 +1141,7 @@ syn_match_single(ns_syn_kind kind, const char *ident, syn_chunk chunk,
     return TRUE;
 }
 
+/* Matches a whitespace-separated list (+ multiplier); commas are rejected. */
 static gboolean
 syn_match_space_list(ns_syn_kind kind, const char *ident, syn_chunk chunk,
                      gboolean independent, const syn_emit *emit)
@@ -1133,6 +1170,7 @@ syn_match_space_list(ns_syn_kind kind, const char *ident, syn_chunk chunk,
     return count > 0;
 }
 
+/* Matches a chunk against one syntax component honoring + and # multipliers. */
 static gboolean
 syn_match_component(const ns_syn_component *comp, syn_chunk chunk,
                     gboolean independent, const syn_emit *emit)
@@ -1170,6 +1208,7 @@ syn_match_component(const ns_syn_component *comp, syn_chunk chunk,
     return syn_match_single(comp->kind, comp->ident, chunk, independent, emit);
 }
 
+/* Rejects values with semicolons or !, and optionally any var()/env()/attr(). */
 static gboolean
 syn_value_tokens_ok(GPtrArray *items, gboolean allow_var)
 {
@@ -1202,6 +1241,7 @@ syn_value_tokens_ok(GPtrArray *items, gboolean allow_var)
     return TRUE;
 }
 
+/* True if an unquoted url( contains quotes or parentheses (a bad-url token). */
 static gboolean
 syn_bad_url(const char *text)
 {
@@ -1226,6 +1266,7 @@ syn_bad_url(const char *text)
     return FALSE;
 }
 
+/* Matches a value against a syntax definition, optionally emitting its computed form. */
 static gboolean
 syn_match_value(const ns_css_syntax_def *syntax, const char *value,
                 gboolean independent, const ns_css_syntax_ctx *ctx,
@@ -1268,12 +1309,14 @@ syn_match_value(const ns_css_syntax_def *syntax, const char *value,
     return ok;
 }
 
+/* True if value matches the registered syntax. */
 gboolean
 ns_css_syntax_def_matches(const ns_css_syntax_def *syntax, const char *value)
 {
     return syn_match_value(syntax, value, FALSE, NULL, NULL);
 }
 
+/* True if value matches the syntax and is computationally independent (no font units). */
 gboolean
 ns_css_syntax_def_initial_valid(const ns_css_syntax_def *syntax,
                                  const char *value)
@@ -1281,6 +1324,7 @@ ns_css_syntax_def_initial_valid(const ns_css_syntax_def *syntax,
     return syn_match_value(syntax, value, TRUE, NULL, NULL);
 }
 
+/* Returns the computed serialization of value under the syntax; NULL if no match. */
 char *
 ns_css_syntax_def_compute(const ns_css_syntax_def *syntax, const char *value,
                           const ns_css_syntax_ctx *ctx)

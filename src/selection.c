@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — text selection on the rendered page.
+ * Hit-tests text boxes, word/block/all selection, highlight runs and clipboard text.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -20,6 +21,7 @@ ns_selection_clear(ns_selection *sel)
     sel->active = FALSE;
 }
 
+/* True if the selection is active and non-collapsed. */
 gboolean
 ns_selection_has_range(const ns_selection *sel)
 {
@@ -30,6 +32,7 @@ ns_selection_has_range(const ns_selection *sel)
     return TRUE;
 }
 
+/* False if the nearest ancestor box with user-select set has user-select: none. */
 static gboolean
 box_user_selectable(const ns_box *b)
 {
@@ -42,6 +45,7 @@ box_user_selectable(const ns_box *b)
     return TRUE;
 }
 
+/* Returns the nearest non-inline ancestor box. */
 static const ns_box *
 containing_block(const ns_box *b)
 {
@@ -50,6 +54,7 @@ containing_block(const ns_box *b)
     return p;
 }
 
+/* True if (x, y) lies within a box with a non-empty content rect. */
 static gboolean
 box_xy_inside(const ns_box *b, double x, double y)
 {
@@ -58,6 +63,7 @@ box_xy_inside(const ns_box *b, double x, double y)
            y >= b->y && y <= b->y + b->content_height;
 }
 
+/* Finds the deepest selectable text box under (x, y), honoring clipping and scroll offsets. */
 static const ns_box *
 inline_at_xy_walk(const ns_box *root, double x, double y,
                   double *out_x, double *out_y)
@@ -79,6 +85,7 @@ inline_at_xy_walk(const ns_box *root, double x, double y,
     return NULL;
 }
 
+/* True if a selectable text box lies under (x, y). */
 gboolean
 ns_selection_text_at(const ns_box *root, double x, double y)
 {
@@ -92,6 +99,7 @@ typedef struct nearest_ctx {
     double        best_gap_x;
 } nearest_ctx;
 
+/* Keeps the box closest to the point, preferring vertical then horizontal distance. */
 static void
 nearest_consider(nearest_ctx *n, const ns_box *b, double x, double y)
 {
@@ -109,6 +117,7 @@ nearest_consider(nearest_ctx *n, const ns_box *b, double x, double y)
     }
 }
 
+/* Finds the nearest selectable text box to a point over the whole tree. */
 static void
 nearest_inline_walk(const ns_box *root, double x, double y, nearest_ctx *n)
 {
@@ -124,6 +133,7 @@ nearest_inline_walk(const ns_box *root, double x, double y, nearest_ctx *n)
         nearest_inline_walk(c, cx, cy, n);
 }
 
+/* Returns the text box under or nearest to a point plus box-local coordinates. */
 static const ns_box *
 find_inline_for_point(const ns_box *root, double x, double y,
                       double *out_local_x, double *out_local_y)
@@ -143,6 +153,7 @@ find_inline_for_point(const ns_box *root, double x, double y,
     return hit;
 }
 
+/* Maps a page point to a text box and clamped byte offset within its text. */
 static gboolean
 resolve_point(const ns_box *root, double x, double y,
               const ns_box **out_box, gsize *out_byte)
@@ -165,6 +176,7 @@ resolve_point(const ns_box *root, double x, double y,
     return TRUE;
 }
 
+/* Starts a collapsed selection at the text position under (x, y); clears on miss. */
 gboolean
 ns_selection_anchor_at(ns_selection *sel, const ns_box *root, double x, double y)
 {
@@ -183,6 +195,7 @@ ns_selection_anchor_at(ns_selection *sel, const ns_box *root, double x, double y
     return TRUE;
 }
 
+/* Moves the selection focus to the text position under (x, y). */
 gboolean
 ns_selection_extend_to(ns_selection *sel, const ns_box *root, double x, double y)
 {
@@ -195,6 +208,7 @@ ns_selection_extend_to(ns_selection *sel, const ns_box *root, double x, double y
     return TRUE;
 }
 
+/* Selects the word around the text position under (x, y). */
 gboolean
 ns_selection_select_word_at(ns_selection *sel, const ns_box *root,
                             double x, double y)
@@ -218,6 +232,7 @@ typedef struct edge_ctx {
     const ns_box *last;
 } edge_ctx;
 
+/* Records the first and last selectable text boxes in tree order. */
 static void
 edge_walk_cb(const ns_box *b, gpointer ud)
 {
@@ -229,6 +244,7 @@ edge_walk_cb(const ns_box *b, gpointer ud)
     ctx->last = b;
 }
 
+/* Calls cb on every inline box in pre-order. */
 static void
 walk_inline_pre(const ns_box *root, void (*cb)(const ns_box *, gpointer),
                 gpointer ud)
@@ -239,6 +255,7 @@ walk_inline_pre(const ns_box *root, void (*cb)(const ns_box *, gpointer),
         walk_inline_pre(c, cb, ud);
 }
 
+/* Selects all text of the containing block under (x, y), e.g. on triple-click. */
 gboolean
 ns_selection_select_block_at(ns_selection *sel, const ns_box *root,
                              double x, double y)
@@ -268,6 +285,7 @@ typedef struct find_endpoints_ctx {
     int           seen;
 } find_endpoints_ctx;
 
+/* Notes which of the two endpoint boxes appears first in tree order. */
 static void
 find_endpoints_cb(const ns_box *b, gpointer ud)
 {
@@ -285,6 +303,7 @@ find_endpoints_cb(const ns_box *b, gpointer ud)
     }
 }
 
+/* Orders anchor and focus into document order as first/last box and byte. */
 static void
 order_endpoints(const ns_box *root, ns_selection sel,
                 const ns_box **first_box, gsize *first_byte,
@@ -326,6 +345,7 @@ typedef struct ranges_ctx {
     int           state;
 } ranges_ctx;
 
+/* Stores a clamped, non-empty selected byte run for a selectable box. */
 static void
 ranges_record(ranges_ctx *ctx, const ns_box *b, gsize start, gsize end)
 {
@@ -340,6 +360,7 @@ ranges_record(ranges_ctx *ctx, const ns_box *b, gsize start, gsize end)
     g_hash_table_insert(ctx->table, (gpointer)b, run);
 }
 
+/* Tree-order callback assigning selected byte runs between first and last box. */
 static void
 ranges_walk_cb(const ns_box *b, gpointer ud)
 {
@@ -369,6 +390,7 @@ ranges_walk_cb(const ns_box *b, gpointer ud)
         ranges_record(ctx, b, 0, strlen(b->text));
 }
 
+/* Returns a new box -> selected byte run table for painting, or NULL if empty. */
 GHashTable *
 ns_selection_ranges(const ns_box *root, const ns_selection *sel)
 {
@@ -388,6 +410,7 @@ ns_selection_ranges(const ns_box *root, const ns_selection *sel)
     return ctx.table;
 }
 
+/* Computes the bounding rectangle of all selected text runs. */
 gboolean
 ns_selection_bounds(const ns_box *root, const ns_selection *sel,
                     double *out_x, double *out_y, double *out_w, double *out_h)
@@ -443,6 +466,7 @@ typedef struct collect_ctx {
     const ns_box  *prev_block;
 } collect_ctx;
 
+/* Appends text for copying, mapping U+2028/2029 to newlines and dropping ZWSP/BOM. */
 static void
 append_copied_run(GString *out, const char *text, gsize start, gsize end)
 {
@@ -463,6 +487,7 @@ append_copied_run(GString *out, const char *text, gsize start, gsize end)
     }
 }
 
+/* Appends a text run, inserting a newline when the containing block changes. */
 static void
 collect_append(collect_ctx *ctx, const ns_box *b, gsize start, gsize end)
 {
@@ -474,6 +499,7 @@ collect_append(collect_ctx *ctx, const ns_box *b, gsize start, gsize end)
     append_copied_run(ctx->out, b->text, start, end);
 }
 
+/* Tree-order callback appending selected text between the endpoints. */
 static void
 collect_walk_cb(const ns_box *b, gpointer ud)
 {
@@ -515,6 +541,7 @@ collect_walk_cb(const ns_box *b, gpointer ud)
     }
 }
 
+/* Returns the selected text as plain text for the clipboard; caller frees. */
 char *
 ns_selection_collect_text(const ns_box *root, const ns_selection *sel)
 {
@@ -529,6 +556,7 @@ ns_selection_collect_text(const ns_box *root, const ns_selection *sel)
     return g_string_free(out, FALSE);
 }
 
+/* Selects from the first to the last selectable text box in the tree. */
 gboolean
 ns_selection_select_all(ns_selection *sel, const ns_box *root)
 {

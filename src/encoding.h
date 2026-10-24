@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — WHATWG Encoding Standard: labels, decoders and encoders.
+/* Nordstjernen Web Browser — WHATWG Encoding Standard API: labels, streaming decoders, encoders.
+ * Also exposes MIME charset extraction and percent-encoding in a document's output encoding.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

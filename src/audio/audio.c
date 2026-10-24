@@ -1,4 +1,5 @@
-/* audio/audio.c: Asynchronous in-process audio decoding and SDL2 playback.
+/* Nordstjernen Web Browser — in-process audio decoding and SDL2 playback on a worker thread.
+ * Decodes MP3, Vorbis, Opus and MPEG-1 audio, mixes up to 16 players; null output when headless.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -126,6 +127,7 @@ static guint             g_command_seq;
 
 static void emit(const char *fmt, ...) NS_AUDIO_PRINTF(1, 2);
 
+/* Logs a formatted audio diagnostic; only errors print unless NS_DBG_AUDIO is set. */
 static void
 emit(const char *fmt, ...)
 {
@@ -138,6 +140,7 @@ emit(const char *fmt, ...)
     g_free(line);
 }
 
+/* Locks the SDL audio device, or the null-output mutex when no device opened. */
 static void
 audio_lock(void)
 {
@@ -152,6 +155,7 @@ audio_unlock(void)
     else if (g_null_lock) SDL_UnlockMutex(g_null_lock);
 }
 
+/* Finds the in-use player slot for a context and token. */
 static ns_audio_player *
 player_find(NsAudioContext *owner, const char *token)
 {
@@ -162,6 +166,7 @@ player_find(NsAudioContext *owner, const char *token)
     return NULL;
 }
 
+/* Returns the existing player for token or claims a free slot; NULL when all 16 are used. */
 static ns_audio_player *
 player_alloc(NsAudioContext *owner, const char *token)
 {
@@ -180,6 +185,7 @@ player_alloc(NsAudioContext *owner, const char *token)
     return NULL;
 }
 
+/* Frees a player's PCM and converter and marks the slot unused. */
 static void
 player_release(ns_audio_player *p)
 {
@@ -189,6 +195,7 @@ player_release(ns_audio_player *p)
     memset(p, 0, sizeof *p);
 }
 
+/* Updates the smoothed playback-clock offset from one device callback, ignoring top-ups. */
 static void
 player_clock_sample(ns_audio_player *p, gint64 now_us, int nframes)
 {
@@ -206,6 +213,7 @@ player_clock_sample(ns_audio_player *p, gint64 now_us, int nframes)
     p->clock_offset_valid = 1;
 }
 
+/* SDL device callback: mixes all playing players into stereo float output with clipping. */
 static void
 audio_cb(void *userdata, Uint8 *stream, int len)
 {
@@ -264,6 +272,7 @@ audio_cb(void *userdata, Uint8 *stream, int len)
 
 #define NS_AUDIO_NULL_FRAMES 1024
 
+/* Fallback thread that drives audio_cb in real time when no SDL device exists. */
 static int
 null_audio_thread(void *arg)
 {
@@ -288,6 +297,7 @@ null_audio_thread(void *arg)
     return 0;
 }
 
+/* Starts the null-output mixing thread. */
 static void
 null_audio_start(void)
 {
@@ -301,6 +311,7 @@ null_audio_start(void)
     }
 }
 
+/* Stops and joins the null-output mixing thread. */
 static void
 null_audio_stop(void)
 {
@@ -314,6 +325,7 @@ null_audio_stop(void)
     }
 }
 
+/* Reads a whole file up to the audio size limit; caller frees with free(). */
 static unsigned char *
 read_file(const char *path, size_t *out_len)
 {
@@ -333,6 +345,7 @@ read_file(const char *path, size_t *out_len)
     return bytes;
 }
 
+/* True if bytes start with an MPEG-1 pack or sequence header start code. */
 static int
 bytes_are_mpeg1(const unsigned char *b, size_t n)
 {
@@ -340,6 +353,7 @@ bytes_are_mpeg1(const unsigned char *b, size_t n)
            (b[3] == 0xBA || b[3] == 0xB3);
 }
 
+/* Decodes the audio stream of an MPEG-1 program to interleaved stereo float PCM. */
 static int
 decode_mpeg(const unsigned char *bytes, size_t n,
             float **out_pcm, size_t *out_frames, int *out_rate, int *out_ch)
@@ -388,6 +402,7 @@ decode_mpeg(const unsigned char *bytes, size_t n,
     return 1;
 }
 
+/* Decodes MP3 frames with minimp3 to float PCM, ignoring format-changing frames. */
 static int
 decode_mp3(const unsigned char *bytes, size_t n,
            float **out_pcm, size_t *out_frames, int *out_rate, int *out_ch)
@@ -454,6 +469,7 @@ decode_mp3(const unsigned char *bytes, size_t n,
 #ifdef NS_HAVE_VORBISFILE
 typedef struct { const unsigned char *data; size_t size; size_t pos; } ns_ogg_mem;
 
+/* vorbisfile read callback over an in-memory buffer. */
 static size_t
 ns_ogg_read(void *ptr, size_t size, size_t nmemb, void *src)
 {
@@ -466,6 +482,7 @@ ns_ogg_read(void *ptr, size_t size, size_t nmemb, void *src)
     return (size != 0) ? want / size : 0;
 }
 
+/* vorbisfile seek callback over an in-memory buffer. */
 static int
 ns_ogg_seek(void *src, ogg_int64_t offset, int whence)
 {
@@ -488,12 +505,14 @@ ns_ogg_tell(void *src)
     return (long)m->pos;
 }
 
+/* True if bytes start with the OggS capture pattern. */
 static int
 bytes_are_ogg(const unsigned char *b, size_t n)
 {
     return n >= 4 && b[0] == 'O' && b[1] == 'g' && b[2] == 'g' && b[3] == 'S';
 }
 
+/* Decodes Ogg Vorbis from memory to interleaved float PCM. */
 static int
 decode_vorbis(const unsigned char *bytes, size_t n,
               float **out_pcm, size_t *out_frames, int *out_rate, int *out_ch)
@@ -549,6 +568,7 @@ decode_vorbis(const unsigned char *bytes, size_t n,
 #endif
 
 #ifdef NS_HAVE_OPUSFILE
+/* Decodes Ogg Opus from memory to interleaved 48 kHz float PCM. */
 static int
 decode_opus(const unsigned char *bytes, size_t n,
             float **out_pcm, size_t *out_frames, int *out_rate, int *out_ch)
@@ -602,6 +622,7 @@ decode_opus(const unsigned char *bytes, size_t n,
 }
 #endif
 
+/* Converts PCM to stereo float at the device rate via SDL_AudioStream; caller frees. */
 static int
 resample_to_device(const float *src, size_t src_frames, int src_rate, int src_ch,
                    float **out_pcm, size_t *out_frames)
@@ -631,6 +652,7 @@ resample_to_device(const float *src, size_t src_frames, int src_rate, int src_ch
     return 1;
 }
 
+/* Sniffs and decodes encoded audio, resamples it and installs it in the player. */
 static int
 load_audio_bytes(ns_audio_player *p, const unsigned char *bytes, size_t n)
 {
@@ -672,6 +694,7 @@ load_audio_bytes(ns_audio_player *p, const unsigned char *bytes, size_t n)
     return 1;
 }
 
+/* Local path for a file: URL, or NULL if it names a remote host. */
 static char *
 local_file_path(const char *url)
 {
@@ -686,6 +709,7 @@ local_file_path(const char *url)
     return path;
 }
 
+/* Returns a new ref to the context's current fetch cancellable, or NULL. */
 static GCancellable *
 context_cancellable(NsAudioContext *context)
 {
@@ -696,6 +720,7 @@ context_cancellable(NsAudioContext *context)
     return cancel;
 }
 
+/* Cancels in-flight fetches for the context and clears recorded failures. */
 static void
 context_cancel_fetches(NsAudioContext *context)
 {
@@ -710,6 +735,7 @@ context_cancel_fetches(NsAudioContext *context)
     }
 }
 
+/* Records or clears the load error for a player token. */
 static void
 context_set_failure(NsAudioContext *context, const char *token,
                     NsAudioError error)
@@ -723,6 +749,7 @@ context_set_failure(NsAudioContext *context, const char *token,
     g_mutex_unlock(&context->lock);
 }
 
+/* Reads a file: audio URL, allowed only for file: documents. */
 static GBytes *
 read_local_audio(const char *url, const char *document_url)
 {
@@ -736,6 +763,7 @@ read_local_audio(const char *url, const char *document_url)
     return bytes ? g_bytes_new_with_free_func(bytes, n, free, bytes) : NULL;
 }
 
+/* Blocking fetch of an audio resource (http/https/data/file) under media fetch policy. */
 static GBytes *
 fetch_audio_bytes(NsAudioContext *context, const char *url,
                   const char *document_url)
@@ -767,6 +795,7 @@ fetch_audio_bytes(NsAudioContext *context, const char *url,
     return bytes;
 }
 
+/* Logs a load error, releases the player and records the failure for status queries. */
 static void
 player_fail(NsAudioContext *context, ns_audio_player *p, const char *token,
             NsAudioError error, const char *what)
@@ -780,6 +809,7 @@ player_fail(NsAudioContext *context, ns_audio_player *p, const char *token,
     context_set_failure(context, token, error);
 }
 
+/* Resets or allocates the player for a new load; fails if no slot or device. */
 static ns_audio_player *
 player_begin_load(NsAudioContext *context, const char *token, guint seq)
 {
@@ -803,6 +833,7 @@ player_begin_load(NsAudioContext *context, const char *token, guint seq)
     return p;
 }
 
+/* Decodes bytes into the player, recording failure on decode error. */
 static void
 player_load_bytes(NsAudioContext *context, ns_audio_player *p,
                   const char *token, GBytes *bytes)
@@ -817,6 +848,7 @@ player_load_bytes(NsAudioContext *context, ns_audio_player *p,
     emit("meta %s %.3f", token, (double)p->frames / NS_AUDIO_DEVICE_RATE);
 }
 
+/* Worker: fetches and decodes a URL, discarding the result if the context was reset. */
 static void
 cmd_open(NsAudioContext *context, const ns_audio_command *command)
 {
@@ -841,6 +873,7 @@ cmd_open(NsAudioContext *context, const ns_audio_command *command)
     g_bytes_unref(bytes);
 }
 
+/* Worker: decodes in-memory audio bytes into a fresh player. */
 static void
 cmd_open_bytes(NsAudioContext *context, const char *token, GBytes *bytes,
                guint seq)
@@ -849,6 +882,7 @@ cmd_open_bytes(NsAudioContext *context, const char *token, GBytes *bytes,
     if (p) player_load_bytes(context, p, token, bytes);
 }
 
+/* Worker: swaps in re-decoded PCM when a growing blob changes size, keeping position. */
 static void
 cmd_reload_bytes(NsAudioContext *context, const char *token, GBytes *bytes,
                  guint seq)
@@ -890,6 +924,7 @@ cmd_reload_bytes(NsAudioContext *context, const char *token, GBytes *bytes,
          (double)p->frames / NS_AUDIO_DEVICE_RATE);
 }
 
+/* Worker: starts playback, rewinding a finished non-streaming player. */
 static void
 cmd_play(NsAudioContext *context, const char *token)
 {
@@ -919,6 +954,7 @@ cmd_pause(NsAudioContext *context, const char *token)
     emit("paused %s", token);
 }
 
+/* Worker: moves a decoded player's cursor to seconds, clamped to its length. */
 static void
 cmd_seek(NsAudioContext *context, const char *token, double seconds)
 {
@@ -937,6 +973,7 @@ cmd_seek(NsAudioContext *context, const char *token, double seconds)
     audio_unlock();
 }
 
+/* Worker: sets a player's volume clamped to [0, 1]. */
 static void
 cmd_volume(NsAudioContext *context, const char *token, double vol)
 {
@@ -959,6 +996,7 @@ cmd_loop(NsAudioContext *context, const char *token, gboolean on)
     audio_unlock();
 }
 
+/* Worker: releases a player and clears its recorded failure. */
 static void
 cmd_close(NsAudioContext *context, const char *token)
 {
@@ -969,6 +1007,7 @@ cmd_close(NsAudioContext *context, const char *token)
     audio_unlock();
 }
 
+/* Releases all players owned by a context. */
 static void
 release_context_players(NsAudioContext *context)
 {
@@ -1001,6 +1040,7 @@ command_free(ns_audio_command *command)
     g_free(command);
 }
 
+/* Executes one worker command unless a newer open superseded it. */
 static void
 run_command(const ns_audio_command *command)
 {
@@ -1044,6 +1084,7 @@ run_command(const ns_audio_command *command)
     }
 }
 
+/* Audio worker thread loop: runs commands for live contexts, frees destroyed ones. */
 static gpointer
 audio_worker(gpointer data)
 {
@@ -1068,6 +1109,7 @@ audio_worker(gpointer data)
     return NULL;
 }
 
+/* Lazily opens the SDL device (or null output) and starts the worker thread. */
 static gboolean
 audio_start(void)
 {
@@ -1096,6 +1138,7 @@ audio_start(void)
     return TRUE;
 }
 
+/* Queues a command for the worker with a sequence number and context generation. */
 static void
 push_command(ns_audio_op op, NsAudioContext *context, const char *token,
              const char *url, GBytes *bytes, double value)
@@ -1118,6 +1161,7 @@ push_command(ns_audio_op op, NsAudioContext *context, const char *token,
     g_async_queue_push(g_commands, command);
 }
 
+/* Validates and queues a player command, starting audio only for open operations. */
 static void
 queue_player_command(NsAudioContext *context, ns_audio_op op,
                      const char *token, const char *url, GBytes *bytes,
@@ -1136,12 +1180,14 @@ queue_player_command(NsAudioContext *context, ns_audio_op op,
     push_command(op, context, token, url, bytes, value);
 }
 
+/* Forces null audio output (no SDL device), e.g. for headless runs. */
 void
 ns_audio_set_silent(gboolean silent)
 {
     g_atomic_int_set(&g_silent, silent ? 1 : 0);
 }
 
+/* Creates a per-document audio context with its fetch policy and document URL. */
 NsAudioContext *
 ns_audio_context_new(const char *document_url, ns_fetch_policy *policy)
 {
@@ -1163,6 +1209,7 @@ ns_audio_context_open(NsAudioContext *context, const char *token,
     queue_player_command(context, NS_AUDIO_OP_OPEN, token, url, NULL, 0.0);
 }
 
+/* Queues decoding of in-memory audio; reload updates an existing player in place. */
 void
 ns_audio_context_open_bytes(NsAudioContext *context, const char *token,
                             GBytes *bytes, gboolean reload)
@@ -1216,6 +1263,7 @@ ns_audio_context_close(NsAudioContext *context, const char *token)
     queue_player_command(context, NS_AUDIO_OP_CLOSE, token, NULL, NULL, 0.0);
 }
 
+/* Estimated frames actually played, from the smoothed device clock, capped at cursor. */
 static double
 player_clock_frames(const ns_audio_player *p)
 {
@@ -1225,6 +1273,7 @@ player_clock_frames(const ns_audio_player *p)
     return CLAMP(frames, 0.0, (double)p->cursor);
 }
 
+/* Snapshots a player's state, duration and monotonic position; FALSE if unknown. */
 gboolean
 ns_audio_context_status(NsAudioContext *context, const char *token,
                         NsAudioStatus *out)
@@ -1261,6 +1310,7 @@ ns_audio_context_status(NsAudioContext *context, const char *token,
 
 #define NS_AUDIO_STREAM_KEEP_FRAMES ((size_t)NS_AUDIO_DEVICE_RATE * 4)
 
+/* Creates a streaming player fed by pushed PCM at the given rate and channels. */
 gboolean
 ns_audio_context_open_stream(NsAudioContext *context, const char *token,
                              int rate, int channels)
@@ -1298,6 +1348,7 @@ ns_audio_context_open_stream(NsAudioContext *context, const char *token,
     return TRUE;
 }
 
+/* Discards played streaming PCM beyond a keep window, shifting the time base. */
 static void
 stream_drop_played(ns_audio_player *p)
 {
@@ -1310,6 +1361,7 @@ stream_drop_played(ns_audio_player *p)
     p->stream_base += (double)drop / NS_AUDIO_DEVICE_RATE;
 }
 
+/* Converts pushed PCM to device format and appends it to a streaming player. */
 gboolean
 ns_audio_context_stream_push(NsAudioContext *context, const char *token,
                              const float *samples, int frames, int channels)
@@ -1353,6 +1405,7 @@ ns_audio_context_stream_push(NsAudioContext *context, const char *token,
     return ok;
 }
 
+/* Flushes a streaming player and restarts its timeline at seconds. */
 void
 ns_audio_context_stream_restart(NsAudioContext *context, const char *token,
                                 double seconds)
@@ -1373,6 +1426,7 @@ ns_audio_context_stream_restart(NsAudioContext *context, const char *token,
     audio_unlock();
 }
 
+/* Marks whether no more PCM will be pushed so playback can reach its end. */
 void
 ns_audio_context_stream_end(NsAudioContext *context, const char *token,
                             gboolean ended)
@@ -1384,6 +1438,7 @@ ns_audio_context_stream_end(NsAudioContext *context, const char *token,
     audio_unlock();
 }
 
+/* Destroys a context: bumps generation, cancels fetches, frees it on the worker. */
 void
 ns_audio_context_destroy(NsAudioContext *context)
 {
@@ -1398,6 +1453,7 @@ ns_audio_context_destroy(NsAudioContext *context)
         context_free(context);
 }
 
+/* Stops the worker and device and frees all players and queued commands. */
 void
 ns_audio_shutdown(void)
 {

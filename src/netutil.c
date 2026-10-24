@@ -1,5 +1,5 @@
-/* Nordstjernen Web Browser — curl-free network helpers shared by the engine and the
- * GTK shell: Accept-Language, search-URL building, proxy masking.
+/* Nordstjernen Web Browser — curl-free network and URL helpers shared by the engine and GTK shell.
+ * Accept-Language, search URLs, about: URL classes, file: URLs, proxy password masking.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #endif
 
+/* Directory containing the running executable (per-OS lookup); caller frees, may be NULL. */
 char *
 ns_executable_dir(void)
 {
@@ -59,6 +60,7 @@ ns_executable_dir(void)
 #endif
 }
 
+/* Builds an Accept-Language value with q-weights from the user's locales; caller frees. */
 static char *
 build_accept_language_from_locales(void)
 {
@@ -134,6 +136,7 @@ build_accept_language_from_locales(void)
     return g_string_free(out, FALSE);
 }
 
+/* Locale-derived Accept-Language, computed once; falls back to en-US. */
 const char *
 ns_net_default_accept_language(void)
 {
@@ -147,6 +150,7 @@ ns_net_default_accept_language(void)
     return cached;
 }
 
+/* Configured Accept-Language, or the locale-derived default. */
 const char *
 ns_net_effective_accept_language(void)
 {
@@ -155,6 +159,7 @@ ns_net_effective_accept_language(void)
         ? cfg->accept_language : ns_net_default_accept_language();
 }
 
+/* navigator.languages list parsed from Accept-Language, deduplicated; caller frees. */
 char **
 ns_net_navigator_languages(void)
 {
@@ -192,6 +197,7 @@ ns_net_navigator_languages(void)
     return (char **)g_ptr_array_free(langs, FALSE);
 }
 
+/* True if address-bar input should be treated as a search query rather than a URL. */
 gboolean
 ns_address_is_search(const char *s)
 {
@@ -215,6 +221,7 @@ ns_address_is_search(const char *s)
     return TRUE;
 }
 
+/* True for about: pages web content may open (blank, srcdoc, start/home/newtab). */
 gboolean
 ns_about_url_is_public(const char *url)
 {
@@ -251,6 +258,7 @@ ns_about_url_is_chrome(const char *url)
     return len > 15 && g_ascii_strncasecmp(url, "about:settings-", 15) == 0;
 }
 
+/* Builds the search URL by substituting the escaped query for %s; caller frees. */
 char *
 ns_search_url_for(const char *query)
 {
@@ -271,6 +279,7 @@ ns_search_url_for(const char *query)
     return out;
 }
 
+/* file: URL for an existing local path (directories get a trailing slash); caller frees. */
 char *
 ns_url_from_local_path(const char *path)
 {
@@ -307,6 +316,7 @@ ns_url_from_local_path(const char *path)
     return uri;
 }
 
+/* Copy of a proxy URL with any password replaced by ***; caller frees. */
 char *
 ns_net_proxy_mask(const char *proxy_url)
 {

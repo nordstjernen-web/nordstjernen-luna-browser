@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — native Temporal date/time API over QuickJS, ICU-free.
+/* Nordstjernen Web Browser — minimal Temporal API in C over QuickJS: ISO calendar, UTC only.
+ * Instant, Plain* types, Duration, Now; ZonedDateTime keeps zone ids but does not apply them.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -44,6 +45,7 @@ static JSClassDef ns_temporal_class = {
     "Temporal", .finalizer = ns_temporal_finalizer,
 };
 
+/* Returns the Temporal opaque of v if it has the given kind (any if < 0), else throws. */
 static ns_temporal *
 tmp_this(JSContext *ctx, JSValueConst v, int kind)
 {
@@ -55,6 +57,7 @@ tmp_this(JSContext *ctx, JSValueConst v, int kind)
     return t;
 }
 
+/* Creates a Temporal object of kind using this_val.prototype when present. */
 static ns_temporal *
 tmp_alloc(JSContext *ctx, JSValueConst this_val, int kind, JSValue *out)
 {
@@ -70,6 +73,7 @@ tmp_alloc(JSContext *ctx, JSValueConst this_val, int kind, JSValue *out)
     return t;
 }
 
+/* Creates a Temporal object of kind with an explicit prototype. */
 static JSValue
 tmp_make(JSContext *ctx, JSValueConst global_or_proto, int kind,
          ns_temporal **out)
@@ -83,6 +87,7 @@ tmp_make(JSContext *ctx, JSValueConst global_or_proto, int kind,
     return obj;
 }
 
+/* Reads an int32 property, returning dflt when it is undefined, null or not convertible. */
 static int
 tmp_int_prop(JSContext *ctx, JSValueConst o, const char *key, int dflt)
 {
@@ -118,6 +123,7 @@ tmp_month_code(int m, char *buf)
     return buf;
 }
 
+/* Returns the ISO day of week (Monday 1 .. Sunday 7) for a civil date. */
 static int
 tmp_iso_dow(int y, int m, int d)
 {
@@ -139,6 +145,7 @@ tmp_days_in_year(int y)
     return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
 }
 
+/* Returns the ISO 8601 week number of a civil date. */
 static int
 tmp_week_of_year(int y, int m, int d)
 {
@@ -150,6 +157,7 @@ tmp_week_of_year(int y, int m, int d)
     return (int)((ord - w1) / 7) + 1;
 }
 
+/* Defines the ISO-calendar date fields (year, monthCode, dayOfWeek...) on obj. */
 static void
 tmp_fill_date(JSContext *ctx, JSValueConst obj, ns_temporal *t)
 {
@@ -180,6 +188,7 @@ tmp_fill_time(JSContext *ctx, JSValueConst obj, ns_temporal *t)
     tmp_def(ctx, obj, "nanosecond", JS_NewInt32(ctx, t->ns));
 }
 
+/* Clamps the year and snapshots the kind's fields onto obj as enumerable data properties. */
 static void
 tmp_fill(JSContext *ctx, JSValueConst obj, ns_temporal *t)
 {
@@ -242,6 +251,7 @@ tmp_fill(JSContext *ctx, JSValueConst obj, ns_temporal *t)
     }
 }
 
+/* Splits UTC epoch seconds into civil date and time with floor semantics for negatives. */
 static void
 tmp_breakdown(int64_t epoch_sec, int *y, int *mo, int *d,
               int *h, int *mi, int *s)
@@ -254,6 +264,7 @@ tmp_breakdown(int64_t epoch_sec, int *y, int *mo, int *d,
     *s = (int)(rem % 60);
 }
 
+/* Returns UTC epoch seconds for a civil date and time. */
 static int64_t
 tmp_epoch_of(int y, int mo, int d, int h, int mi, int s)
 {
@@ -261,6 +272,7 @@ tmp_epoch_of(int y, int mo, int d, int h, int mi, int s)
            h * 3600 + mi * 60 + s;
 }
 
+/* Appends ".fraction" with trailing zeros trimmed, or nothing when the fraction is zero. */
 static void
 tmp_append_frac(GString *str, int ms, int us, int ns)
 {
@@ -274,6 +286,7 @@ tmp_append_frac(GString *str, int ms, int us, int ns)
     g_string_append_len(str, buf, len);
 }
 
+/* Parses an ISO 8601 date with optional time, fraction (to ns) and Z/+-HH:MM offset. */
 static gboolean
 tmp_parse_datetime(const char *s, int *y, int *mo, int *d,
                    int *h, int *mi, int *sec, int *ms, int *us, int *ns,
@@ -327,6 +340,7 @@ tmp_parse_datetime(const char *s, int *y, int *mo, int *d,
     return TRUE;
 }
 
+/* Temporal.Instant.from: from an ISO string (offset applied) or an Instant/ZonedDateTime. */
 static JSValue
 tmp_instant_from(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -355,6 +369,7 @@ tmp_instant_from(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Temporal.Instant.fromEpochMilliseconds with floor division for negative values. */
 static JSValue
 tmp_instant_fromEpochMilliseconds(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
@@ -368,6 +383,7 @@ tmp_instant_fromEpochMilliseconds(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Temporal.Instant constructor from BigInt epoch nanoseconds. */
 static JSValue
 tmp_instant_ctor(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -381,6 +397,7 @@ tmp_instant_ctor(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Formats an Instant as an ISO 8601 UTC string with trimmed fraction and Z. */
 static JSValue
 tmp_instant_toString(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -399,6 +416,7 @@ tmp_instant_toString(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Returns a duration's days and time units as total nanoseconds, ignoring years to weeks. */
 static int64_t
 tmp_dur_time_ns(const ns_temporal *dur)
 {
@@ -411,6 +429,7 @@ tmp_dur_time_ns(const ns_temporal *dur)
            dur->dur[9];
 }
 
+/* Instant add/subtract of a Duration or duration-like time fields; returns a new Instant. */
 static JSValue
 tmp_instant_add_impl(JSContext *ctx, JSValueConst this_val,
                      JSValueConst durv, int sign)
@@ -451,6 +470,7 @@ tmp_instant_subtract(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
     return tmp_instant_add_impl(ctx, this_val, argc >= 1 ? argv[0] : JS_UNDEFINED, -1);
 }
 
+/* Sets year/month/day, clamping month to 1..12 and day to the month's length. */
 static void
 tmp_set_date_fields(ns_temporal *t, int y, int mo, int d)
 {
@@ -462,6 +482,7 @@ tmp_set_date_fields(ns_temporal *t, int y, int mo, int d)
     t->year = y; t->month = mo; t->day = d;
 }
 
+/* Temporal.PlainDate.from: from an ISO date string, PlainDate(Time) or field object. */
 static JSValue
 tmp_date_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -490,6 +511,7 @@ tmp_date_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return out;
 }
 
+/* Temporal.PlainDate constructor from (year, month, day) with constraining. */
 static JSValue
 tmp_date_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -514,6 +536,7 @@ tmp_date_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return JS_NewString(ctx, buf);
 }
 
+/* Adds years and months (clamping the day), then weeks and days, to a date. */
 static void
 tmp_add_date(ns_temporal *t, int64_t y, int64_t mo, int64_t w, int64_t d, int sign)
 {
@@ -527,6 +550,7 @@ tmp_add_date(ns_temporal *t, int64_t y, int64_t mo, int64_t w, int64_t d, int si
     ns_dt_civil_from_days(days, &t->year, &t->month, &t->day);
 }
 
+/* Reads a Duration or duration-like object into ten units, years through nanoseconds. */
 static void
 tmp_read_dur(JSContext *ctx, JSValueConst durv, int64_t out[10])
 {
@@ -543,6 +567,7 @@ tmp_read_dur(JSContext *ctx, JSValueConst durv, int64_t out[10])
     for (int i = 0; i < 10; i++) out[i] = tmp_int_prop(ctx, durv, names[i], 0);
 }
 
+/* PlainDate add/subtract of a duration's date units; returns a new PlainDate. */
 static JSValue
 tmp_date_add_impl(JSContext *ctx, JSValueConst this_val, JSValueConst durv, int sign)
 {
@@ -566,6 +591,7 @@ static JSValue
 tmp_date_subtract(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return tmp_date_add_impl(ctx, this_val, argc >= 1 ? argv[0] : JS_UNDEFINED, -1); }
 
+/* PlainDate.with: returns a copy with the given year/month/day fields replaced. */
 static JSValue
 tmp_date_with(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -592,6 +618,7 @@ tmp_cmp_date(const ns_temporal *a, const ns_temporal *b)
     return da < db ? -1 : da > db ? 1 : 0;
 }
 
+/* PlainDate until/since: returns a Duration of the signed day difference. */
 static JSValue
 tmp_date_until_impl(JSContext *ctx, JSValueConst this_val, JSValueConst other, int sign)
 {
@@ -621,6 +648,7 @@ static JSValue
 tmp_date_since(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return tmp_date_until_impl(ctx, this_val, argc >= 1 ? argv[0] : JS_UNDEFINED, -1); }
 
+/* PlainDate.equals: TRUE if the other value is a PlainDate on the same day. */
 static JSValue
 tmp_date_equals(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -631,6 +659,7 @@ tmp_date_equals(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return JS_NewBool(ctx, eq);
 }
 
+/* Temporal.PlainDate.compare: returns -1, 0 or 1. */
 static JSValue
 tmp_date_compare(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -641,6 +670,7 @@ tmp_date_compare(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
     return JS_NewInt32(ctx, tmp_cmp_date(a, b));
 }
 
+/* PlainDate.toPlainDateTime: combines the date with an optional PlainTime. */
 static JSValue
 tmp_date_toPlainDateTime(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -663,6 +693,7 @@ tmp_date_toPlainDateTime(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return out;
 }
 
+/* Normalizes time-of-day fields into range, wrapping modulo 24 hours. */
 static void
 tmp_norm_time(ns_temporal *t)
 {
@@ -678,6 +709,7 @@ tmp_norm_time(ns_temporal *t)
     t->us = (int)(ns / 1000LL); t->ns = (int)(ns % 1000LL);
 }
 
+/* Temporal.PlainTime constructor from up to six units, wrapped into one day. */
 static JSValue
 tmp_time_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -691,6 +723,7 @@ tmp_time_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return out;
 }
 
+/* Temporal.PlainTime.from: from an ISO time string, PlainTime(DateTime) or field object. */
 static JSValue
 tmp_time_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -739,6 +772,7 @@ tmp_time_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return r;
 }
 
+/* PlainTime add/subtract of a duration's time units, wrapping around midnight. */
 static JSValue
 tmp_time_add_impl(JSContext *ctx, JSValueConst this_val, JSValueConst durv, int sign)
 {
@@ -768,6 +802,7 @@ static JSValue
 tmp_time_subtract(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return tmp_time_add_impl(ctx, this_val, argc >= 1 ? argv[0] : JS_UNDEFINED, -1); }
 
+/* Temporal.PlainDateTime.from: from an ISO date-time string or a field object. */
 static JSValue
 tmp_datetime_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -800,6 +835,7 @@ tmp_datetime_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return out;
 }
 
+/* Temporal.PlainDateTime constructor from up to nine units. */
 static JSValue
 tmp_datetime_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -829,6 +865,7 @@ tmp_datetime_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return r;
 }
 
+/* PlainDateTime add/subtract: time units carry into days, then calendar units apply. */
 static JSValue
 tmp_datetime_add_impl(JSContext *ctx, JSValueConst this_val, JSValueConst durv, int sign)
 {
@@ -909,6 +946,7 @@ tmp_datetime_toPlainTime(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return out;
 }
 
+/* Temporal.PlainYearMonth.from: from "YYYY-MM" or a field object. */
 static JSValue
 tmp_yearmonth_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -950,6 +988,7 @@ tmp_yearmonth_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return JS_NewString(ctx, buf);
 }
 
+/* Temporal.PlainMonthDay.from: from "MM-DD"/"--MM-DD" or a field object (ref year 1972). */
 static JSValue
 tmp_monthday_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -997,6 +1036,7 @@ tmp_monthday_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return JS_NewString(ctx, buf);
 }
 
+/* Temporal.ZonedDateTime.from: parses an ISO string and a bracketed [zone] id (default UTC). */
 static JSValue
 tmp_zoned_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1023,6 +1063,7 @@ tmp_zoned_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return out;
 }
 
+/* Temporal.ZonedDateTime constructor from epoch nanoseconds and a zone id string. */
 static JSValue
 tmp_zoned_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1042,6 +1083,7 @@ tmp_zoned_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *ar
     return out;
 }
 
+/* Formats a ZonedDateTime in UTC as ISO with "+00:00[zone]"; zones are not applied. */
 static JSValue
 tmp_zoned_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1077,6 +1119,7 @@ tmp_zoned_toInstant(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
     return out;
 }
 
+/* ZonedDateTime.toPlainDateTime using UTC wall-clock fields. */
 static JSValue
 tmp_zoned_toPlainDateTime(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1099,6 +1142,7 @@ tmp_zoned_toPlainDateTime(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return out;
 }
 
+/* Temporal.Duration constructor from up to ten integer units. */
 static JSValue
 tmp_duration_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1110,6 +1154,7 @@ tmp_duration_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return out;
 }
 
+/* Temporal.Duration.from: parses an ISO 8601 duration string or a field object. */
 static JSValue
 tmp_duration_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1162,6 +1207,7 @@ tmp_duration_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return out;
 }
 
+/* Formats a Duration as an ISO 8601 duration string, "PT0S" when blank. */
 static JSValue
 tmp_duration_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1202,6 +1248,7 @@ tmp_duration_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return r;
 }
 
+/* Duration add/subtract by component-wise sum without balancing. */
 static JSValue
 tmp_duration_arith(JSContext *ctx, JSValueConst this_val, JSValueConst other, int sign)
 {
@@ -1224,6 +1271,7 @@ static JSValue
 tmp_duration_subtract(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return tmp_duration_arith(ctx, this_val, argc >= 1 ? argv[0] : JS_UNDEFINED, -1); }
 
+/* Returns a negated (abs=0) or absolute-value (abs=1) copy of a Duration. */
 static JSValue
 tmp_duration_unary(JSContext *ctx, JSValueConst this_val, int abs)
 {
@@ -1246,6 +1294,7 @@ static JSValue
 tmp_duration_abs(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { (void)argc; (void)argv; return tmp_duration_unary(ctx, this_val, 1); }
 
+/* Builds a Temporal.Now value of the given kind from the current real time in UTC. */
 static JSValue
 tmp_now_make_dt(JSContext *ctx, const char *ctor_name, int kind)
 {
@@ -1294,6 +1343,7 @@ tmp_bind(JSContext *ctx, JSValueConst obj, const char *name, JSCFunction *fn, in
     JS_SetPropertyStr(ctx, obj, name, JS_NewCFunction(ctx, fn, name, argc));
 }
 
+/* Shared toJSON method that returns this.toString(). */
 static JSValue
 tmp_make_toJSON(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1304,6 +1354,7 @@ tmp_make_toJSON(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return r;
 }
 
+/* Creates a Temporal constructor with prototype methods, toJSON and statics on temporal. */
 static JSValue
 tmp_register(JSContext *ctx, JSValueConst temporal, const char *name,
              JSCFunction *ctor, int ctor_argc,
@@ -1324,6 +1375,7 @@ tmp_register(JSContext *ctx, JSValueConst temporal, const char *name,
     return func;
 }
 
+/* Installs the minimal ISO/UTC-only Temporal polyfill unless a native one with Now exists. */
 void
 ns_js_temporal_install(JSContext *ctx, JSValueConst global)
 {

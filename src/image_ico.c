@@ -40,6 +40,7 @@ is_png(const guchar *d, gsize len)
     return len >= 8 && memcmp(d, sig, 8) == 0;
 }
 
+/* Decodes a DIB icon entry by wrapping it as a BMP for Wuffs, then applies the AND mask. */
 static ns_texture *
 decode_dib_entry(const guchar *p, gsize len, int *out_w, int *out_h)
 {
@@ -121,6 +122,7 @@ decode_dib_entry(const guchar *p, gsize len, int *out_w, int *out_h)
     return tex;
 }
 
+/* Decodes an ICO/CUR file, picking the largest, deepest entry (PNG or DIB). */
 ns_texture *
 ns_image_decode_ico(const guchar *data, gsize len, int *out_w, int *out_h)
 {

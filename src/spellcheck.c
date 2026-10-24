@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — optional spell checking over the Enchant library.
+ * Loads dictionaries for the user's locales plus English; a no-op without Enchant.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -15,6 +16,7 @@ static EnchantBroker *g_broker;
 static GPtrArray     *g_dicts;
 static GPtrArray     *g_dict_tags;
 
+/* Turns a locale name into an Enchant tag (drops .codeset/@modifier, '-' to '_'). */
 static char *
 normalize_lang(const char *raw)
 {
@@ -27,6 +29,7 @@ normalize_lang(const char *raw)
     return t;
 }
 
+/* Loads the Enchant dictionary for a tag once, if it exists. */
 static void
 try_load(const char *tag)
 {
@@ -42,6 +45,7 @@ try_load(const char *tag)
     g_ptr_array_add(g_dict_tags, g_strdup(tag));
 }
 
+/* Loads dictionaries for the user's languages plus English and warms them up. */
 void
 ns_spell_init(void)
 {
@@ -75,6 +79,7 @@ ns_spell_available(void)
     return g_dicts && g_dicts->len > 0;
 }
 
+/* Dictionary for a language: exact tag, then same primary language, else the first. */
 static EnchantDict *
 pick_dict(const char *lang)
 {
@@ -102,6 +107,7 @@ pick_dict(const char *lang)
     return g_ptr_array_index(g_dicts, 0);
 }
 
+/* TRUE if the word is spelled correctly or no dictionary is available. */
 gboolean
 ns_spell_word_ok(const char *word, gssize len, const char *lang)
 {

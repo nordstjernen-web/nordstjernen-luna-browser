@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — headless engine driver for scripting / regression testing.
+ * Run options and dump kinds for the --headless command line mode.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

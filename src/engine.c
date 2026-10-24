@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — synchronous fetch/cascade/layout/capture pipeline.
+/* Nordstjernen Web Browser — page pipeline: blocking fetch, stylesheet collection, cascade, layout.
+ * Also speculative preloads, image fetching and decode, and PNG/PDF/text output of the box tree.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -33,6 +34,7 @@ typedef struct fetch_state {
 
 static int g_engine_blocking_depth;
 
+/* True while a synchronous fetch is spinning its isolated main loop. */
 gboolean
 ns_engine_in_blocking_fetch(void)
 {
@@ -42,6 +44,7 @@ ns_engine_in_blocking_fetch(void)
 static guint64 g_engine_relayout_count;
 static gint64  g_engine_relayout_us;
 
+/* Depth-first search for the first <base href>, skipping templates and nested documents. */
 static const char *
 engine_base_href_walk(const ns_node *n, int depth)
 {
@@ -59,6 +62,7 @@ engine_base_href_walk(const ns_node *n, int depth)
     return NULL;
 }
 
+/* Returns the first non-empty <base href> in the document, using the tag index if present. */
 static const char *
 engine_document_base_href(const ns_node *doc)
 {
@@ -79,6 +83,7 @@ ns_engine_document_base_href(const ns_node *doc)
     return engine_document_base_href(doc);
 }
 
+/* Resolves the document's <base href> against fallback; caller frees, NULL if neither. */
 static char *
 engine_document_base_url(ns_node *doc, const char *fallback)
 {
@@ -107,6 +112,7 @@ ns_engine_layout_perf(guint64 *relayouts, double *total_ms)
     if (total_ms)  *total_ms  = g_engine_relayout_us / 1000.0;
 }
 
+/* Async fetch callback storing the response or error and quitting the wait loop. */
 static void
 on_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -116,6 +122,7 @@ on_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
     g_main_loop_quit(st->loop);
 }
 
+/* Pushes an isolated main context for a blocking wait and returns a loop on it. */
 static GMainLoop *
 engine_blocking_wait_begin(void)
 {
@@ -127,6 +134,7 @@ engine_blocking_wait_begin(void)
     return loop;
 }
 
+/* Pops the isolated context pushed by engine_blocking_wait_begin and frees the loop. */
 static void
 engine_blocking_wait_end(GMainLoop *loop)
 {
@@ -135,6 +143,7 @@ engine_blocking_wait_end(GMainLoop *loop)
     g_main_loop_unref(loop);
 }
 
+/* Fetches url synchronously with destination-specific Accept headers; caller frees. */
 static ns_response *
 ns_engine_fetch_blocking_for(const char *url, const char *top_url,
                              ns_fetch_destination dest, GError **error)
@@ -158,6 +167,7 @@ ns_engine_fetch_blocking(const char *url, const char *top_url, GError **error)
                                         error);
 }
 
+/* POSTs body synchronously on an isolated main loop; caller frees the response. */
 ns_response *
 ns_engine_post_blocking(const char *url, const char *top_url,
                         const void *body, gsize body_len,
@@ -174,6 +184,7 @@ ns_engine_post_blocking(const char *url, const char *top_url,
     return st.resp;
 }
 
+/* True if the Content-Type is text/css or absent. */
 static gboolean
 content_type_is_css(const char *ct)
 {
@@ -187,6 +198,7 @@ content_type_is_css(const char *ct)
 
 static GHashTable *g_linked_css;
 
+/* Keeps a linked stylesheet's bytes for CSSOM readback, capped at 128 entries. */
 static void
 engine_remember_linked_css(const char *url, GBytes *bytes)
 {
@@ -200,6 +212,7 @@ engine_remember_linked_css(const char *url, GBytes *bytes)
     g_hash_table_insert(g_linked_css, g_strdup(url), g_bytes_ref(bytes));
 }
 
+/* Returns a copy of remembered same-origin linked CSS text for url; caller frees. */
 char *
 ns_engine_linked_css_text(const char *url)
 {
@@ -212,6 +225,7 @@ ns_engine_linked_css_text(const char *url)
     return g_strndup(data, len);
 }
 
+/* Fetches a stylesheet with MIME checks for cross-origin/nosniff; caches up to 3 failures. */
 static GBytes *
 fetch_css_bytes(const char *url, const char *top_url, GHashTable *cache,
                 gboolean strict_mime, gboolean *out_cross_origin)
@@ -268,6 +282,7 @@ fetch_css_bytes(const char *url, const char *top_url, GHashTable *cache,
     return bytes;
 }
 
+/* True if the space-separated rel list contains token (ASCII case-insensitive). */
 static gboolean
 rel_has_token(const char *rel, const char *token)
 {
@@ -284,6 +299,7 @@ rel_has_token(const char *rel, const char *token)
     return found;
 }
 
+/* True for rel containing "stylesheet" but not "alternate". */
 static gboolean
 rel_is_stylesheet(const char *rel)
 {
@@ -305,6 +321,7 @@ preload_target_free(gpointer p)
     g_free(t);
 }
 
+/* Maps a preload link's rel/as to a fetch destination. */
 static ns_fetch_destination
 preload_destination_for(const char *rel, const char *as)
 {
@@ -315,6 +332,7 @@ preload_destination_for(const char *rel, const char *as)
     return NS_FETCH_DEST_DEFAULT;
 }
 
+/* Resolves and queues a unique http(s) preload target per destination; skips data: URLs. */
 static void
 preload_add(GPtrArray *out, GHashTable *seen, const char *base,
             const char *ref, ns_fetch_destination dest)
@@ -335,6 +353,7 @@ preload_add(GPtrArray *out, GHashTable *seen, const char *base,
     g_ptr_array_add(out, target);
 }
 
+/* Scans the tree for scripts, stylesheets, preloads, eager images and preconnect origins. */
 static void
 preload_collect(const ns_node *n, const char *base, gboolean include_images,
                 GPtrArray *out, GHashTable *seen,
@@ -388,6 +407,7 @@ typedef struct {
     char *top_url;
 } preload_request;
 
+/* Preload completion: precompiles successful script bodies into the bytecode cache. */
 static void
 on_preload_fetched(GObject *src, GAsyncResult *res, gpointer user_data)
 {
@@ -404,6 +424,7 @@ on_preload_fetched(GObject *src, GAsyncResult *res, gpointer user_data)
     if (resp) ns_response_free(resp);
 }
 
+/* Parses a CSP string and merges it into *csp, creating it if needed. */
 static void
 preload_add_csp(ns_csp **csp, const char *text)
 {
@@ -418,6 +439,7 @@ preload_add_csp(ns_csp **csp, const char *text)
     ns_csp_free(parsed);
 }
 
+/* Merges <meta http-equiv=content-security-policy> policies outside iframes/templates. */
 static void
 preload_collect_meta_csp(const ns_node *n, ns_csp **csp, int depth)
 {
@@ -434,6 +456,7 @@ preload_collect_meta_csp(const ns_node *n, ns_csp **csp, int depth)
         preload_collect_meta_csp(c, csp, depth + 1);
 }
 
+/* Starts speculative fetches for the document's subresources under the page's CSP. */
 void
 ns_engine_speculative_preload(ns_node *doc, const char *base_url,
                               const char *csp_header,
@@ -501,6 +524,7 @@ ns_engine_speculative_preload(ns_node *doc, const char *base_url,
     g_ptr_array_free(connects, TRUE);
 }
 
+/* Appends a sheet after recursively fetching its media-matching @imports; resolves URLs. */
 static void
 append_stylesheet_expanded(GPtrArray *out, ns_css_stylesheet *sh,
                            const char *base_url, const char *top_url,
@@ -550,6 +574,7 @@ typedef struct {
     gboolean    media_seen;
 } sheet_collect_ctx;
 
+/* Pads out_docs so each collected sheet records its owning document. */
 static void
 sheet_note_documents(sheet_collect_ctx *cc)
 {
@@ -558,6 +583,7 @@ sheet_note_documents(sheet_collect_ctx *cc)
         g_ptr_array_add(cc->out_docs, (gpointer)cc->doc);
 }
 
+/* Parses the batched run of self-contained <style> text as one merged stylesheet. */
 static void
 sheet_run_flush(sheet_collect_ctx *cc)
 {
@@ -576,6 +602,7 @@ sheet_run_flush(sheet_collect_ctx *cc)
     cc->run_base = NULL;
 }
 
+/* Extracts a px width/height declaration from a frame's inline style attribute. */
 static gboolean
 frame_dimension_from_style_attr(const ns_node *frame, const char *prop,
                                 double *out)
@@ -603,6 +630,7 @@ frame_dimension_from_style_attr(const ns_node *frame, const char *prop,
     return FALSE;
 }
 
+/* Parses a non-negative numeric frame width/height attribute. */
 static gboolean
 frame_dimension_from_attr(const ns_node *frame, const char *attr, double *out)
 {
@@ -619,6 +647,7 @@ typedef struct {
     double w, h;
 } ns_collect_frame_vp;
 
+/* Heuristic: true if any @media prelude mentions width, height, aspect-ratio or orientation. */
 static gboolean
 css_has_viewport_media(const char *css)
 {
@@ -639,6 +668,7 @@ css_has_viewport_media(const char *css)
 static GHashTable *g_collect_frame_vp;
 static GHashTable *g_viewport_media_memo;
 
+/* Memoized css_has_viewport_media over stylesheet bytes (keyed by GBytes pointer). */
 static gboolean
 css_bytes_have_viewport_media(GBytes *bytes)
 {
@@ -660,6 +690,7 @@ css_bytes_have_viewport_media(GBytes *bytes)
     return seen;
 }
 
+/* Frame viewport from inline style, layout, then attributes; defaults to 300x150. */
 static void
 frame_viewport_px(const ns_node *frame, double *w, double *h)
 {
@@ -676,6 +707,7 @@ frame_viewport_px(const ns_node *frame, double *w, double *h)
     if (!have_h && !frame_dimension_from_attr(frame, "height", h)) *h = 150;
 }
 
+/* Like frame_viewport_px but yields 0x0 when either dimension is unknown. */
 static void
 frame_viewport_measured(const ns_node *frame, double *w, double *h)
 {
@@ -695,6 +727,7 @@ frame_viewport_measured(const ns_node *frame, double *w, double *h)
     if (!have_w || !have_h) { *w = 0; *h = 0; }
 }
 
+/* Records the viewport size used to evaluate a frame's media queries. */
 static void
 frame_viewport_record(const ns_node *frame, double w, double h)
 {
@@ -705,6 +738,7 @@ frame_viewport_record(const ns_node *frame, double w, double h)
     g_hash_table_insert(g_collect_frame_vp, (gpointer)frame, e);
 }
 
+/* True if a recorded frame viewport differs from its laid-out size (needs re-cascade). */
 static gboolean
 frame_viewports_disagree_with_layout(void)
 {
@@ -721,6 +755,7 @@ frame_viewports_disagree_with_layout(void)
     return FALSE;
 }
 
+/* True if a style/link type attribute is empty or text/css (parameters ignored). */
 static gboolean
 sheet_type_is_css(const char *type)
 {
@@ -730,6 +765,7 @@ sheet_type_is_css(const char *type)
     return n == 8 && g_ascii_strncasecmp(type, "text/css", 8) == 0;
 }
 
+/* True if a <style> element is not disabled and has a CSS type. */
 static gboolean
 style_sheet_enabled(const ns_node *style)
 {
@@ -737,6 +773,7 @@ style_sheet_enabled(const ns_node *style)
            sheet_type_is_css(ns_element_get_attr(style, "type"));
 }
 
+/* True if a <link> lacks the disabled attribute and has a CSS type. */
 static gboolean
 link_sheet_enabled(const ns_node *link)
 {
@@ -744,6 +781,7 @@ link_sheet_enabled(const ns_node *link)
            sheet_type_is_css(ns_element_get_attr(link, "type"));
 }
 
+/* Collects enabled <style>/<link> sheets in tree order, recursing into frames. */
 static void
 collect_stylesheets_walk(ns_node *n, const char *base_url,
                          sheet_collect_ctx *cc, int depth)
@@ -856,6 +894,7 @@ collect_stylesheets_walk(ns_node *n, const char *base_url,
         collect_stylesheets_walk(c, base_url, cc, depth + 1);
 }
 
+/* Collects all document and frame stylesheets in cascade order, with owning documents. */
 static void
 ns_engine_collect_stylesheets(ns_node *doc, const char *base_url,
                               GPtrArray *out, GPtrArray *out_docs,
@@ -879,6 +918,7 @@ ns_engine_collect_stylesheets(ns_node *doc, const char *base_url,
     g_string_free(cc.run, TRUE);
 }
 
+/* Collects sheets, loads keyframes and computes styles; returns a new node->style map. */
 GHashTable *
 ns_engine_compute_cascade(ns_node *doc, const char *page_url,
                           GHashTable *css_cache, ns_anim *anim)
@@ -908,6 +948,7 @@ ns_engine_compute_cascade(ns_node *doc, const char *page_url,
     return styles;
 }
 
+/* Runs the cascade while recording per-node style changes into changes. */
 GHashTable *
 ns_engine_compute_cascade_delta(ns_node *doc, const char *page_url,
                                 GHashTable *css_cache, ns_anim *anim,
@@ -920,6 +961,7 @@ ns_engine_compute_cascade_delta(ns_node *doc, const char *page_url,
     return styles;
 }
 
+/* Full style+layout pass; redoes it when frame viewports used for media queries changed. */
 GHashTable *
 ns_engine_relayout(ns_node *doc, const char *page_url,
                    int viewport_width, double viewport_height,
@@ -1017,6 +1059,7 @@ ns_engine_relayout(ns_node *doc, const char *page_url,
     return styles;
 }
 
+/* Registers @keyframes from all of the document's stylesheets with the animation engine. */
 void
 ns_engine_load_keyframes(ns_anim *anim, ns_node *doc, const char *base_url,
                          GHashTable *css_cache)
@@ -1050,6 +1093,7 @@ typedef struct {
     char             *abs;
 } img_fetch_item;
 
+/* Records final URL and CORS allow-origin on a newly cached image (first time only). */
 static void
 img_record_response(ns_image *img, const char *final_url,
                     const char *cors_allow_origin)
@@ -1059,6 +1103,7 @@ img_record_response(ns_image *img, const char *final_url,
     img->cors_allow_origin = g_strdup(cors_allow_origin);
 }
 
+/* Blocking image fetch callback: caches the body and quits the loop when all are done. */
 static void
 on_image_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -1082,6 +1127,7 @@ on_image_fetch_done(GObject *src, GAsyncResult *result, gpointer user_data)
 
 #define NS_LAZY_IMAGE_MARGIN_PX 4000.0
 
+/* Returns the nearest enclosing frame's document URL, else dflt. */
 static const char *
 engine_node_frame_base(const ns_node *n, const char *dflt)
 {
@@ -1096,6 +1142,7 @@ engine_node_frame_base(const ns_node *n, const char *dflt)
     return dflt;
 }
 
+/* True for an image box whose element has loading=lazy. */
 static gboolean
 engine_image_is_lazy(const ns_box *box)
 {
@@ -1117,6 +1164,7 @@ wanted_image_free(gpointer data)
     g_free(w);
 }
 
+/* Maps uncached image/video URLs in the layout to fetch info; defers far lazy images. */
 static GHashTable *
 engine_collect_wanted_images(ns_box *root, const char *base_url,
                              ns_image_cache *cache, ns_js *js,
@@ -1185,6 +1233,7 @@ struct ns_engine_img_session {
     gpointer        user_data;
 };
 
+/* Drops a reference on an image fetch session, freeing it at zero. */
 static void
 img_session_unref(ns_engine_img_session *s)
 {
@@ -1199,6 +1248,7 @@ typedef struct img_async_item {
     char                  *cors_allow_origin;
 } img_async_item;
 
+/* Completes one async image request: notifies the session unless closed, frees the item. */
 static void
 img_async_item_finish(img_async_item *it)
 {
@@ -1213,6 +1263,7 @@ img_async_item_finish(img_async_item *it)
     g_free(it);
 }
 
+/* GTask worker that decodes encoded image bytes off the main thread. */
 static void
 image_decode_in_worker(GTask *task, gpointer source, gpointer task_data,
                        GCancellable *cancellable)
@@ -1228,6 +1279,7 @@ image_decode_in_worker(GTask *task, gpointer source, gpointer task_data,
                           (GDestroyNotify)ns_image_decoding_free);
 }
 
+/* Inserts a worker-decoded image into the cache unless the session was closed. */
 static void
 on_image_decoded_async(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -1245,6 +1297,7 @@ on_image_decoded_async(GObject *src, GAsyncResult *result, gpointer user_data)
     img_async_item_finish(it);
 }
 
+/* Async image fetch callback: decodes in a worker if enabled, else caches inline. */
 static void
 on_image_fetch_async_done(GObject *src, GAsyncResult *result,
                           gpointer user_data)
@@ -1277,6 +1330,7 @@ on_image_fetch_async_done(GObject *src, GAsyncResult *result,
     img_async_item_finish(it);
 }
 
+/* Starts async fetches for the layout's wanted images not yet requested; NULL if none. */
 ns_engine_img_session *
 ns_engine_fetch_images_start(ns_box *root, const char *base_url,
                              ns_image_cache *cache, ns_js *js,
@@ -1338,6 +1392,7 @@ ns_engine_img_session_outstanding(const ns_engine_img_session *s)
     return s ? s->outstanding : 0;
 }
 
+/* Marks a session dead so late arrivals are ignored, and drops the caller's reference. */
 void
 ns_engine_img_session_close(ns_engine_img_session *s)
 {
@@ -1347,6 +1402,7 @@ ns_engine_img_session_close(ns_engine_img_session *s)
     img_session_unref(s);
 }
 
+/* Fetches all wanted images for the layout synchronously into the cache. */
 void
 ns_engine_fetch_images(ns_box *root, const char *base_url,
                        ns_image_cache *cache, ns_js *js)
@@ -1386,6 +1442,7 @@ ns_engine_fetch_images(ns_box *root, const char *base_url,
 
 static GHashTable *g_preopened_outputs;  /* path -> FILE* */
 
+/* Opens an output file early (e.g. before sandboxing) for later PNG/PDF writes. */
 gboolean
 ns_engine_preopen_output(const char *path)
 {
@@ -1413,6 +1470,7 @@ engine_take_preopened(const char *path)
     return f;
 }
 
+/* cairo write callback that fwrites to the FILE* closure. */
 static cairo_status_t
 engine_write_to_file(void *closure, const unsigned char *data,
                      unsigned int length)
@@ -1421,6 +1479,7 @@ engine_write_to_file(void *closure, const unsigned char *data,
         ? CAIRO_STATUS_SUCCESS : CAIRO_STATUS_WRITE_ERROR;
 }
 
+/* Creates a PDF surface on the pre-opened file for path if any, else by path. */
 static cairo_surface_t *
 engine_pdf_surface_create(const char *path, double w, double h, FILE **out)
 {
@@ -1430,6 +1489,7 @@ engine_pdf_surface_create(const char *path, double w, double h, FILE **out)
                 : cairo_pdf_surface_create(path, w, h);
 }
 
+/* Paints the layout to a PNG capped at cairo's 30000 px limit; returns 0 or 2. */
 int
 ns_engine_write_png(const ns_box *root, const char *path)
 {
@@ -1475,6 +1535,7 @@ ns_engine_write_png(const ns_box *root, const char *path)
     return 0;
 }
 
+/* Sets the PDF creator and UTC creation date metadata. */
 static void
 pdf_set_metadata(cairo_surface_t *surf)
 {
@@ -1495,6 +1556,7 @@ pdf_set_metadata(cairo_surface_t *surf)
     }
 }
 
+/* Paints the layout as a single-page PDF sized to the content; returns 0 or 2. */
 int
 ns_engine_write_pdf(const ns_box *root, const char *path)
 {
@@ -1521,6 +1583,7 @@ ns_engine_write_pdf(const ns_box *root, const char *path)
 
 #define NS_PRINT_PT_PER_PX (72.0 / 96.0)
 
+/* Writes a paginated PDF using the print setup's page size and margins. */
 int
 ns_engine_write_pdf_paged(const ns_box *root, const char *path,
                           const ns_print_setup *setup)
@@ -1554,6 +1617,7 @@ ns_engine_write_pdf_paged(const ns_box *root, const char *path,
     return 0;
 }
 
+/* Renders each print page to a recording surface; caller owns the array and surfaces. */
 GPtrArray *
 ns_engine_print_recordings(const ns_box *root, const ns_print_setup *setup)
 {
@@ -1576,6 +1640,7 @@ ns_engine_print_recordings(const ns_box *root, const ns_print_setup *setup)
     return pages;
 }
 
+/* Appends the layout's text runs and image alt/src placeholders, one per line. */
 void
 ns_engine_dump_text(const ns_box *b, GString *out)
 {
@@ -1598,6 +1663,7 @@ ns_engine_dump_text(const ns_box *b, GString *out)
                 g_array_index(b->inline_atomics, ns_inline_atomic, i).box, out);
 }
 
+/* Appends an indented debug dump of the box tree with geometry, element and text. */
 void
 ns_engine_dump_layout(const ns_box *b, int indent, GString *out)
 {
@@ -1634,6 +1700,7 @@ ns_engine_dump_layout(const ns_box *b, int indent, GString *out)
                 indent + 2, out);
 }
 
+/* Inserts suffix before the file extension of path; caller frees. */
 char *
 ns_engine_suffix_before_ext(const char *path, const char *suffix)
 {

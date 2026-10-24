@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — SubtleCrypto primitives implemented over OpenSSL libcrypto.
+ * Digest, HMAC, RSA, ECDSA/ECDH, EdDSA/XDH, AES modes, HKDF and PBKDF2 for js_webcrypto.c.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -24,6 +25,7 @@
 #define OSSL_SIGNATURE_PARAM_CONTEXT_STRING "context-string"
 #endif
 
+/* Sets *err (if unset) to prefix plus the last OpenSSL error; clears it, returns NULL. */
 static void *
 ns_crypto_err(char **err, const char *prefix)
 {
@@ -41,6 +43,7 @@ ns_crypto_err(char **err, const char *prefix)
     return NULL;
 }
 
+/* Drops a key reference; on last unref wipes raw secret bytes and frees the EVP_PKEY. */
 void
 ns_crypto_key_unref(ns_crypto_key *k)
 {
@@ -57,6 +60,7 @@ ns_crypto_key_unref(ns_crypto_key *k)
     g_free(k);
 }
 
+/* Allocates a CryptoKey record with refcount 1 and copied algorithm strings. */
 static ns_crypto_key *
 ns_crypto_key_new(ns_ck_type type, const char *algo, const char *hash,
                   const char *curve, int bits, gboolean extractable,
@@ -74,6 +78,7 @@ ns_crypto_key_new(ns_ck_type type, const char *algo, const char *hash,
     return k;
 }
 
+/* Creates a secret key holding a copy of the given raw bytes. */
 ns_crypto_key *
 ns_crypto_secret_new(const char *algo, const char *hash, const guint8 *data,
                      gsize len, int bits, gboolean extractable, guint32 usages)
@@ -86,6 +91,7 @@ ns_crypto_secret_new(const char *algo, const char *hash, const guint8 *data,
     return k;
 }
 
+/* Returns the asymmetric key family (RSA, EC, Ed25519, ...) of the EVP_PKEY, or NULL. */
 const char *
 ns_crypto_key_kind(const ns_crypto_key *k)
 {
@@ -99,6 +105,7 @@ ns_crypto_key_kind(const ns_crypto_key *k)
     return NULL;
 }
 
+/* Maps the EC key's OpenSSL group name to its WebCrypto curve name (P-256/384/521). */
 const char *
 ns_crypto_key_curve(const ns_crypto_key *k)
 {
@@ -117,6 +124,7 @@ ns_crypto_key_curve(const ns_crypto_key *k)
     return NULL;
 }
 
+/* Maps a WebCrypto hash name (SHA-1/2/3) to an OpenSSL digest, or NULL. */
 static const EVP_MD *
 ns_crypto_md(const char *hash)
 {
@@ -131,6 +139,7 @@ ns_crypto_md(const char *hash)
     return NULL;
 }
 
+/* Computes a digest of data with the named hash; caller frees, NULL if unsupported. */
 guint8 *
 ns_crypto_digest(const char *hash, const guint8 *data, gsize len, gsize *out_len)
 {
@@ -152,6 +161,7 @@ ns_crypto_digest(const char *hash, const guint8 *data, gsize len, gsize *out_len
     return out;
 }
 
+/* Maps a WebCrypto SHA-1/SHA-2 name to the OpenSSL digest name string. */
 static const char *
 ns_crypto_md_name(const char *hash)
 {
@@ -163,6 +173,7 @@ ns_crypto_md_name(const char *hash)
     return NULL;
 }
 
+/* Maps a WebCrypto named curve to its OpenSSL group name. */
 static const char *
 ns_crypto_curve_group(const char *curve)
 {
@@ -173,6 +184,7 @@ ns_crypto_curve_group(const char *curve)
     return NULL;
 }
 
+/* Byte length of a curve's field coordinates (32, 48 or 66), 0 if unknown. */
 static int
 ns_crypto_curve_order_bytes(const char *curve)
 {
@@ -183,6 +195,7 @@ ns_crypto_curve_order_bytes(const char *curve)
     return 0;
 }
 
+/* Maps Ed25519/X25519/Ed448/X448 to the OpenSSL key type name. */
 static const char *
 ns_crypto_okp_name(const char *algo)
 {
@@ -206,6 +219,7 @@ ns_crypto_is_xdh(const char *algo)
     return !g_strcmp0(algo, "X25519") || !g_strcmp0(algo, "X448");
 }
 
+/* True if the OpenSSL Ed448 signer accepts a context-string parameter. */
 gboolean
 ns_crypto_eddsa_context_supported(void)
 {
@@ -218,6 +232,7 @@ ns_crypto_eddsa_context_supported(void)
     return ok;
 }
 
+/* Generates a random symmetric key of length_bits (multiple of 8, max 4096). */
 ns_crypto_key *
 ns_crypto_generate_secret(const char *algo, const char *hash, int length_bits,
                           gboolean extractable, guint32 usages, char **err)
@@ -240,6 +255,7 @@ ns_crypto_generate_secret(const char *algo, const char *hash, int length_bits,
     return k;
 }
 
+/* Generates an OKP, EC or RSA key pair; the public half is always extractable. */
 gboolean
 ns_crypto_generate_keypair(const char *algo, const char *hash, const char *curve,
                            int modulus_bits, guint32 pubexp, gboolean extractable,
@@ -313,6 +329,7 @@ ns_crypto_generate_keypair(const char *algo, const char *hash, const char *curve
     return TRUE;
 }
 
+/* Forces uncompressed point encoding on an EC key for export. */
 static void
 ns_crypto_ec_uncompressed(EVP_PKEY *pkey)
 {
@@ -322,6 +339,7 @@ ns_crypto_ec_uncompressed(EVP_PKEY *pkey)
             OSSL_PKEY_EC_POINT_CONVERSION_FORMAT_UNCOMPRESSED);
 }
 
+/* Decodes an SPKI or PKCS#8 DER blob into a new EVP_PKEY, or NULL. */
 static EVP_PKEY *
 ns_crypto_pkey_from_der(const char *format, const guint8 *data, gsize len)
 {
@@ -339,6 +357,7 @@ ns_crypto_pkey_from_der(const char *format, const guint8 *data, gsize len)
     return NULL;
 }
 
+/* importKey for raw secret, raw EC/OKP public, SPKI and PKCS#8 formats. */
 ns_crypto_key *
 ns_crypto_import_raw(const char *format, const guint8 *data, gsize len,
                      const char *algo, const char *hash, const char *curve,
@@ -413,6 +432,7 @@ ns_crypto_import_raw(const char *format, const guint8 *data, gsize len,
     return k;
 }
 
+/* Converts big-endian bytes to a new BIGNUM; NULL for empty input. */
 static BIGNUM *
 ns_crypto_bn(const guint8 *b, gsize len)
 {
@@ -420,6 +440,7 @@ ns_crypto_bn(const guint8 *b, gsize len)
                                                 : NULL;
 }
 
+/* Builds an RSA public or private key from JWK components (CRT values optional). */
 ns_crypto_key *
 ns_crypto_import_rsa_jwk(const guint8 *n, gsize n_len, const guint8 *e, gsize e_len,
                          const guint8 *d, gsize d_len, const guint8 *p, gsize p_len,
@@ -476,6 +497,7 @@ ns_crypto_import_rsa_jwk(const guint8 *n, gsize n_len, const guint8 *e, gsize e_
     return k;
 }
 
+/* True if the key pair passes OpenSSL's pairwise consistency check. */
 static gboolean
 ns_crypto_pairwise_ok(EVP_PKEY *pkey)
 {
@@ -486,6 +508,7 @@ ns_crypto_pairwise_ok(EVP_PKEY *pkey)
     return ok;
 }
 
+/* Builds an EC key from JWK x/y (and d), rejecting oversized or inconsistent pairs. */
 ns_crypto_key *
 ns_crypto_import_ec_jwk(const char *curve, const guint8 *x, gsize x_len,
                         const guint8 *y, gsize y_len, const guint8 *d, gsize d_len,
@@ -540,6 +563,7 @@ ns_crypto_import_ec_jwk(const char *curve, const guint8 *x, gsize x_len,
     return k;
 }
 
+/* Builds an OKP key from JWK d (private) or x (public). */
 ns_crypto_key *
 ns_crypto_import_okp_jwk(const char *curve, const guint8 *x, gsize x_len,
                          const guint8 *d, gsize d_len, const char *algo,
@@ -563,6 +587,7 @@ ns_crypto_import_okp_jwk(const char *curve, const guint8 *x, gsize x_len,
     return k;
 }
 
+/* Exports an OKP key's raw x and, for private keys, d; caller frees. */
 gboolean
 ns_crypto_export_okp_jwk(const ns_crypto_key *k, guint8 **x, gsize *x_len,
                          guint8 **d, gsize *d_len, char **err)
@@ -605,6 +630,7 @@ ns_crypto_export_okp_jwk(const ns_crypto_key *k, guint8 **x, gsize *x_len,
     return TRUE;
 }
 
+/* exportKey for raw, spki and pkcs8 formats; returns new bytes, caller frees. */
 guint8 *
 ns_crypto_export_raw(const char *format, const ns_crypto_key *k, gsize *out_len,
                      char **err)
@@ -662,6 +688,7 @@ ns_crypto_export_raw(const char *format, const ns_crypto_key *k, gsize *out_len,
     return NULL;
 }
 
+/* Reads a BIGNUM key parameter as minimal big-endian bytes; caller frees. */
 static guint8 *
 ns_crypto_bn_export(const EVP_PKEY *pkey, const char *param, gsize *out_len)
 {
@@ -675,6 +702,7 @@ ns_crypto_bn_export(const EVP_PKEY *pkey, const char *param, gsize *out_len)
     return out;
 }
 
+/* Returns the RSA public exponent as big-endian bytes; caller frees. */
 guint8 *
 ns_crypto_rsa_exponent(const ns_crypto_key *k, gsize *len)
 {
@@ -683,6 +711,7 @@ ns_crypto_rsa_exponent(const ns_crypto_key *k, gsize *len)
                         : NULL;
 }
 
+/* Exports RSA JWK n/e and private CRT components; caller frees each buffer. */
 gboolean
 ns_crypto_export_rsa_jwk(const ns_crypto_key *k, guint8 **n, gsize *n_len,
                          guint8 **e, gsize *e_len, guint8 **d, gsize *d_len,
@@ -717,6 +746,7 @@ ns_crypto_export_rsa_jwk(const ns_crypto_key *k, guint8 **n, gsize *n_len,
     return FALSE;
 }
 
+/* Exports EC JWK x/y (and zero-padded d for private keys); caller frees. */
 gboolean
 ns_crypto_export_ec_jwk(const ns_crypto_key *k, guint8 **x, gsize *x_len,
                         guint8 **y, gsize *y_len, guint8 **d, gsize *d_len,
@@ -756,6 +786,7 @@ ns_crypto_export_ec_jwk(const ns_crypto_key *k, guint8 **x, gsize *x_len,
     return TRUE;
 }
 
+/* Computes HMAC over data with the key's hash; caller frees the MAC. */
 static guint8 *
 ns_crypto_hmac(const ns_crypto_key *k, const guint8 *data, gsize len,
                gsize *out_len, char **err)
@@ -789,6 +820,7 @@ ns_crypto_hmac(const ns_crypto_key *k, const guint8 *data, gsize len,
     return out;
 }
 
+/* Converts a DER ECDSA signature to WebCrypto's fixed-width r||s form. */
 static guint8 *
 ns_crypto_ecdsa_der_to_raw(const guint8 *der, gsize der_len, int order,
                            gsize *out_len)
@@ -811,6 +843,7 @@ ns_crypto_ecdsa_der_to_raw(const guint8 *der, gsize der_len, int order,
     return out;
 }
 
+/* Converts a WebCrypto r||s ECDSA signature to DER; NULL on wrong length. */
 static guint8 *
 ns_crypto_ecdsa_raw_to_der(const guint8 *raw, gsize raw_len, int order,
                            gsize *out_len)
@@ -836,6 +869,7 @@ ns_crypto_ecdsa_raw_to_der(const guint8 *raw, gsize raw_len, int order,
     return out;
 }
 
+/* Configures RSA-PSS (padding, salt length) or PKCS#1 v1.5 padding on a sign/verify ctx. */
 static int
 ns_crypto_pkey_sign_setup(EVP_PKEY_CTX *pctx, const ns_crypto_key *k,
                           const ns_crypto_params *p)
@@ -857,6 +891,7 @@ ns_crypto_pkey_sign_setup(EVP_PKEY_CTX *pctx, const ns_crypto_key *k,
     return 1;
 }
 
+/* Initializes EdDSA sign/verify; a context string is only allowed for Ed448. */
 static int
 ns_crypto_eddsa_init(EVP_MD_CTX *mdctx, const ns_crypto_key *k,
                      const ns_crypto_params *p, gboolean sign)
@@ -878,6 +913,7 @@ ns_crypto_eddsa_init(EVP_MD_CTX *mdctx, const ns_crypto_key *k,
                                           params);
 }
 
+/* SubtleCrypto sign for HMAC, EdDSA, RSA and ECDSA (raw r||s output); caller frees. */
 guint8 *
 ns_crypto_sign(const ns_crypto_key *k, const ns_crypto_params *p, const guint8 *data,
                gsize len, gsize *out_len, char **err)
@@ -943,6 +979,7 @@ ns_crypto_sign(const ns_crypto_key *k, const ns_crypto_params *p, const guint8 *
     return der;
 }
 
+/* True if a 32-byte Ed25519 encoding is a known small-order point. */
 static gboolean
 ns_crypto_ed25519_small_order(const guint8 *point)
 {
@@ -973,6 +1010,7 @@ ns_crypto_ed25519_small_order(const guint8 *point)
     return FALSE;
 }
 
+/* True if a 57-byte Ed448 encoding is a known small-order point. */
 static gboolean
 ns_crypto_ed448_small_order(const guint8 *point)
 {
@@ -997,6 +1035,7 @@ ns_crypto_ed448_small_order(const guint8 *point)
     return FALSE;
 }
 
+/* True if signature length is wrong or the public key or R is a small-order point. */
 static gboolean
 ns_crypto_eddsa_weak(const ns_crypto_key *k, const guint8 *sig, gsize sig_len)
 {
@@ -1014,6 +1053,7 @@ ns_crypto_eddsa_weak(const ns_crypto_key *k, const guint8 *sig, gsize sig_len)
     return small_order(pub) || small_order(sig);
 }
 
+/* SubtleCrypto verify; returns 1 valid, 0 invalid, -1 on error (constant-time HMAC). */
 int
 ns_crypto_verify(const ns_crypto_key *k, const ns_crypto_params *p, const guint8 *sig,
                  gsize sig_len, const guint8 *data, gsize len, char **err)
@@ -1085,6 +1125,7 @@ ns_crypto_is_aes(const char *algo)
     return algo && !g_ascii_strncasecmp(algo, "AES-", 4);
 }
 
+/* Selects the OpenSSL AES-GCM/CBC/CTR/KW cipher for the key size, or NULL. */
 static const EVP_CIPHER *
 ns_crypto_aes_cipher(const char *algo, int bits)
 {
@@ -1105,6 +1146,7 @@ ns_crypto_aes_cipher(const char *algo, int bits)
     return NULL;
 }
 
+/* Runs one AES-CTR encryption pass from the given counter block. */
 static gboolean
 aes_ctr_pass(const EVP_CIPHER *cipher, const guint8 *key, const guint8 *counter,
              const guint8 *in, gsize len, guint8 *out)
@@ -1119,6 +1161,7 @@ aes_ctr_pass(const EVP_CIPHER *cipher, const guint8 *key, const guint8 *counter,
     return ok;
 }
 
+/* Counts blocks until the low counter_bits of the counter block wrap to zero. */
 static gboolean
 ctr_blocks_before_wrap(const guint8 *counter, int counter_bits, guint64 *blocks)
 {
@@ -1135,6 +1178,7 @@ ctr_blocks_before_wrap(const guint8 *counter, int counter_bits, guint64 *blocks)
     return TRUE;
 }
 
+/* AES-CTR with a counter_bits-wide counter, wrapping it as WebCrypto requires. */
 static guint8 *
 ns_crypto_aes_ctr(const ns_crypto_key *k, const EVP_CIPHER *cipher,
                   const ns_crypto_params *p, const guint8 *data, gsize len,
@@ -1169,6 +1213,7 @@ ns_crypto_aes_ctr(const ns_crypto_key *k, const EVP_CIPHER *cipher,
     return out;
 }
 
+/* AES-GCM/CBC/CTR/KW encrypt or decrypt with WebCrypto parameter validation. */
 static guint8 *
 ns_crypto_aes(const ns_crypto_key *k, const ns_crypto_params *p, const guint8 *data,
               gsize len, gboolean enc, gsize *out_len, char **err)
@@ -1262,6 +1307,7 @@ fail:
                                   : "OperationError: decrypt");
 }
 
+/* RSA-OAEP encrypt or decrypt using the key's hash for OAEP and MGF1, with label. */
 static guint8 *
 ns_crypto_rsa_oaep(const ns_crypto_key *k, const ns_crypto_params *p,
                    const guint8 *data, gsize len, gboolean enc, gsize *out_len,
@@ -1303,6 +1349,7 @@ ns_crypto_rsa_oaep(const ns_crypto_key *k, const ns_crypto_params *p,
     return out;
 }
 
+/* SubtleCrypto encrypt dispatch for AES and RSA-OAEP; caller frees. */
 guint8 *
 ns_crypto_encrypt(const ns_crypto_key *k, const ns_crypto_params *p,
                   const guint8 *data, gsize len, gsize *out_len, char **err)
@@ -1315,6 +1362,7 @@ ns_crypto_encrypt(const ns_crypto_key *k, const ns_crypto_params *p,
     return NULL;
 }
 
+/* SubtleCrypto decrypt dispatch for AES and RSA-OAEP; caller frees. */
 guint8 *
 ns_crypto_decrypt(const ns_crypto_key *k, const ns_crypto_params *p,
                   const guint8 *data, gsize len, gsize *out_len, char **err)
@@ -1327,6 +1375,7 @@ ns_crypto_decrypt(const ns_crypto_key *k, const ns_crypto_params *p,
     return NULL;
 }
 
+/* Constant-time check that a buffer is all zero bytes. */
 static gboolean
 ns_crypto_all_zero(const guint8 *data, gsize len)
 {
@@ -1335,6 +1384,7 @@ ns_crypto_all_zero(const guint8 *data, gsize len)
     return any == 0;
 }
 
+/* ECDH/X25519/X448 shared secret, truncated to length_bits; rejects all-zero XDH output. */
 static guint8 *
 ns_crypto_ecdh(const ns_crypto_key *k, const ns_crypto_params *p, int length_bits,
                gsize *out_len, char **err)
@@ -1377,6 +1427,7 @@ ns_crypto_ecdh(const ns_crypto_key *k, const ns_crypto_params *p, int length_bit
     return out;
 }
 
+/* Derives length_bits with PBKDF2-HMAC using the given salt and iterations. */
 static guint8 *
 ns_crypto_pbkdf2(const ns_crypto_key *k, const ns_crypto_params *p, int length_bits,
                  gsize *out_len, char **err)
@@ -1403,6 +1454,7 @@ ns_crypto_pbkdf2(const ns_crypto_key *k, const ns_crypto_params *p, int length_b
     return out;
 }
 
+/* Derives length_bits with HKDF using the given hash, salt and info. */
 static guint8 *
 ns_crypto_hkdf(const ns_crypto_key *k, const ns_crypto_params *p, int length_bits,
                gsize *out_len, char **err)
@@ -1438,6 +1490,7 @@ ns_crypto_hkdf(const ns_crypto_key *k, const ns_crypto_params *p, int length_bit
     return out;
 }
 
+/* SubtleCrypto deriveBits dispatch for ECDH, XDH, PBKDF2 and HKDF; caller frees. */
 guint8 *
 ns_crypto_derive_bits(const ns_crypto_key *k, const ns_crypto_params *p,
                       int length_bits, gsize *out_len, char **err)

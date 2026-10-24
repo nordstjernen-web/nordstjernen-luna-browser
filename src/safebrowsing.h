@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — local phishing/malware blocklist and warning interstitial.
+/* Nordstjernen Web Browser — local blocklist lookup and the warning interstitial for blocked hosts.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — refuse privileged startup + Linux Landlock + seccomp sandbox.
+/* Nordstjernen Web Browser — privilege refusal, OS sandboxes and security primitives.
+ * Landlock/seccomp (Linux), Seatbelt (macOS), Win32 mitigations, CSPRNG, SRI, download tagging.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Returns TRUE if env var name is set to anything but empty, 0, false, no or off. */
 gboolean
 ns_env_flag(const char *name)
 {
@@ -148,6 +150,7 @@ ns_security_downloads_dir(void)
 #include <bcrypt.h>
 #endif
 
+/* Fills buf from the OS CSPRNG (BCrypt, getrandom, getentropy, /dev/urandom). */
 gboolean
 ns_security_csprng_fill(void *buf, gsize len)
 {
@@ -197,6 +200,7 @@ ns_security_csprng_fill(void *buf, gsize len)
 #endif
 }
 
+/* Returns TRUE if the base64 digest of body under type equals want_b64. */
 static gboolean
 ns_sri_digest_equal_b64(GChecksumType type,
                         const char *want_b64, gsize want_len,
@@ -215,6 +219,7 @@ ns_sri_digest_equal_b64(GChecksumType type,
     return memcmp(got, want_b64, want_len) == 0;
 }
 
+/* Subresource Integrity check: body must match a digest of the strongest listed algorithm. */
 gboolean
 ns_security_sri_check(const char *integrity_attr,
                       const void *body, gsize body_len)
@@ -252,6 +257,7 @@ ns_security_sri_check(const char *integrity_attr,
 }
 
 #ifdef G_OS_WIN32
+/* Returns TRUE if the process token is a member of the Administrators group. */
 static gboolean
 ns_win_is_elevated(void)
 {
@@ -268,6 +274,7 @@ ns_win_is_elevated(void)
     return is_member ? TRUE : FALSE;
 }
 
+/* Relaunches this command line with the shell's unelevated token; TRUE if started. */
 static gboolean
 ns_win_relaunch_deelevated(void)
 {
@@ -324,6 +331,7 @@ ns_win_relaunch_deelevated(void)
 }
 #endif
 
+/* Returns FALSE to refuse running as root/admin unless NS_ALLOW_ROOT or the user agrees. */
 gboolean
 ns_security_refuse_root(void)
 {
@@ -446,6 +454,7 @@ landlock_restrict_self_(int ruleset_fd, guint32 flags)
     return (int)syscall(SYS_landlock_restrict_self, ruleset_fd, flags);
 }
 
+/* Adds a Landlock path-beneath rule granting allowed access under path. */
 static void
 add_path_rw(int rfd, guint64 allowed, const char *path)
 {
@@ -460,6 +469,7 @@ add_path_rw(int rfd, guint64 allowed, const char *path)
     close(pfd);
 }
 
+/* Grants Landlock access to /dev/dri and /dev/nvidia* device nodes. */
 static void
 add_gpu_devices(int rfd, guint64 fs_read, guint64 fs_dev)
 {
@@ -477,6 +487,7 @@ add_gpu_devices(int rfd, guint64 fs_read, guint64 fs_dev)
     g_dir_close(dev);
 }
 
+/* Confines filesystem access (Landlock on Linux, Seatbelt on macOS); no-op elsewhere. */
 void
 ns_security_sandbox_init(const char *self_exe)
 {
@@ -945,6 +956,7 @@ static const char *const ns_seccomp_allowed_names[] = {
 };
 #endif
 
+/* Loads seccomp argument deny filters and the syscall allowlist; no-op without seccomp. */
 void
 ns_security_seccomp_init(void)
 {
@@ -1044,6 +1056,7 @@ ns_security_seccomp_init(void)
 }
 
 #ifdef NS_HAVE_SECCOMP
+/* Adds a seccomp rule refusing PROT_EXEC for a call, optionally only for anonymous maps. */
 static void
 seccomp_deny_exec(scmp_filter_ctx ctx, const char *name, gboolean anonymous_only)
 {
@@ -1072,6 +1085,7 @@ seccomp_deny_exec_shared(scmp_filter_ctx ctx, const char *name)
 }
 #endif
 
+/* Seccomp filter refusing executable mappings and memfds; TSYNC when whole_process. */
 void
 ns_security_deny_exec_memory(gboolean whole_process)
 {
@@ -1119,6 +1133,7 @@ ns_security_deny_exec_memory(gboolean whole_process)
 #include <sandbox.h>
 #include <stdlib.h>
 
+/* Appends a quoted, realpath-resolved (subpath ...) clause to a Seatbelt profile. */
 static void
 sb_append_subpath(GString *prof, const char *dir)
 {
@@ -1246,6 +1261,7 @@ ns_win32_apply_mitigation(ns_smp_fn fn, PROCESS_MITIGATION_POLICY policy,
     (void)fn(policy, &m, sizeof m);
 }
 
+/* Applies Windows process mitigation policies; dynamic code is barred when not interactive. */
 void
 ns_security_win32_mitigations_init(gboolean interactive)
 {
@@ -1281,6 +1297,7 @@ ns_security_win32_mitigations_init(gboolean interactive)
 
 #endif
 
+/* Tags a download with its origin: quarantine xattr, xdg.origin.url or Zone.Identifier. */
 void
 ns_security_mark_download_origin(const char *path, const char *url)
 {
@@ -1320,6 +1337,7 @@ ns_security_mark_download_origin(const char *path, const char *url)
 #endif
 }
 
+/* Sets glibc M_PERTURB so freed and new heap memory is filled with a pattern. */
 void
 ns_security_harden_allocator(void)
 {

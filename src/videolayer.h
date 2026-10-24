@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — a playing video's picture, presented apart from page painting.
+/* Nordstjernen Web Browser — video layer API: clock-driven frame presentation for compositing.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

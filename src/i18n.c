@@ -1,5 +1,5 @@
-/* Nordstjernen Web Browser — UI string translation: picks the catalogue matching the
- * operating-system language and translates UI strings through it.
+/* Nordstjernen Web Browser — UI string translation from data/i18n .lang catalogues.
+ * Picks the catalogue matching the OS language list and looks up key=value translations.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -11,6 +11,7 @@
 static GHashTable *g_catalogue;
 static char       *g_language;
 
+/* Returns dir/<lang>.lang if it is a regular file; caller frees. */
 static char *
 catalogue_path_in(const char *dir, const char *lang)
 {
@@ -22,6 +23,7 @@ catalogue_path_in(const char *dir, const char *lang)
     return NULL;
 }
 
+/* Locates a language catalogue via NS_I18N_DIR, paths near the executable, or data/i18n. */
 static char *
 find_catalogue(const char *self_exe, const char *lang)
 {
@@ -54,6 +56,7 @@ find_catalogue(const char *self_exe, const char *lang)
     return catalogue_path_in("data/i18n", lang);
 }
 
+/* Parses key=value lines into a translation table; NULL if empty or unreadable. */
 static GHashTable *
 catalogue_load(const char *path)
 {
@@ -86,6 +89,7 @@ catalogue_load(const char *path)
     return table;
 }
 
+/* Loads the first catalogue matching the OS language list, skipping C/POSIX. */
 void
 ns_i18n_init(const char *self_exe)
 {
@@ -108,6 +112,7 @@ ns_i18n_init(const char *self_exe)
     }
 }
 
+/* Returns the translation for a UI string, or the string itself. */
 const char *
 ns_i18n(const char *text)
 {

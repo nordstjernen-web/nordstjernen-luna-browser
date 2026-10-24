@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — CSS transitions and @keyframes animation engine.
+/* Nordstjernen Web Browser — CSS transitions, @keyframes animations and Element.animate() runs.
+ * Samples easing per frame, writes animated values into computed styles and queues DOM events.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -108,6 +109,7 @@ struct ns_anim {
     gboolean    ended;
 };
 
+/* Returns the cached frame timestamp, latching the monotonic clock on first use. */
 static gint64
 anim_now(ns_anim *a)
 {
@@ -115,6 +117,7 @@ anim_now(ns_anim *a)
     return a->now_us;
 }
 
+/* Queues an animation/transition event for later dispatch; the name is copied. */
 static void
 anim_emit(ns_anim *a, const ns_node *node, const char *type,
           const char *name, double elapsed_ms)
@@ -127,6 +130,7 @@ anim_emit(ns_anim *a, const ns_node *node, const char *type,
     g_array_append_val(a->events, e);
 }
 
+/* Detaches the queued events and delivers each to cb in order, freeing them. */
 void
 ns_anim_drain_events(ns_anim *a, ns_anim_event_cb cb, gpointer user)
 {
@@ -209,12 +213,14 @@ static void run_emit_progress(ns_anim *a, ns_anim_state *s, ns_anim_run *r, gint
 static void run_emit_script(ns_anim *a, ns_anim_state *s, ns_anim_run *r,
                             const char *type);
 
+/* Returns the CSS animation runs (which == 0) or script-driven runs. */
 static GPtrArray *
 state_runs(const ns_anim_state *s, int which)
 {
     return which == 0 ? s->runs : s->scripts;
 }
 
+/* True if any run or transition channel on the element is active and unpaused. */
 static gboolean
 state_is_active(const ns_anim_state *s)
 {
@@ -234,6 +240,7 @@ state_is_active(const ns_anim_state *s)
     return FALSE;
 }
 
+/* Adds or removes the state from the active set based on state_is_active(). */
 static void
 anim_track(ns_anim *a, ns_anim_state *s)
 {
@@ -253,6 +260,7 @@ ns_anim_new(void)
     return a;
 }
 
+/* Destroys the engine, first lifting incremental-restyle exclusion from every node. */
 void
 ns_anim_free(ns_anim *a)
 {
@@ -273,6 +281,7 @@ ns_anim_free(ns_anim *a)
     g_free(a);
 }
 
+/* Counts active animation runs and transition channels on one element. */
 static int
 state_active_count(const ns_anim_state *s)
 {
@@ -289,6 +298,7 @@ state_active_count(const ns_anim_state *s)
     return n;
 }
 
+/* Drops states for nodes no longer in the live style map, fixing the active count. */
 static void
 ns_anim_prune(ns_anim *a, GHashTable *live)
 {
@@ -307,6 +317,7 @@ ns_anim_prune(ns_anim *a, GHashTable *live)
     }
 }
 
+/* Resets the start time of every run and channel to base_us. */
 void
 ns_anim_rebase(ns_anim *a, gint64 base_us)
 {
@@ -328,6 +339,7 @@ ns_anim_rebase(ns_anim *a, gint64 base_us)
     }
 }
 
+/* Stores a deep copy of an @keyframes rule by name unless an identical one exists. */
 static void
 ns_anim_register_keyframes(ns_anim *a, const ns_css_keyframes *src)
 {
@@ -354,6 +366,7 @@ ns_anim_register_keyframes(ns_anim *a, const ns_css_keyframes *src)
     g_hash_table_replace(a->keyframes, g_strdup(src->name), copy);
 }
 
+/* Registers every @keyframes rule from a stylesheet with the engine. */
 void
 ns_anim_load_from_stylesheet(ns_anim *a, const ns_css_stylesheet *sh)
 {
@@ -365,6 +378,7 @@ ns_anim_load_from_stylesheet(ns_anim *a, const ns_css_stylesheet *sh)
     }
 }
 
+/* Evaluates a steps(n, position) easing function at progress x per CSS Easing. */
 static double
 steps_apply(int n, ns_css_step_pos pos, double x)
 {
@@ -382,6 +396,7 @@ steps_apply(int n, ns_css_step_pos pos, double x)
     return (double)step / jumps;
 }
 
+/* Evaluates one axis of a cubic Bezier with endpoints 0 and 1 at parameter t. */
 static double
 cubic_bezier_axis(double t, double p1, double p2)
 {
@@ -389,6 +404,7 @@ cubic_bezier_axis(double t, double p1, double p2)
     return 3.0 * mt * mt * t * p1 + 3.0 * mt * t * t * p2 + t * t * t;
 }
 
+/* Solves x(t) = x by Newton iteration and returns y(t) for a cubic-bezier easing. */
 static double
 cubic_bezier_apply(const double cb[4], double x)
 {
@@ -408,6 +424,7 @@ cubic_bezier_apply(const double cb[4], double x)
     return cubic_bezier_axis(t, cb[1], cb[3]);
 }
 
+/* Maps input progress through a CSS timing function (keywords, cubic-bezier, steps). */
 static double
 timing_apply(ns_css_timing t, double x)
 {
@@ -438,6 +455,7 @@ timing_apply(ns_css_timing t, double x)
     }
 }
 
+/* Returns the element's animation state, creating and registering it if absent. */
 static ns_anim_state *
 state_for(ns_anim *a, const ns_node *dom)
 {
@@ -449,6 +467,7 @@ state_for(ns_anim *a, const ns_node *dom)
     return s;
 }
 
+/* Toggles the node's incremental-restyle exclusion, marking restyle when it is lifted. */
 static void
 anim_sync_exclusion(ns_anim_state *s, gboolean wrote)
 {
@@ -475,6 +494,7 @@ chan_find(const ns_anim_state *s, int prop)
     return NULL;
 }
 
+/* Returns the transition channel for prop, creating it if needed. */
 static ns_anim_chan *
 chan_ensure(ns_anim_state *s, int prop)
 {
@@ -487,6 +507,7 @@ chan_ensure(ns_anim_state *s, int prop)
     return ch;
 }
 
+/* Maps a transition/animation entry target to a CSS property id, or -1. */
 static int
 entry_prop(const ns_css_anim_entry *e)
 {
@@ -502,6 +523,7 @@ entry_prop(const ns_css_anim_entry *e)
     }
 }
 
+/* False for animation, transition, container and bidi properties that cannot animate. */
 static gboolean
 prop_animatable(int prop)
 {
@@ -535,6 +557,7 @@ prop_animatable(int prop)
     }
 }
 
+/* Animatable properties excluding transition/animation longhands, display and content. */
 static gboolean
 prop_transitionable(int prop)
 {
@@ -568,6 +591,7 @@ prop_discretely_animatable(int prop)
     return prop == NS_CSS_VISIBILITY;
 }
 
+/* Elapsed transition time minus delay; frozen while paused, -delay while pending. */
 static double
 chan_elapsed_ms(const ns_anim_chan *ch, gint64 now_us)
 {
@@ -576,6 +600,7 @@ chan_elapsed_ms(const ns_anim_chan *ch, gint64 now_us)
     return (now_us - ch->start_us) / 1000.0 - ch->delay_ms;
 }
 
+/* Starts a transition, shortening it per the reversing-shortening rule; emits transitionrun. */
 static void
 chan_start(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch,
            const ns_css_value *from, const ns_css_value *to,
@@ -618,6 +643,7 @@ chan_start(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch,
     advance_chan(a, s, ch, now_us);
 }
 
+/* Deactivates a transition channel and emits transitioncancel with clamped elapsed time. */
 static void
 chan_cancel(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch, gint64 now_us)
 {
@@ -628,6 +654,7 @@ chan_cancel(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch, gint64 now_us)
     if (a->active_count > 0) a->active_count--;
 }
 
+/* True if an ancestor is transitioning prop toward (or currently at) the value cur. */
 static gboolean
 ancestor_transitions_to(ns_anim *a, const ns_node *node, int prop,
                         const ns_css_value *cur)
@@ -643,6 +670,7 @@ ancestor_transitions_to(ns_anim *a, const ns_node *node, int prop,
     return FALSE;
 }
 
+/* Parses the property's initial value into a new css value; caller frees, NULL if none. */
 static ns_css_value *
 initial_value_for(int prop)
 {
@@ -664,6 +692,7 @@ initial_value_for(int prop)
     return v;
 }
 
+/* Compares a property's before/after-change values and starts or cancels its transition. */
 static void
 observe_transition_prop(ns_anim *a, ns_anim_state *s, const ns_style *style,
                         int prop, const ns_css_anim_entry *e, gint64 now_us)
@@ -732,6 +761,7 @@ observe_transition_prop(ns_anim *a, ns_anim_state *s, const ns_style *style,
     ch->last_currentcolor = cur_currentcolor;
 }
 
+/* Resolves transition entries per property and observes each; cancels untracked channels. */
 static void
 observe_transition(ns_anim *a, ns_anim_state *s, const ns_style *style,
                    const ns_css_anim_list *tv, gint64 now_us)
@@ -775,6 +805,7 @@ observe_transition(ns_anim *a, ns_anim_state *s, const ns_style *style,
     g_array_free(order, TRUE);
 }
 
+/* Parses keyframe stop declarations, dropping !important ones as css-animations requires. */
 static GArray *
 anim_stops_build(const ns_css_keyframes *kf)
 {
@@ -795,6 +826,7 @@ anim_stops_build(const ns_css_keyframes *kf)
     return stops;
 }
 
+/* Elapsed animation time minus delay; frozen while paused, -delay while pending. */
 static double
 run_elapsed_ms(const ns_anim_run *r, gint64 now_us)
 {
@@ -803,6 +835,7 @@ run_elapsed_ms(const ns_anim_run *r, gint64 now_us)
     return (now_us - r->start_us) / 1000.0 - r->delay_ms;
 }
 
+/* Pauses or resumes a run, preserving elapsed time by adjusting start_us. */
 static void
 run_set_paused(ns_anim_run *r, gboolean paused, gint64 now_us)
 {
@@ -815,6 +848,7 @@ run_set_paused(ns_anim_run *r, gboolean paused, gint64 now_us)
     }
 }
 
+/* Clamps elapsed time to [0, active duration] for event elapsedTime reporting. */
 static double
 run_active_time(const ns_anim_run *r, double el)
 {
@@ -824,6 +858,7 @@ run_active_time(const ns_anim_run *r, double el)
     return el;
 }
 
+/* Stops a run, emitting animationcancel (or a script cancel) and clearing its values. */
 static void
 run_cancel(ns_anim *a, ns_anim_state *s, ns_anim_run *r)
 {
@@ -846,6 +881,7 @@ run_cancel(ns_anim *a, ns_anim_state *s, ns_anim_run *r)
     if (r->partials) g_hash_table_remove_all(r->partials);
 }
 
+/* Copies duration, delay, iterations, direction, fill and timing from a CSS entry. */
 static void
 run_configure(ns_anim_run *r, const ns_css_anim_entry *e)
 {
@@ -857,6 +893,7 @@ run_configure(ns_anim_run *r, const ns_css_anim_entry *e)
     r->timing = e->timing;
 }
 
+/* Starts a CSS animation run: resolves keyframes with vars, builds stops, ticks once. */
 static void
 run_start(ns_anim *a, ns_anim_state *s, ns_anim_run *r,
           const ns_css_anim_entry *e, const ns_style *style, gint64 now_us)
@@ -891,6 +928,7 @@ run_start(ns_anim *a, ns_anim_state *s, ns_anim_run *r,
     run_emit_progress(a, s, r, now_us);
 }
 
+/* Reconciles animation-name list with existing runs: update, restart, cancel or trim. */
 static void
 observe_animation(ns_anim *a, ns_anim_state *s, const ns_style *style,
                   const ns_css_anim_list *av, gint64 now_us)
@@ -943,6 +981,7 @@ observe_animation(ns_anim *a, ns_anim_state *s, const ns_style *style,
     }
 }
 
+/* True if any ancestor's computed display is none. */
 static gboolean
 ancestor_hidden(GHashTable *styles, const ns_node *dom)
 {
@@ -958,6 +997,7 @@ static void
 anim_observe_one(ns_anim *a, const ns_node *dom, const ns_style *style,
                  gint64 now_us, GHashTable *styles);
 
+/* Observes one element's style change for transitions and animations; display:none cancels. */
 static void
 anim_observe_one(ns_anim *a, const ns_node *dom, const ns_style *style,
                  gint64 now_us, GHashTable *styles)
@@ -1018,6 +1058,7 @@ typedef struct {
     int             depth;
 } ns_anim_observe_item;
 
+/* Sorts observe items by tree depth so parents are processed before children. */
 static int
 observe_item_cmp(gconstpointer x, gconstpointer y)
 {
@@ -1025,6 +1066,7 @@ observe_item_cmp(gconstpointer x, gconstpointer y)
     return p->depth - q->depth;
 }
 
+/* Observes every animated style parent-first, prunes dead states and applies values. */
 void
 ns_anim_observe_all(ns_anim *a, GHashTable *styles, gint64 now_us)
 {
@@ -1049,6 +1091,7 @@ ns_anim_observe_all(ns_anim *a, GHashTable *styles, gint64 now_us)
     ns_anim_apply(a, styles);
 }
 
+/* Observes only the given nodes parent-first, then applies animated values. */
 void
 ns_anim_observe_nodes(ns_anim *a, GHashTable *styles, GPtrArray *nodes,
                       gint64 now_us)
@@ -1074,6 +1117,7 @@ ns_anim_observe_nodes(ns_anim *a, GHashTable *styles, GPtrArray *nodes,
     ns_anim_apply(a, styles);
 }
 
+/* Replaces a computed value with a copy and bumps the style's mutation generation. */
 static void
 style_set_value(ns_style *st, int prop, ns_css_value *v)
 {
@@ -1084,6 +1128,7 @@ style_set_value(ns_style *st, int prop, ns_css_value *v)
     st->mutation_gen++;
 }
 
+/* Pushes an animated inherited value into descendants still holding the base value. */
 static void
 apply_propagate(GHashTable *styles, const ns_node *node, int prop,
                 const ns_css_value *base, ns_css_value *current)
@@ -1098,6 +1143,7 @@ apply_propagate(GHashTable *styles, const ns_node *node, int prop,
     }
 }
 
+/* Writes an animated value into the computed style, saving the base value first. */
 static void
 apply_animated_value(GHashTable *styles, ns_anim_state *s, ns_style *st,
                      int prop, ns_css_value *current)
@@ -1117,6 +1163,7 @@ apply_animated_value(GHashTable *styles, ns_anim_state *s, ns_style *st,
     ns_css_value_free(base);
 }
 
+/* Returns the pre-animation computed value saved for prop, or NULL if not animated. */
 const ns_css_value *
 ns_anim_base_value(ns_anim *a, const ns_node *node, int prop)
 {
@@ -1127,6 +1174,7 @@ ns_anim_base_value(ns_anim *a, const ns_node *node, int prop)
     return v && v->kind == 0 && !v->u.keyword ? NULL : v;
 }
 
+/* Writes active transition and animation values into computed styles; resolves partials. */
 static void
 ns_anim_apply(ns_anim *a, GHashTable *styles)
 {
@@ -1189,6 +1237,7 @@ ns_anim_apply(ns_anim *a, GHashTable *styles)
     }
 }
 
+/* Classifies a transition's elapsed time as before, active or after phase. */
 static int
 chan_phase_at(const ns_anim_chan *ch, double elapsed)
 {
@@ -1197,6 +1246,7 @@ chan_phase_at(const ns_anim_chan *ch, double elapsed)
     return NS_ANIM_PHASE_ACTIVE;
 }
 
+/* Emits transitionstart/transitionend for a phase change per css-transitions-2. */
 static void
 chan_emit_phase(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch, int cur)
 {
@@ -1220,6 +1270,7 @@ chan_emit_phase(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch, int cur)
     ch->phase = cur;
 }
 
+/* Updates a transition channel's current value for now, finishing it in the after phase. */
 static gboolean
 advance_chan(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch, gint64 now_us)
 {
@@ -1254,6 +1305,7 @@ advance_chan(ns_anim *a, ns_anim_state *s, ns_anim_chan *ch, gint64 now_us)
     return TRUE;
 }
 
+/* Returns the last declared value for prop in a keyframe stop, or NULL. */
 static const ns_css_value *
 stop_value(const ns_anim_kf_stop *st, int prop)
 {
@@ -1266,6 +1318,7 @@ stop_value(const ns_anim_kf_stop *st, int prop)
     return found;
 }
 
+/* Reads a per-keyframe animation-timing-function override; FALSE if none. */
 static gboolean
 stop_timing(const ns_anim_kf_stop *st, ns_css_timing *out)
 {
@@ -1283,6 +1336,7 @@ partial_free(gpointer data)
     g_free(p);
 }
 
+/* Samples keyframes at progress into run values; missing 0%/100% become partials. */
 static void
 run_sample_at(ns_anim_run *r, double progress)
 {
@@ -1356,6 +1410,7 @@ run_sample_at(ns_anim_run *r, double progress)
     }
 }
 
+/* Applies animation-direction to iteration progress, reversing odd/even iterations. */
 static double
 directed_progress(int iter, double raw, ns_css_anim_direction dir)
 {
@@ -1370,6 +1425,7 @@ directed_progress(int iter, double raw, ns_css_anim_direction dir)
     return rev ? 1.0 - raw : raw;
 }
 
+/* Zero-based index of the final iteration; 0 for infinite iteration counts. */
 static int
 run_last_iteration(const ns_anim_run *r)
 {
@@ -1378,6 +1434,7 @@ run_last_iteration(const ns_anim_run *r)
     return last < 0 ? 0 : last;
 }
 
+/* Active duration (duration x iterations), INFINITY for infinite iterations. */
 static double
 run_active_ms(const ns_anim_run *r)
 {
@@ -1385,6 +1442,7 @@ run_active_ms(const ns_anim_run *r)
     return r->duration_ms * r->iterations;
 }
 
+/* Samples a run at now honoring delay, fill mode, direction and iteration count. */
 static gboolean
 advance_run(ns_anim *a, ns_anim_run *r, gint64 now_us)
 {
@@ -1430,6 +1488,7 @@ advance_run(ns_anim *a, ns_anim_run *r, gint64 now_us)
     return TRUE;
 }
 
+/* Emits an internal script-animation event whose name is the run index. */
 static void
 run_emit_script(ns_anim *a, ns_anim_state *s, ns_anim_run *r, const char *type)
 {
@@ -1438,6 +1497,7 @@ run_emit_script(ns_anim *a, ns_anim_state *s, ns_anim_run *r, const char *type)
     anim_emit(a, s->node, type, idx, 0.0);
 }
 
+/* Classifies a run's elapsed time as before, active or after its active interval. */
 static int
 run_phase_at(const ns_anim_run *r, double el)
 {
@@ -1447,6 +1507,7 @@ run_phase_at(const ns_anim_run *r, double el)
     return NS_ANIM_PHASE_ACTIVE;
 }
 
+/* Emits animationstart/end/iteration events on phase or iteration changes. */
 static void
 run_emit_progress(ns_anim *a, ns_anim_state *s, ns_anim_run *r, gint64 now_us)
 {
@@ -1493,6 +1554,7 @@ run_emit_progress(ns_anim *a, ns_anim_state *s, ns_anim_run *r, gint64 now_us)
     }
 }
 
+/* Advances all active transitions and animations to now; TRUE if any value changed. */
 gboolean
 ns_anim_tick(ns_anim *a, gint64 now_us)
 {
@@ -1536,6 +1598,7 @@ ns_anim_tick(ns_anim *a, gint64 now_us)
     return any;
 }
 
+/* Returns and clears the flag set when an animation or transition ended. */
 gboolean
 ns_anim_take_restyle(ns_anim *a)
 {
@@ -1550,6 +1613,7 @@ ns_anim_has_active(const ns_anim *a)
     return a && a->active && g_hash_table_size(a->active) > 0;
 }
 
+/* True if any active animated property affects layout. */
 gboolean
 ns_anim_needs_layout(const ns_anim *a)
 {
@@ -1587,6 +1651,7 @@ ns_anim_needs_layout(const ns_anim *a)
     return FALSE;
 }
 
+/* True for properties whose animation only needs a repaint, not relayout. */
 static gboolean
 prop_repaints_in_place(int prop)
 {
@@ -1605,6 +1670,7 @@ prop_repaints_in_place(int prop)
     }
 }
 
+/* True if every property key in the table repaints in place. */
 static gboolean
 props_repaint_in_place(GHashTable *props)
 {
@@ -1617,6 +1683,7 @@ props_repaint_in_place(GHashTable *props)
     return TRUE;
 }
 
+/* Collects animated nodes when all animate paint-only props; FALSE if relayout needed. */
 gboolean
 ns_anim_repaint_nodes(const ns_anim *a, GPtrArray *out)
 {
@@ -1647,6 +1714,7 @@ ns_anim_repaint_nodes(const ns_anim *a, GPtrArray *out)
     return TRUE;
 }
 
+/* Returns the topmost animated value for prop: scripts, then CSS runs, then transitions. */
 static const ns_css_value *
 state_prop_value(const ns_anim_state *s, int prop)
 {
@@ -1666,6 +1734,7 @@ state_prop_value(const ns_anim_state *s, int prop)
     return NULL;
 }
 
+/* Reads the current animated opacity, clamped to [0, 1]; FALSE if not animated. */
 gboolean
 ns_anim_get_opacity(ns_anim *a, const ns_node *dom, double *out_opacity)
 {
@@ -1680,6 +1749,7 @@ ns_anim_get_opacity(ns_anim *a, const ns_node *dom, double *out_opacity)
     return TRUE;
 }
 
+/* Returns the element's current animated transform, or NULL if none. */
 const ns_css_transform *
 ns_anim_get_transform(ns_anim *a, const ns_node *dom)
 {
@@ -1692,6 +1762,7 @@ ns_anim_get_transform(ns_anim *a, const ns_node *dom)
     return &v->u.transform;
 }
 
+/* Reads the animated color or background-color as RGBA; FALSE if not animated. */
 gboolean
 ns_anim_get_color(ns_anim *a, const ns_node *dom,
                   ns_css_anim_target which, guint8 out_rgba[4])
@@ -1718,6 +1789,7 @@ info_set_easing(ns_anim_info *out, const ns_css_timing *t)
     g_free(e);
 }
 
+/* Fills an ns_anim_info snapshot for a transition channel (CSSTransition). */
 static void
 chan_info(const ns_anim_state *s, const ns_anim_chan *ch, gint64 now_us,
           ns_anim_info *out)
@@ -1765,6 +1837,7 @@ direction_name(ns_css_anim_direction d)
     }
 }
 
+/* Fills an ns_anim_info snapshot for a CSS or script animation run. */
 static void
 run_info(const ns_anim_state *s, const ns_anim_run *r, gint64 now_us,
          ns_anim_info *out)
@@ -1793,6 +1866,7 @@ run_info(const ns_anim_state *s, const ns_anim_run *r, gint64 now_us,
     out->current_ms = el;
 }
 
+/* True if a run is active or finished with forwards/both fill. */
 static gboolean
 run_in_effect(const ns_anim_run *r)
 {
@@ -1802,6 +1876,7 @@ run_in_effect(const ns_anim_run *r)
                            r->fill == NS_CSS_ANIM_FILL_BOTH);
 }
 
+/* Calls cb for each in-effect animation and active transition, optionally for one node. */
 void
 ns_anim_visit(ns_anim *a, const ns_node *node, ns_anim_visit_cb cb,
               gpointer user)
@@ -1835,6 +1910,7 @@ ns_anim_visit(ns_anim *a, const ns_node *node, ns_anim_visit_cb cb,
     }
 }
 
+/* Maps an encoded negative prop id to a CSS or script run, or NULL. */
 static ns_anim_run *
 run_for(const ns_anim_state *s, int prop)
 {
@@ -1869,6 +1945,7 @@ fill_from_name(const char *f)
     return NS_CSS_ANIM_FILL_NONE;
 }
 
+/* Starts an Element.animate() run from keyframe CSS; returns its encoded prop id. */
 gboolean
 ns_anim_script_start(ns_anim *a, const ns_node *node,
                      const char *const *stop_css, const double *stop_pct,
@@ -1928,6 +2005,7 @@ ns_anim_script_start(ns_anim *a, const ns_node *node,
     return TRUE;
 }
 
+/* Calls cb with offset, easing and declarations for each keyframe of a run. */
 void
 ns_anim_keyframes_visit(ns_anim *a, const ns_node *node, int prop,
                         ns_anim_keyframe_cb cb, gpointer user)
@@ -1947,6 +2025,7 @@ ns_anim_keyframes_visit(ns_anim *a, const ns_node *node, int prop,
     }
 }
 
+/* Fills info for the run (prop < 0) or transition channel on node; FALSE if none. */
 gboolean
 ns_anim_info_for(ns_anim *a, const ns_node *node, int prop, ns_anim_info *out)
 {
@@ -1966,6 +2045,7 @@ ns_anim_info_for(ns_anim *a, const ns_node *node, int prop, ns_anim_info *out)
     return TRUE;
 }
 
+/* Sets an animation or transition current time to ms, reviving cancelled/finished ones. */
 gboolean
 ns_anim_seek(ns_anim *a, const ns_node *node, int prop, double ms)
 {
@@ -2020,6 +2100,7 @@ ns_anim_seek(ns_anim *a, const ns_node *node, int prop, double ms)
     return TRUE;
 }
 
+/* Applies a Web Animations pause/play/finish/cancel op to a run or transition. */
 gboolean
 ns_anim_control(ns_anim *a, const ns_node *node, int prop, const char *op)
 {

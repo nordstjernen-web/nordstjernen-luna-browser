@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — Content-Security-Policy parser + check (CSP1+CSP2 subset).
+/* Nordstjernen Web Browser — Content-Security-Policy parsing and source-list matching.
+ * Directive fallback, nonces, hashes, strict-dynamic, unsafe-eval/inline and frame-ancestors.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -23,6 +24,7 @@ policy_frame_ancestors_allows(const ns_csp_policy *p,
                               const char *parent_url,
                               const char *document_url);
 
+/* Maps a CSP directive name to its kind; NS_CSP_KIND_COUNT if unsupported. */
 static ns_csp_kind
 directive_kind(const char *name)
 {
@@ -67,6 +69,7 @@ csp_normalize_source(const char *t)
     return out;
 }
 
+/* Parses one serialized policy; first occurrence of a directive wins, -elem as fallback. */
 static ns_csp_policy *
 policy_parse(const char *policy_text)
 {
@@ -134,6 +137,7 @@ policy_free(ns_csp_policy *p)
     g_free(p);
 }
 
+/* Parses a comma-separated CSP header into policies; NULL if empty. */
 ns_csp *
 ns_csp_parse(const char *header_value)
 {
@@ -163,6 +167,7 @@ ns_csp_free(ns_csp *csp)
     g_free(csp);
 }
 
+/* Deep-copies a parsed policy. */
 static ns_csp_policy *
 policy_copy(const ns_csp_policy *src)
 {
@@ -178,6 +183,7 @@ policy_copy(const ns_csp_policy *src)
     return p;
 }
 
+/* Deep-copies a CSP policy list; caller frees. */
 ns_csp *
 ns_csp_copy(const ns_csp *csp)
 {
@@ -191,6 +197,7 @@ ns_csp_copy(const ns_csp *csp)
     return copy;
 }
 
+/* Moves all of src's policies into dst, leaving src empty. */
 void
 ns_csp_merge(ns_csp *dst, ns_csp *src)
 {
@@ -202,6 +209,7 @@ ns_csp_merge(ns_csp *dst, ns_csp *src)
 }
 
 
+/* CSP scheme match, allowing http to match https and ws to match wss. */
 static gboolean
 scheme_matches(const char *src_scheme, gsize n, const char *res_scheme)
 {
@@ -216,6 +224,7 @@ scheme_matches(const char *src_scheme, gsize n, const char *res_scheme)
     return FALSE;
 }
 
+/* True for network schemes that * and 'self' may match (http, https, ws, wss, ftp). */
 static gboolean
 is_network_scheme(const char *res_scheme)
 {
@@ -228,6 +237,7 @@ is_network_scheme(const char *res_scheme)
     return FALSE;
 }
 
+/* Default port string for a scheme, or empty if none. */
 static const char *
 default_port_for_scheme(const char *scheme)
 {
@@ -242,6 +252,7 @@ default_port_for_scheme(const char *scheme)
     return "";
 }
 
+/* CSP port-part match: *, explicit port, or the scheme's default port. */
 static gboolean
 csp_port_matches(const char *src_port, const char *res_port,
                  const char *res_scheme)
@@ -257,6 +268,7 @@ csp_port_matches(const char *src_port, const char *res_port,
     return *rp && strcmp(src_port, rp) == 0;
 }
 
+/* CSP path-part match: prefix for paths ending in /, exact otherwise. */
 static gboolean
 csp_path_matches(const char *src_path, const char *res_path)
 {
@@ -269,6 +281,7 @@ csp_path_matches(const char *src_path, const char *res_path)
     return strcmp(rp, src_path) == 0;
 }
 
+/* Matches a URL against a CSP source expression (keywords, scheme, host, port, path). */
 static gboolean
 source_matches(const char *src, const char *resource_url, const char *doc_url)
 {
@@ -357,6 +370,7 @@ source_matches(const char *src, const char *resource_url, const char *doc_url)
 
 static gboolean list_has_token(const GPtrArray *list, const char *tok);
 
+/* Checks one policy for a fetch, with directive fallback, nonces and strict-dynamic. */
 static gboolean
 policy_allows_with_nonce(const ns_csp_policy *p, ns_csp_kind kind,
                          const char *resource_url, const char *document_url,
@@ -415,6 +429,7 @@ ns_csp_allows(const ns_csp *csp, ns_csp_kind kind,
                                     NULL, TRUE);
 }
 
+/* True if every policy allows the resource for the directive kind. */
 gboolean
 ns_csp_allows_with_nonce(const ns_csp *csp, ns_csp_kind kind,
                          const char *resource_url, const char *document_url,
@@ -431,6 +446,7 @@ ns_csp_allows_with_nonce(const ns_csp *csp, ns_csp_kind kind,
     return TRUE;
 }
 
+/* Directive governing scripts in a policy: script-src, else default-src. */
 static ns_csp_kind
 inline_script_kind(const ns_csp_policy *p)
 {
@@ -448,6 +464,7 @@ list_has_token(const GPtrArray *list, const char *tok)
     return FALSE;
 }
 
+/* True if a source list contains a nonce or hash source. */
 static gboolean
 list_has_nonce_or_hash(const GPtrArray *list)
 {
@@ -472,6 +489,7 @@ list_has_nonce(const GPtrArray *list)
     return FALSE;
 }
 
+/* True if a 'shaNNN-...' source matches the body's digest (base64 or base64url). */
 static gboolean
 hash_token_matches(const char *src, const char *body, gsize body_len)
 {
@@ -503,6 +521,7 @@ hash_token_matches(const char *src, const char *body, gsize body_len)
     return ok;
 }
 
+/* Checks an inline script against one policy via nonce, hash or 'unsafe-inline'. */
 static gboolean
 policy_inline_script_allowed(const ns_csp_policy *p,
                              const char *body, gsize body_len,
@@ -530,6 +549,7 @@ policy_inline_script_allowed(const ns_csp_policy *p,
     return list_has_token(list, "'unsafe-inline'");
 }
 
+/* Checks a module import URL, deferring nonce and strict-dynamic policies to the parent. */
 gboolean
 ns_csp_allows_import(const ns_csp *csp, const char *resource_url,
                      const char *document_url)
@@ -554,6 +574,7 @@ ns_csp_allows_import(const ns_csp *csp, const char *resource_url,
     return TRUE;
 }
 
+/* True unless some script policy lacks 'unsafe-eval'. */
 gboolean
 ns_csp_allows_eval(const ns_csp *csp)
 {
@@ -567,6 +588,7 @@ ns_csp_allows_eval(const ns_csp *csp)
     return TRUE;
 }
 
+/* True if every policy allows the inline script body with this nonce. */
 gboolean
 ns_csp_inline_script_allowed(const ns_csp *csp,
                              const char *body, gsize body_len,
@@ -581,6 +603,7 @@ ns_csp_inline_script_allowed(const ns_csp *csp,
     return TRUE;
 }
 
+/* Inline handlers need 'unsafe-inline' without nonces, hashes or strict-dynamic. */
 static gboolean
 policy_inline_event_handler_allowed(const ns_csp_policy *p)
 {
@@ -593,6 +616,7 @@ policy_inline_event_handler_allowed(const ns_csp_policy *p)
     return list_has_token(list, "'unsafe-inline'");
 }
 
+/* True if every policy allows inline event handler attributes. */
 gboolean
 ns_csp_inline_event_handler_allowed(const ns_csp *csp)
 {
@@ -605,6 +629,7 @@ ns_csp_inline_event_handler_allowed(const ns_csp *csp)
     return TRUE;
 }
 
+/* Checks frame-ancestors against the embedding parent's URL. */
 static gboolean
 policy_frame_ancestors_allows(const ns_csp_policy *p,
                               const char *parent_url,

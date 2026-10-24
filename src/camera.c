@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — webcam enumeration (V4L2) and per-site camera permission.
+ * Per-origin allow/deny decisions with one pending prompt handed to the UI thread.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -25,6 +26,7 @@ ns_camera_info_free(ns_camera_info *info)
     g_free(info);
 }
 
+/* Stores an allow (1) or deny (2) camera decision for an origin; caller holds the lock. */
 static void
 ns_camera_record_decision(const char *origin, gboolean allow)
 {
@@ -44,6 +46,7 @@ ns_camera_has_pending_origin(void)
     return pending;
 }
 
+/* Returns and clears the origin awaiting a camera prompt; caller frees. */
 char *
 ns_camera_take_pending_origin(void)
 {
@@ -54,6 +57,7 @@ ns_camera_take_pending_origin(void)
     return origin;
 }
 
+/* Records the user's camera choice for an origin and clears it if pending. */
 void
 ns_camera_set_decision(const char *origin, int allow)
 {
@@ -67,6 +71,7 @@ ns_camera_set_decision(const char *origin, int allow)
 
 static int ns_camera_permission_locked(char *origin);
 
+/* Permission key for the page: its origin, or URL without fragment for opaque origins. */
 static char *
 ns_camera_key(ns_js *js)
 {
@@ -82,6 +87,7 @@ ns_camera_key(ns_js *js)
     return origin;
 }
 
+/* True only if the page's origin has an explicit allow decision. */
 gboolean
 ns_camera_permission_granted(ns_js *js)
 {
@@ -93,6 +99,7 @@ ns_camera_permission_granted(ns_js *js)
     return GPOINTER_TO_INT(v) == 1;
 }
 
+/* Returns 1 allowed, 0 denied, -1 pending for the page's origin, queuing a prompt. */
 int
 ns_camera_permission(ns_js *js)
 {
@@ -103,6 +110,7 @@ ns_camera_permission(ns_js *js)
     return r;
 }
 
+/* Looks up or queues a prompt for origin (consumed); test mode may auto-allow. */
 static int
 ns_camera_permission_locked(char *origin)
 {
@@ -140,6 +148,7 @@ ns_camera_permission_locked(char *origin)
 #include <sys/ioctl.h>
 #include <linux/videodev2.h>
 
+/* ioctl() retried on EINTR. */
 static int
 xioctl(int fd, unsigned long req, void *arg)
 {
@@ -148,6 +157,7 @@ xioctl(int fd, unsigned long req, void *arg)
     return r;
 }
 
+/* Returns the V4L2 card name if the device supports video capture; caller frees. */
 static char *
 ns_camera_label_for(const char *device)
 {
@@ -164,6 +174,7 @@ ns_camera_label_for(const char *device)
     return label;
 }
 
+/* Lists capture-capable /dev/video0..63 devices with labels (empty off Linux). */
 GPtrArray *
 ns_camera_enumerate(void)
 {

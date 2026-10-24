@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — paginates a laid-out page onto sheets of paper.
+ * Honors @page size/margins and forced or avoided breaks, keeps line boxes whole.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -16,6 +17,7 @@
 
 typedef struct { double top, bottom; } ns_print_span;
 
+/* Default print setup: A4 sheet in CSS px with half-inch margins. */
 void
 ns_print_setup_default(ns_print_setup *setup)
 {
@@ -27,6 +29,7 @@ ns_print_setup_default(ns_print_setup *setup)
     setup->margin_left = NS_PRINT_MARGIN;
 }
 
+/* Overrides sheet size and margins from a CSS @page rule where specified. */
 void
 ns_print_setup_apply_page_rule(ns_print_setup *setup,
                                const ns_css_page_rule *rule)
@@ -48,6 +51,7 @@ break_keyword(const ns_box *b, ns_css_prop prop)
     return b->style ? ns_style_keyword(b->style, prop) : NULL;
 }
 
+/* TRUE for break-before/after values that force a page break (page, always, left...). */
 static gboolean
 forces_page_break(const char *kw)
 {
@@ -57,12 +61,14 @@ forces_page_break(const char *kw)
                   strcmp(kw, "verso") == 0);
 }
 
+/* TRUE for break values that avoid a page break (avoid, avoid-page). */
 static gboolean
 avoids_page_break(const char *kw)
 {
     return kw && (strcmp(kw, "avoid") == 0 || strcmp(kw, "avoid-page") == 0);
 }
 
+/* Vertical extent of a box's border box, used for pagination. */
 static void
 box_page_extent(const ns_box *b, double *top, double *bottom)
 {
@@ -71,6 +77,7 @@ box_page_extent(const ns_box *b, double *top, double *bottom)
               b->border.top + b->border.bottom;
 }
 
+/* Records an unbreakable vertical span unless empty or taller than a page. */
 static void
 add_span(GArray *spans, double top, double bottom, double page_h)
 {
@@ -79,6 +86,7 @@ add_span(GArray *spans, double top, double bottom, double page_h)
     g_array_append_val(spans, s);
 }
 
+/* Adds one unbreakable span per line box of a multi-line text run. */
 static void
 add_text_line_spans(GArray *spans, const ns_box *b, double top, double bottom,
                     double page_h)
@@ -96,6 +104,7 @@ add_text_line_spans(GArray *spans, const ns_box *b, double top, double bottom,
         add_span(spans, y, MIN(y + line_h, bottom), page_h);
 }
 
+/* Walks the box tree gathering forced break positions and unbreakable spans. */
 static void
 collect_breaks(const ns_box *b, GArray *forced, GArray *spans, double page_h)
 {
@@ -132,6 +141,7 @@ cmp_double(gconstpointer a, gconstpointer b)
     return x < y ? -1 : (x > y ? 1 : 0);
 }
 
+/* First forced break position after the page start and within the page limit; -1 if none. */
 static double
 next_forced_break(const GArray *forced, double after, double limit)
 {
@@ -142,6 +152,7 @@ next_forced_break(const GArray *forced, double after, double limit)
     return -1;
 }
 
+/* Moves a page cut up above spans it would split; keeps the limit if nothing fits. */
 static double
 pull_above_spans(const GArray *spans, double start, double limit)
 {
@@ -160,6 +171,7 @@ pull_above_spans(const GArray *spans, double start, double limit)
     return cut > start + 1 ? cut : limit;
 }
 
+/* Computes page start offsets honoring forced breaks and avoiding split lines (<= 4096). */
 GArray *
 ns_print_page_offsets(const ns_box *root, double page_content_height)
 {
@@ -190,6 +202,7 @@ ns_print_page_offsets(const ns_box *root, double page_content_height)
     return offsets;
 }
 
+/* Bottom offset of page i: the next page's start, or start plus content height. */
 double
 ns_print_page_bottom(const GArray *offsets, guint i, double page_content_height)
 {
@@ -198,6 +211,7 @@ ns_print_page_bottom(const GArray *offsets, guint i, double page_content_height)
     return g_array_index(offsets, double, i) + page_content_height;
 }
 
+/* Paints one page slice of the box tree inside the margins, clipped to its content height. */
 void
 ns_print_draw_page(cairo_t *cr, const ns_box *root,
                    const ns_print_setup *setup, double scale,

@@ -1,5 +1,5 @@
-/* Nordstjernen Web Browser — one page host session: the open page, its back/forward cache
-   and the last rendered frame.
+/* Nordstjernen Web Browser — one page host session: open page, back/forward cache, last frame.
+ * API used by the GTK engine-thread view and headless driver for rendering, input and navigation.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

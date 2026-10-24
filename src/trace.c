@@ -21,12 +21,14 @@ ns_trace_enabled(void)
     return g_atomic_pointer_get(&g_trace_file) != NULL;
 }
 
+/* Returns the monotonic time to start a span, or 0 when tracing is off. */
 gint64
 ns_trace_now(void)
 {
     return ns_trace_enabled() ? g_get_monotonic_time() : 0;
 }
 
+/* Returns a small per-thread trace id, assigned on first use. */
 static int
 trace_tid(void)
 {
@@ -38,6 +40,7 @@ trace_tid(void)
     return tid;
 }
 
+/* Appends s as a JSON string literal, escaping quotes, backslashes and controls. */
 static void
 trace_append_json_string(GString *out, const char *s)
 {
@@ -53,6 +56,7 @@ trace_append_json_string(GString *out, const char *s)
     g_string_append_c(out, '"');
 }
 
+/* Writes one trace event and a trailing comma to the open trace file. */
 static void
 trace_write(GString *event)
 {
@@ -65,6 +69,7 @@ trace_write(GString *event)
     g_mutex_unlock(&g_trace_lock);
 }
 
+/* Starts a Chrome trace-event JSON file at path and names the main thread. */
 gboolean
 ns_trace_open(const char *path)
 {
@@ -80,6 +85,7 @@ ns_trace_open(const char *path)
     return TRUE;
 }
 
+/* Terminates the JSON array and closes the trace file. */
 void
 ns_trace_close(void)
 {
@@ -92,6 +98,7 @@ ns_trace_close(void)
     fclose(f);
 }
 
+/* Emits a thread_name record for this thread unless it already has a trace id. */
 void
 ns_trace_thread_name_once(const char *name)
 {
@@ -99,6 +106,7 @@ ns_trace_thread_name_once(const char *name)
     ns_trace_thread_name(name);
 }
 
+/* Emits a thread_name metadata event for the calling thread. */
 void
 ns_trace_thread_name(const char *name)
 {
@@ -124,6 +132,7 @@ ns_trace_completef(const char *category, const char *name, gint64 start_us,
     g_free(detail);
 }
 
+/* Emits a complete ("X") event from start_us to now with optional detail. */
 void
 ns_trace_complete(const char *category, const char *name, gint64 start_us,
                   const char *detail)

@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — @font-face web font loader.
+/* Nordstjernen Web Browser — @font-face web font loader: fetch, WOFF/WOFF2 unpack, install.
+ * Caches files on disk, adds them to fontconfig under the CSS family, wakes idle waiters.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -55,6 +56,7 @@ ns_font_pending_count(void)
     return g_pending_by_url ? g_hash_table_size(g_pending_by_url) : 0;
 }
 
+/* Registers a one-shot callback to run when no web font downloads are pending. */
 void
 ns_font_add_idle_cb(ns_font_idle_cb cb, gpointer user_data)
 {
@@ -78,6 +80,7 @@ ns_font_remove_idle_cb(ns_font_idle_cb cb, gpointer user_data)
     }
 }
 
+/* Runs and clears the idle waiters once no font fetches remain pending. */
 static void
 ns_font_notify_idle(void)
 {
@@ -102,12 +105,14 @@ ns_font_pending_free(gpointer data)
     g_free(p);
 }
 
+/* Builds the family+URL key for the loaded-font table; caller frees. */
 static char *
 ns_font_entry_key(const char *family, const char *url)
 {
     return g_strdup_printf("%s\x1f%s", family, url ? url : "");
 }
 
+/* Creates font registries and the webfonts cache dir, and registers the paint font oracle. */
 void
 ns_font_init(void)
 {
@@ -141,6 +146,7 @@ ns_font_generation(void)
     return g_font_generation;
 }
 
+/* Returns TRUE if any web font for the CSS family has finished loading. */
 gboolean
 ns_font_family_loaded(const char *family)
 {
@@ -156,6 +162,7 @@ ns_font_family_loaded(const char *family)
     return FALSE;
 }
 
+/* Returns the lowercased file extension of a URL path in buf, or ".bin". */
 static const char *
 ns_font_extension_for(const char *url, char *buf, gsize buflen)
 {
@@ -175,6 +182,7 @@ ns_font_extension_for(const char *url, char *buf, gsize buflen)
     return buf;
 }
 
+/* Sniffs TrueType, OpenType, TTC and WOFF/WOFF2 signatures. */
 static gboolean
 ns_font_bytes_look_like_font(const guint8 *d, gsize len)
 {
@@ -211,6 +219,7 @@ ns_put_be32(guint8 *p, guint32 v)
     p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = (guint8)v;
 }
 
+/* Decodes WOFF/WOFF2 via FreeType and rebuilds a plain sfnt; caller frees. */
 static guint8 *
 ns_font_woff_to_sfnt(const guint8 *data, gsize len, gsize *out_len,
                      gboolean *out_cff)
@@ -313,6 +322,7 @@ out:
 }
 #endif
 
+/* Returns the cache file path from a sanitized family and a URL hash; caller frees. */
 static char *
 ns_font_cache_path_for(const char *family, const char *url,
                        const char *forced_ext)
@@ -341,6 +351,7 @@ typedef struct ns_font_fetch_ctx {
 } ns_font_fetch_ctx;
 
 #ifdef NS_HAVE_FONTCONFIG
+/* Adds a font file to fontconfig, aliased to the CSS family, and refreshes the font map. */
 static void
 ns_font_install_file(const char *path, const char *css_family)
 {
@@ -373,6 +384,7 @@ ns_font_install_file(const char *path, const char *css_family)
 }
 #endif
 
+/* Font fetch completion: validates, converts WOFF, caches and installs for each family. */
 static void
 ns_font_on_fetched(GObject *src, GAsyncResult *res, gpointer user_data)
 {
@@ -451,6 +463,7 @@ ns_font_on_fetched(GObject *src, GAsyncResult *res, gpointer user_data)
     ns_font_notify_idle();
 }
 
+/* Starts loading an @font-face source, sharing one fetch per URL across families. */
 void
 ns_font_request(const char *family, const char *src_url, const char *base_url,
                 ns_fetch_policy *policy)

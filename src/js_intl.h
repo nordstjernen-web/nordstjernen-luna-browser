@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — native ECMA-402 (Intl) implementation for the QuickJS engine.
+/* Nordstjernen Web Browser — installs the native Intl namespace into a QuickJS realm.
+ * Also overrides toLocaleString, toLocale*String and localeCompare on builtins.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

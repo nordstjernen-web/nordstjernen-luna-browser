@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — HTML helper utilities shared across the lexbor frontend.
+/* Nordstjernen Web Browser — document-loading helpers around the HTML and XML parsers.
+ * MIME dispatch, charset detection and decoding, serialization escapes, image and JSON viewers.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -18,6 +19,7 @@ ns_html_append_digits(GString *num, const char **p)
     while (g_ascii_isdigit(**p)) g_string_append_c(num, *(*p)++);
 }
 
+/* HTML "rules for parsing floating-point number values"; FALSE if invalid or non-finite. */
 gboolean
 ns_html_parse_float(const char *s, double *out)
 {
@@ -57,6 +59,7 @@ ns_html_parse_float(const char *s, double *out)
     return TRUE;
 }
 
+/* Returns the lowercased MIME type essence without parameters, default text/html. */
 char *
 ns_html_mime_essence(const char *content_type)
 {
@@ -75,6 +78,7 @@ ns_html_mime_essence(const char *content_type)
     return essence;
 }
 
+/* Returns TRUE for text/xml, application/xml and any +xml MIME type. */
 gboolean
 ns_html_mime_is_xml(const char *content_type)
 {
@@ -84,6 +88,7 @@ ns_html_mime_is_xml(const char *content_type)
            g_str_has_suffix(essence, "+xml");
 }
 
+/* Parses as XML for XML MIME types (with an error page on failure), else as HTML. */
 ns_node *
 ns_html_parse_document(const char *input, gssize len,
                        const char *content_type)
@@ -99,6 +104,7 @@ ns_html_parse_document(const char *input, gssize len,
     return ns_xml_parse(error_document, sizeof error_document - 1);
 }
 
+/* Returns TRUE for HTML void elements, which have no end tag. */
 gboolean
 ns_html_is_void(const char *tag)
 {
@@ -115,6 +121,7 @@ ns_html_is_void(const char *tag)
     return FALSE;
 }
 
+/* Returns TRUE for elements whose content is serialized without escaping. */
 gboolean
 ns_html_is_raw_text(const char *tag)
 {
@@ -130,6 +137,7 @@ ns_html_is_raw_text(const char *tag)
     return FALSE;
 }
 
+/* Appends s with &, <, > (optionally ") escaped and U+00A0 as &nbsp;. */
 void
 ns_html_escape_append(GString *out, const char *s, gboolean escape_quotes)
 {
@@ -163,6 +171,7 @@ ns_html_escape_text(const char *s)
     return g_string_free(g, FALSE);
 }
 
+/* Builds the synthetic HTML page that displays a top-level image URL; caller frees. */
 char *
 ns_html_image_document(const char *url)
 {
@@ -229,6 +238,7 @@ json_ws(json_ctx *c)
         c->p++;
 }
 
+/* Emits a JSON string token as a highlighted span; clears ok if unterminated. */
 static void
 json_string(json_ctx *c, const char *cls)
 {
@@ -259,6 +269,7 @@ json_literal(json_ctx *c, const char *lit)
 
 static void json_value(json_ctx *c, int depth);
 
+/* Recursively pretty-prints and syntax-highlights one JSON value as HTML. */
 static void
 json_value(json_ctx *c, int depth)
 {
@@ -326,6 +337,7 @@ json_value(json_ctx *c, int depth)
     c->ok = FALSE;
 }
 
+/* Renders JSON as a highlighted, indented HTML viewer page; NULL if it is not valid JSON. */
 char *
 ns_html_json_document(const char *url, const char *json, gsize len)
 {
@@ -345,6 +357,7 @@ ns_html_json_document(const char *url, const char *json, gsize len)
     return html;
 }
 
+/* Finds a "charset=" value in a header or markup prefix; caller frees. */
 static char *
 charset_value_in(const char *s, gsize len)
 {
@@ -372,6 +385,7 @@ charset_report(char **charset_out, const char *name)
     if (charset_out && !*charset_out) *charset_out = g_strdup(name);
 }
 
+/* Resolves the charset from Content-Type or the first 1024 bytes; UTF-16 maps to UTF-8. */
 char *
 ns_html_declared_charset(const char *body, gsize len, const char *content_type)
 {
@@ -401,6 +415,7 @@ decode_with(const char *encoding, const char *body, gsize len,
     return out;
 }
 
+/* Decodes a document body via BOM, declared charset, UTF-8 check or uchardet sniffing. */
 char *
 ns_html_decode_body_full(const char *body, gsize len,
                          const char *content_type, char **charset_out)

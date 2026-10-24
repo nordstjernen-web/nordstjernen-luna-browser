@@ -1,9 +1,7 @@
 /* Nordstjernen Web Browser — the text layer the engine talks to.
+ * Wraps web-text-lib, the in-tree Pango fork; the engine reaches text shaping only through here.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * Text is shaped and laid out by web-text-lib (src/web-text-lib/), the
- * in-tree Pango fork; the engine reaches it only through this header.
  */
 
 #ifndef NS_PANGO_H

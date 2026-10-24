@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — GTK view over the page engine, driven on the engine thread.
+ * Posts load, render, input and find requests; blits frames and damage; print, devtools.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -30,6 +31,7 @@
 #include <unistd.h>
 #endif
 
+/* Page settle time in ms from the env override (0..10000), else NS_PROC_SETTLE_MS. */
 static int
 pv_settle_ms(void)
 {
@@ -277,6 +279,7 @@ set_accessible_label(GtkWidget *w, const char *label)
                                    GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
 }
 
+/* Adds the two hourglass bulb outlines to the path, offset by (ox, oy) on a 32px grid. */
 static void
 hourglass_bulbs_path(cairo_t *cr, double ox, double oy)
 {
@@ -305,6 +308,7 @@ hourglass_caps_path(cairo_t *cr, double ox, double oy)
     cairo_line_to(cr, 22.3 + ox, 25.8 + oy);
 }
 
+/* Renders the 32x32 hourglass cursor image into a new GdkTexture; NULL on failure. */
 static GdkTexture *
 hourglass_texture(void)
 {
@@ -396,6 +400,7 @@ hourglass_texture(void)
     return texture;
 }
 
+/* Lazily builds and caches the hourglass cursor, falling back to the themed "wait" cursor. */
 static GdkCursor *
 busy_hourglass_cursor(NsProcView *v)
 {
@@ -416,6 +421,7 @@ busy_hourglass_cursor(NsProcView *v)
     return v->hourglass_cursor;
 }
 
+/* Sets a CSS cursor by name with a fallback table for names GDK themes often lack. */
 static void
 pv_set_named_cursor(GtkWidget *w, const char *name)
 {
@@ -460,6 +466,7 @@ pv_set_named_cursor(GtkWidget *w, const char *name)
         g_object_unref(fb_cur);
 }
 
+/* Marks the view busy and shows the hourglass (or "wait") cursor on the drawing area. */
 static void
 set_busy_cursor(NsProcView *v)
 {
@@ -486,6 +493,7 @@ pv_set_video_layers(NsProcView *v, GArray *layers)
     v->video_layers = layers;
 }
 
+/* Final teardown of the view once its refcount drops to zero; frees surfaces and state. */
 static void
 pv_free(NsProcView *v)
 {
@@ -514,6 +522,7 @@ pv_free(NsProcView *v)
 
 static void pv_unref(NsProcView *v) { if (g_atomic_ref_count_dec(&v->rc)) pv_free(v); }
 
+/* Copies a full engine frame into a new ARGB32 cairo surface; NULL on allocation failure. */
 static cairo_surface_t *
 stage_fill(const unsigned char *px, int w, int h, int stride)
 {
@@ -536,6 +545,7 @@ stage_fill(const unsigned char *px, int w, int h, int stride)
     return s;
 }
 
+/* Copies damage rects into one surface covering their bounding box; returns its origin. */
 static cairo_surface_t *
 stage_patch(const unsigned char *px, int stride, const int *rects, int n,
             int *out_x, int *out_y)
@@ -588,6 +598,7 @@ clear_busy_cursor(NsProcView *v)
         gtk_widget_set_cursor_from_name(v->area, NULL);
 }
 
+/* Clears the loading flag and emits LOADING "0" if a load was in progress. */
 static void
 finish_loading(NsProcView *v)
 {
@@ -597,6 +608,7 @@ finish_loading(NsProcView *v)
     }
 }
 
+/* Drops in-flight and pending renders by bumping the sequence and ends the loading state. */
 void
 ns_proc_view_stop(NsProcView *v)
 {
@@ -611,6 +623,7 @@ ns_proc_view_stop(NsProcView *v)
 
 static gboolean on_result(gpointer data);
 
+/* Blits a damage patch onto the cached frame if generations match; FALSE to refetch. */
 static gboolean
 apply_patch(NsProcView *v, const Res *res)
 {
@@ -671,6 +684,7 @@ req_free(Req *req)
     g_free(req);
 }
 
+/* Engine thread: opens the URL in the page session and posts a RES_PAGE result. */
 static void
 run_load(NsProcView *v, ns_page_session *s, Req *req)
 {
@@ -692,6 +706,7 @@ run_load(NsProcView *v, ns_page_session *s, Req *req)
     post(res);
 }
 
+/* Engine thread: renders a frame, staging a damage patch or full copy, plus side data. */
 static void
 run_render(NsProcView *v, ns_page_session *s, Req *req)
 {
@@ -746,6 +761,7 @@ run_render(NsProcView *v, ns_page_session *s, Req *req)
 
 static void arm_anim(NsProcView *v);
 
+/* Main-loop idle that rearms the animation tick after the engine requests a wake. */
 static gboolean
 pv_wake_idle(gpointer data)
 {
@@ -758,12 +774,14 @@ pv_wake_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Engine-thread wake callback; bounces to the main loop holding a view reference. */
 static void
 pv_session_wake(gpointer data)
 {
     g_idle_add(pv_wake_idle, pv_ref(data));
 }
 
+/* Engine-thread dispatcher: executes one Req against the page session and posts its Res. */
 static void
 run_req(gpointer data)
 {
@@ -941,6 +959,7 @@ run_req(gpointer data)
     g_idle_add(pv_unref_idle, v);
 }
 
+/* Queues a request to the engine thread with a view ref; drops it once the view is closed. */
 static void
 push_req(NsProcView *v, Req *req)
 {
@@ -972,6 +991,7 @@ cur_scale(NsProcView *v)
     return v->scale > 0.0 ? v->scale : 1.0;
 }
 
+/* Syncs scrollbar adjustments and visibility with page size and zoomed viewport size. */
 static void
 configure_adjustments(NsProcView *v)
 {
@@ -992,6 +1012,7 @@ configure_adjustments(NsProcView *v)
     v->scroll_y = (int)gtk_adjustment_get_value(v->vadj);
 }
 
+/* Picks up the scrollbar position and requests a re-render. */
 static void
 on_adj_changed(GtkAdjustment *adj, gpointer data)
 {
@@ -1007,6 +1028,7 @@ on_adj_changed(GtkAdjustment *adj, gpointer data)
 
 static void start_render(NsProcView *v);
 
+/* Starts a render, or marks one pending if a render is already in flight. */
 static void
 request_render(NsProcView *v)
 {
@@ -1019,6 +1041,7 @@ request_render(NsProcView *v)
     start_render(v);
 }
 
+/* Posts a REQ_RENDER with current viewport, scroll, zoom, focus and frame-clock time. */
 static void
 start_render(NsProcView *v)
 {
@@ -1051,6 +1074,7 @@ on_area_focus_notify(GObject *object, GParamSpec *pspec, gpointer data)
     request_render(v);
 }
 
+/* Advances each video layer to the frame due at now; queues a redraw if any changed. */
 static void
 present_video_layers(NsProcView *v, gint64 now)
 {
@@ -1073,6 +1097,7 @@ video_texture_release(void *data)
     ns_texture_unref(data);
 }
 
+/* Wraps a video texture in a cached cairo surface holding a texture ref; marks it used. */
 static cairo_surface_t *
 video_surface_for(NsProcView *v, ns_texture *tex, GHashTable *used)
 {
@@ -1107,6 +1132,7 @@ video_surface_unused(gpointer key, gpointer value, gpointer used)
     return !g_hash_table_contains(used, key);
 }
 
+/* Paints video layers over the frame, scaled into their rects; evicts unused surface cache. */
 static void
 draw_video_layers(NsProcView *v, cairo_t *cr)
 {
@@ -1140,6 +1166,7 @@ draw_video_layers(NsProcView *v, cairo_t *cr)
     g_hash_table_destroy(used);
 }
 
+/* Frame-clock tick: presents video, then re-renders at 60Hz if animating else at caret rate. */
 static gboolean
 anim_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data)
 {
@@ -1163,6 +1190,7 @@ anim_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data)
     return G_SOURCE_CONTINUE;
 }
 
+/* Installs the animation tick callback on the drawing area if not already armed. */
 static void
 arm_anim(NsProcView *v)
 {
@@ -1188,6 +1216,7 @@ static void build_search_bar(NsProcView *v);
 static void console_append(NsProcView *v, const char *text);
 static void console_set_open(NsProcView *v, gboolean open);
 
+/* Starts a link query or coalesces it as pending; a hover never overwrites a pending click. */
 static void
 request_link(NsProcView *v, int x, int y, LinkAct action)
 {
@@ -1222,6 +1251,7 @@ start_link(NsProcView *v, int x, int y, LinkAct action)
 
 static void start_hover(NsProcView *v, int x, int y);
 
+/* Starts a hover query, or records the latest coordinates as pending if one is in flight. */
 static void
 request_hover(NsProcView *v, int x, int y)
 {
@@ -1250,6 +1280,7 @@ start_hover(NsProcView *v, int x, int y)
     push_req(v, req);
 }
 
+/* Maps a GDK keyval to a DOM KeyboardEvent.key string (printable char or named key). */
 static const char *
 keyval_js_key(guint keyval, char *buf, size_t bufsz)
 {
@@ -1287,6 +1318,7 @@ keyval_js_key(guint keyval, char *buf, size_t bufsz)
     }
 }
 
+/* Maps a GDK keyval to a DOM KeyboardEvent.code (KeyA, Digit0, ArrowUp...); "" if none. */
 static const char *
 keyval_js_code(guint keyval, char *buf, size_t bufsz)
 {
@@ -1323,6 +1355,7 @@ keyval_js_code(guint keyval, char *buf, size_t bufsz)
     }
 }
 
+/* Maps a GDK keyval to the legacy DOM keyCode; 0 when unmapped. */
 static int
 keyval_js_keycode(guint keyval)
 {
@@ -1352,6 +1385,7 @@ keyval_js_keycode(guint keyval)
     }
 }
 
+/* Posts a REQ_KEY with DOM key/code/keyCode and modifiers, plus optional fallback scroll. */
 static void
 start_key_full(NsProcView *v, int kind, guint keyval, GdkModifierType state,
                int fallback_scroll, double fallback_x, double fallback_y)
@@ -1382,6 +1416,7 @@ start_key(NsProcView *v, int kind, guint keyval, GdkModifierType state)
     start_key_full(v, kind, keyval, state, 0, 0, 0);
 }
 
+/* Posts committed IME/text input as a REQ_KEY carrying the text in key. */
 static void
 start_key_text(NsProcView *v, int kind, const char *text)
 {
@@ -1447,6 +1482,7 @@ start_click(NsProcView *v, int x, int y, int mods)
     push_req(v, req);
 }
 
+/* Posts dropped file paths (newline-joined, ownership taken) to the engine at (x, y). */
 static void
 start_dropfiles(NsProcView *v, int x, int y, char *paths)
 {
@@ -1462,6 +1498,7 @@ start_dropfiles(NsProcView *v, int x, int y, char *paths)
     push_req(v, req);
 }
 
+/* Sends a viewport resize to the engine, coalescing while one is in flight. */
 static void
 start_viewport(NsProcView *v, int width, int height)
 {
@@ -1480,6 +1517,7 @@ start_viewport(NsProcView *v, int width, int height)
     push_req(v, req);
 }
 
+/* Issues a viewport update only when the drawing area size changed; TRUE if sent. */
 static gboolean
 maybe_update_viewport(NsProcView *v)
 {
@@ -1497,6 +1535,7 @@ maybe_update_viewport(NsProcView *v)
     return TRUE;
 }
 
+/* Appends a URL to back/forward history, truncating forward entries; skips duplicates. */
 static void
 push_history(NsProcView *v, const char *url)
 {
@@ -1512,6 +1551,7 @@ push_history(NsProcView *v, const char *url)
     post_emit(v, NS_PROC_EVT_HISTORY, NULL);
 }
 
+/* Replaces the current history entry's URL in place (replaceState-style). */
 static void
 replace_history(NsProcView *v, const char *url)
 {
@@ -1524,6 +1564,7 @@ replace_history(NsProcView *v, const char *url)
 
 static void pv_perm_resolve(NsProcView *v, gboolean allow);
 
+/* Starts a navigation: invalidates all in-flight requests, resets state, posts REQ_LOAD. */
 static void
 do_load(NsProcView *v, const char *url, gboolean record, gboolean history,
         gboolean user_activated)
@@ -1633,6 +1674,7 @@ ns_proc_view_forward(NsProcView *v)
     do_load(v, g_ptr_array_index(v->history, v->hist_index), FALSE, TRUE, TRUE);
 }
 
+/* Reloads the current history entry, or the current URL when history is empty. */
 void
 ns_proc_view_reload(NsProcView *v)
 {
@@ -1661,6 +1703,7 @@ void ns_proc_view_focus(NsProcView *v)
         gtk_widget_grab_focus(v->area);
 }
 
+/* Clamps zoom to the permille range, emits the percent and re-renders if changed. */
 static void
 set_zoom(NsProcView *v, double scale)
 {
@@ -1687,6 +1730,7 @@ static const int k_zoom_ladder_percent[] = {
     400, 500
 };
 
+/* Moves zoom to the next step up or down the fixed browser zoom ladder. */
 static void
 zoom_step(NsProcView *v, int direction)
 {
@@ -1719,6 +1763,7 @@ ns_proc_view_zoom_percent(NsProcView *v)
     return v ? (int)(cur_scale(v) * 100.0 + 0.5) : 100;
 }
 
+/* Answers the pending permission prompt to the engine and hides the permission bar. */
 static void
 pv_perm_resolve(NsProcView *v, gboolean allow)
 {
@@ -1754,6 +1799,7 @@ on_perm_deny(GtkButton *btn, gpointer data)
     pv_perm_resolve(data, FALSE);
 }
 
+/* Shows the camera/microphone permission bar for an origin, denying any other pending one. */
 static void
 pv_perm_bar_show(NsProcView *v, ReqType kind, const char *origin)
 {
@@ -1773,6 +1819,7 @@ pv_perm_bar_show(NsProcView *v, ReqType kind, const char *origin)
     gtk_revealer_set_reveal_child(GTK_REVEALER(v->perm_revealer), TRUE);
 }
 
+/* Main-loop handler for engine results; drops stale seqs, updates UI, frees the Res. */
 static gboolean
 on_result(gpointer data)
 {
@@ -2163,6 +2210,7 @@ done:
     return G_SOURCE_REMOVE;
 }
 
+/* Presents the cached frame with video layers beneath; white fill when it doesn't cover. */
 static void
 on_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
         gpointer data)
@@ -2186,6 +2234,7 @@ on_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
     ns_trace_complete("frame", "present", trace_start, NULL);
 }
 
+/* Runs a load deferred for lack of size, else updates viewport and re-renders. */
 static void
 on_resize(GtkDrawingArea *area, int width, int height, gpointer data)
 {
@@ -2209,6 +2258,7 @@ on_resize(GtkDrawingArea *area, int width, int height, gpointer data)
     }
 }
 
+/* Sends a wheel scroll at the pointer to the engine, accumulating deltas while in flight. */
 static void
 start_scroll(NsProcView *v, double dx, double dy)
 {
@@ -2232,6 +2282,7 @@ start_scroll(NsProcView *v, double dx, double dy)
     push_req(v, req);
 }
 
+/* Ctrl+wheel zooms; otherwise forwards the scroll to the engine. */
 static gboolean
 on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpointer data)
 {
@@ -2289,6 +2340,7 @@ on_print_begin(GtkPrintOperation *op, GtkPrintContext *ctx, gpointer data)
     gtk_print_operation_set_n_pages(op, (int)job->pages->len);
 }
 
+/* Paints one rendered print page, scaled from CSS px to the print context width. */
 static void
 on_print_draw(GtkPrintOperation *op, GtkPrintContext *ctx, int page_nr,
               gpointer data)
@@ -2307,6 +2359,7 @@ on_print_draw(GtkPrintOperation *op, GtkPrintContext *ctx, int page_nr,
     cairo_restore(cr);
 }
 
+/* Runs a GTK print dialog over pre-rendered page surfaces; takes ownership of pages. */
 static void
 print_run(NsProcView *v, GPtrArray *pages, const ns_print_setup *setup)
 {
@@ -2350,6 +2403,7 @@ print_run(NsProcView *v, GPtrArray *pages, const ns_print_setup *setup)
 
 typedef struct { NsProcView *view; gboolean pdf; } ExportCtx;
 
+/* Save dialog callback: posts REQ_EXPORT to a temp runtime file to be copied to the choice. */
 static void
 on_save_dialog_done(GObject *src, GAsyncResult *res, gpointer ud)
 {
@@ -2380,6 +2434,7 @@ on_save_dialog_done(GObject *src, GAsyncResult *res, gpointer ud)
     g_free(c);
 }
 
+/* Opens a save dialog for exporting the page as PDF or PNG, seeded with the page title. */
 static void
 view_save(NsProcView *v, gboolean pdf)
 {
@@ -2498,6 +2553,7 @@ ctx_action_enable(NsProcView *v, const char *name, gboolean on)
         g_simple_action_set_enabled(G_SIMPLE_ACTION(act), on);
 }
 
+/* Registers the "ctx." context-menu action group on the drawing area. */
 static void
 ctx_install_actions(NsProcView *v)
 {
@@ -2520,6 +2576,7 @@ ctx_install_actions(NsProcView *v)
                                    G_ACTION_GROUP(v->ctx_actions));
 }
 
+/* Re-presents a mapped popover from idle so GTK recomputes its size and position. */
 static gboolean
 popover_present_idle(gpointer data)
 {
@@ -2537,6 +2594,7 @@ on_popover_menu_mapped(GtkWidget *pop, gpointer user_data)
     g_idle_add(popover_present_idle, g_object_ref(pop));
 }
 
+/* Makes a popover re-present itself once mapped so it fits after its contents settle. */
 void
 ns_popover_menu_fit(GtkWidget *popover)
 {
@@ -2544,6 +2602,7 @@ ns_popover_menu_fit(GtkWidget *popover)
     g_signal_connect(popover, "map", G_CALLBACK(on_popover_menu_mapped), NULL);
 }
 
+/* Builds and pops up the page context menu at the click point, with link/selection items. */
 static void
 show_context_menu(NsProcView *v, const char *href)
 {
@@ -2596,6 +2655,7 @@ show_context_menu(NsProcView *v, const char *href)
     gtk_popover_popup(GTK_POPOVER(v->ctx_popover));
 }
 
+/* Right-click: has the engine dispatch contextmenu before any menu is shown. */
 static void
 on_secondary_pressed(GtkGestureClick *gesture, int n_press, double x, double y,
                      gpointer data)
@@ -2613,6 +2673,7 @@ on_secondary_pressed(GtkGestureClick *gesture, int n_press, double x, double y,
     request_link(v, px, py, ACT_CONTEXT);
 }
 
+/* Posts a find-in-page query (0 = refresh, 1 = next, 2 = previous) from the current scroll. */
 static void
 request_find(NsProcView *v, int direction)
 {
@@ -2629,6 +2690,7 @@ request_find(NsProcView *v, int direction)
     push_req(v, req);
 }
 
+/* Reveals the find bar, focuses and selects its text, and re-runs any existing query. */
 static void
 search_open(NsProcView *v)
 {
@@ -2642,6 +2704,7 @@ search_open(NsProcView *v)
         request_find(v, 0);
 }
 
+/* Hides the find bar, clears highlights with an empty query and refocuses the page. */
 static void
 search_close(NsProcView *v)
 {
@@ -2676,6 +2739,7 @@ static void
 on_search_prev(GtkWidget *w, gpointer data)
 { (void)w; request_find(data, 2); }
 
+/* Closes the find bar if visible; TRUE if it was open (so Esc was consumed). */
 gboolean
 ns_proc_view_find_close(NsProcView *view)
 {
@@ -2694,6 +2758,7 @@ static void
 on_search_close_clicked(GtkButton *b, gpointer data)
 { (void)b; search_close(data); }
 
+/* Press: Ctrl or middle button navigates links, else click and shift/word/line select. */
 static void
 on_pressed(GtkGestureClick *gesture, int n_press, double x, double y,
            gpointer data)
@@ -2734,6 +2799,7 @@ on_pressed(GtkGestureClick *gesture, int n_press, double x, double y,
     }
 }
 
+/* Sends pointer release to the engine and refreshes the hover link state. */
 static void
 on_released(GtkGestureClick *gesture, int n_press, double x, double y,
             gpointer data)
@@ -2749,6 +2815,7 @@ on_released(GtkGestureClick *gesture, int n_press, double x, double y,
     }
 }
 
+/* Tracks the pointer and sends a coalesced hover query in page coordinates. */
 static void
 on_motion(GtkEventControllerMotion *ctrl, double x, double y, gpointer data)
 {
@@ -2775,6 +2842,7 @@ push_scrollbar(NsProcView *v, int kind, int px, int py)
     push_req(v, req);
 }
 
+/* Starts a drag by probing whether the press hit a page scrollbar. */
 static void
 on_drag_begin(GtkGestureDrag *g, double sx, double sy, gpointer data)
 {
@@ -2794,6 +2862,7 @@ on_drag_begin(GtkGestureDrag *g, double sx, double sy, gpointer data)
     }
 }
 
+/* Drag: moves a grabbed scrollbar, buffers while probing, else extends the text selection. */
 static void
 on_drag_update(GtkGestureDrag *g, double ox, double oy, gpointer data)
 {
@@ -2830,6 +2899,7 @@ on_drag_update(GtkGestureDrag *g, double ox, double oy, gpointer data)
     v->has_selection = TRUE;
 }
 
+/* Ends a scrollbar drag or probe in the engine. */
 static void
 on_drag_end(GtkGestureDrag *g, double ox, double oy, gpointer data)
 {
@@ -2845,6 +2915,7 @@ on_drag_end(GtkGestureDrag *g, double ox, double oy, gpointer data)
     }
 }
 
+/* Clipboard read callback: delivers pasted text to the page as text input. */
 static void
 on_paste_text_ready(GObject *src, GAsyncResult *res, gpointer data)
 {
@@ -2856,6 +2927,7 @@ on_paste_text_ready(GObject *src, GAsyncResult *res, gpointer data)
     pv_unref(v);
 }
 
+/* Key press: devtools/zoom/find/clipboard shortcuts, else DOM key events, scroll fallback. */
 static gboolean
 on_key(GtkEventControllerKey *ctrl, guint keyval, guint keycode,
        GdkModifierType state, gpointer data)
@@ -2954,6 +3026,7 @@ on_key_released(GtkEventControllerKey *ctrl, guint keyval, guint keycode,
         start_key(v, 1, keyval, state);
 }
 
+/* Tears down UI when the drawing area dies and posts REQ_CLOSE to free the session. */
 static void
 on_area_destroy(GtkWidget *widget, gpointer data)
 {
@@ -2997,6 +3070,7 @@ on_area_destroy(GtkWidget *widget, gpointer data)
     pv_unref(v);
 }
 
+/* Appends text to the devtools console buffer and scrolls it to the end. */
 static void
 console_append(NsProcView *v, const char *text)
 {
@@ -3014,6 +3088,7 @@ console_append(NsProcView *v, const char *text)
     }
 }
 
+/* Periodically requests new console output while the devtools window is open. */
 static gboolean
 console_poll_cb(gpointer data)
 {
@@ -3026,6 +3101,7 @@ console_poll_cb(gpointer data)
     return G_SOURCE_CONTINUE;
 }
 
+/* Echoes the entry text to the console and posts it to the engine for JS evaluation. */
 static void
 on_console_eval(GtkEntry *entry, gpointer data)
 {
@@ -3045,6 +3121,7 @@ on_console_eval(GtkEntry *entry, gpointer data)
 
 static void build_console_window(NsProcView *v);
 
+/* Shows or hides the devtools window, starting or stopping the console poll timer. */
 static void
 console_set_open(NsProcView *v, gboolean open)
 {
@@ -3073,6 +3150,7 @@ console_set_open(NsProcView *v, gboolean open)
     }
 }
 
+/* Requests the network/performance/layout/DOM dump for a devtools tab. */
 static void
 console_request_dump(NsProcView *v, int tab)
 {
@@ -3101,6 +3179,7 @@ console_current_tab(NsProcView *v)
     return gtk_notebook_get_current_page(GTK_NOTEBOOK(v->console_notebook));
 }
 
+/* Clears the text buffer of the currently selected devtools tab. */
 static void
 on_console_clear(GtkButton *b, gpointer data)
 {
@@ -3137,6 +3216,7 @@ on_console_notebook_switch(GtkNotebook *nb, GtkWidget *page, guint num,
     console_request_dump(v, (int)num);
 }
 
+/* Evaluates querySelector on the entered selector and shows its outerHTML (20k cap). */
 static void
 on_inspect_activate(GtkEntry *entry, gpointer data)
 {
@@ -3168,6 +3248,7 @@ on_console_close_request(GtkWindow *win, gpointer data)
     return TRUE;
 }
 
+/* Creates a read-only monospace text view in a scroller; returns the scroller. */
 static GtkWidget *
 console_make_view(GtkWidget **out_view, GtkTextBuffer **out_buffer,
                   gboolean wrap)
@@ -3193,6 +3274,7 @@ console_add_tab(NsProcView *v, GtkWidget *child, const char *title)
                              gtk_label_new(ns_i18n(title)));
 }
 
+/* Builds the devtools window: Console, Network, Performance, Layout and Elements tabs. */
 static void
 build_console_window(NsProcView *v)
 {
@@ -3266,6 +3348,7 @@ build_console_window(NsProcView *v)
                      G_CALLBACK(on_console_close_request), v);
 }
 
+/* Builds the find-in-page bar as a top-right overlay revealer. */
 static void
 build_search_bar(NsProcView *v)
 {
@@ -3322,6 +3405,7 @@ build_search_bar(NsProcView *v)
     gtk_overlay_add_overlay(GTK_OVERLAY(v->overlay), v->search_revealer);
 }
 
+/* Builds the camera/microphone permission bar with Allow / Not now / dismiss. */
 static void
 build_perm_bar(NsProcView *v)
 {
@@ -3364,6 +3448,7 @@ build_perm_bar(NsProcView *v)
     gtk_revealer_set_child(GTK_REVEALER(v->perm_revealer), frame);
 }
 
+/* Collects dropped local file paths and forwards them to the page at the drop point. */
 static gboolean
 on_file_drop(GtkDropTarget *target, const GValue *value, double x, double y,
              gpointer data)
@@ -3398,6 +3483,7 @@ on_file_drop(GtkDropTarget *target, const GValue *value, double x, double y,
     return TRUE;
 }
 
+/* Creates the page view widget tree, scrollbars, overlays and all input controllers. */
 NsProcView *
 ns_proc_view_new(void)
 {

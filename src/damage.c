@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — maps changed elements and images to the page rectangles they repaint.
+ * Also scans for paint hazards (fixed, sticky, 3D) that force full repaint or limit scroll blits.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -35,6 +36,7 @@ style_keyword_is(const ns_style *s, ns_css_prop p, const char *kw)
     return v && strcmp(v, kw) == 0;
 }
 
+/* Returns TRUE if the box has an effective static or animated transform; flags 3D ones. */
 static gboolean
 box_has_transform(const ns_box *b, ns_anim *anim, gboolean *three_d)
 {
@@ -61,6 +63,7 @@ box_has_perspective(const ns_box *b)
     return v && v->kind == NS_CSS_V_LENGTH && v->u.length.v > 0;
 }
 
+/* Returns TRUE if paint may move the box from its layout position (sticky, 3D, transform). */
 static gboolean
 box_moves_at_paint(const ns_box *b, ns_anim *anim)
 {
@@ -73,6 +76,7 @@ box_moves_at_paint(const ns_box *b, ns_anim *anim)
     return box_has_transform(b, anim, NULL);
 }
 
+/* Returns TRUE if any background layer has background-attachment: fixed. */
 static gboolean
 box_has_fixed_background(const ns_box *b)
 {
@@ -88,6 +92,7 @@ box_has_fixed_background(const ns_box *b)
     return FALSE;
 }
 
+/* Returns TRUE for the root, html or body box, whose background paints the canvas. */
 static gboolean
 box_is_canvas_root(const ns_box *b)
 {
@@ -95,6 +100,7 @@ box_is_canvas_root(const ns_box *b)
            ns_node_is_element_named(b->dom, "body");
 }
 
+/* Returns TRUE if img is in the changed set, recording that it was seen in layout. */
 static gboolean
 image_changed(damage_walk *w, gconstpointer img)
 {
@@ -103,6 +109,7 @@ image_changed(damage_walk *w, gconstpointer img)
     return TRUE;
 }
 
+/* Returns TRUE if any image, background, marker or video the box paints has changed. */
 static gboolean
 box_uses_changed_image(damage_walk *w, const ns_box *b)
 {
@@ -128,6 +135,7 @@ box_uses_changed_image(damage_walk *w, const ns_box *b)
     return used;
 }
 
+/* Computes the box's border-box rectangle in layout coordinates. */
 static void
 box_border_rect(const ns_box *b, double *x, double *y, double *w, double *h)
 {
@@ -139,6 +147,7 @@ box_border_rect(const ns_box *b, double *x, double *y, double *w, double *h)
          b->padding.bottom + b->border.bottom;
 }
 
+/* Appends the box's inflated, offset border rect; non-finite geometry forces full repaint. */
 static void
 damage_add_box(damage_walk *w, const ns_box *b, double dx, double dy,
                gboolean fixed)
@@ -157,6 +166,7 @@ damage_add_box(damage_walk *w, const ns_box *b, double dx, double dy,
     g_array_append_val(w->rects, r);
 }
 
+/* Walks boxes collecting damage for changed nodes/images; moving boxes force full repaint. */
 static void
 damage_walk_box(damage_walk *w, const ns_box *b, double dx, double dy,
                 gboolean fixed, gboolean moved)
@@ -201,6 +211,7 @@ damage_walk_box(damage_walk *w, const ns_box *b, double dx, double dy,
     }
 }
 
+/* Maps changed nodes and images to repaint rects; FALSE when a full repaint is needed. */
 gboolean
 ns_damage_resolve(const ns_box *root, ns_js *js, ns_anim *anim,
                   GHashTable *nodes, GHashTable *images, GArray *out_rects)
@@ -230,6 +241,7 @@ typedef struct paint_extent {
     double overflow;
 } paint_extent;
 
+/* Returns how far outer box-shadows can paint beyond the border box, padding em units. */
 static double
 style_shadow_overflow(const ns_style *s)
 {
@@ -248,6 +260,7 @@ style_shadow_overflow(const ns_style *s)
     return out;
 }
 
+/* Accumulates the border-box and paint extent of a subtree, stopping at scrollers. */
 static void
 subtree_extent(const ns_box *b, double dx, double dy, paint_extent *e)
 {
@@ -281,6 +294,7 @@ subtree_extent(const ns_box *b, double dx, double dy, paint_extent *e)
     }
 }
 
+/* Records sticky, 3D, fixed-background use and the painted band of each fixed subtree. */
 static void
 hazards_walk(const ns_box *b, ns_anim *anim, ns_paint_hazards *h,
              gboolean in_fixed)
@@ -320,6 +334,7 @@ hazards_walk(const ns_box *b, ns_anim *anim, ns_paint_hazards *h,
                      anim, h, in_fixed);
 }
 
+/* Scans the box tree for paint hazards that limit partial repaint and scroll blits. */
 void
 ns_paint_hazards_scan(const ns_box *root, ns_anim *anim, ns_paint_hazards *out)
 {
@@ -336,6 +351,7 @@ ns_paint_hazards_clear(ns_paint_hazards *hazards)
     memset(hazards, 0, sizeof *hazards);
 }
 
+/* Builds the box's transform matrix about its transform-origin; FALSE if none. */
 static gboolean
 box_local_transform(const ns_box *b, ns_anim *anim, ns_mat4 *m)
 {
@@ -370,6 +386,7 @@ box_local_transform(const ns_box *b, ns_anim *anim, ns_mat4 *m)
     return TRUE;
 }
 
+/* Extends an extent by a rectangle's four corners mapped through m. */
 static void
 extent_add_corners(paint_extent *e, const ns_mat4 *m, double x0, double y0,
                    double x1, double y1)
@@ -387,6 +404,7 @@ extent_add_corners(paint_extent *e, const ns_mat4 *m, double x0, double y0,
     }
 }
 
+/* Accumulates a subtree's transformed paint extent; FALSE on fixed, sticky or 3D parts. */
 static gboolean
 subtree_visual_extent(const ns_box *b, ns_anim *anim, const ns_mat4 *m,
                       paint_extent *e, gboolean root)
@@ -437,6 +455,7 @@ subtree_visual_extent(const ns_box *b, ns_anim *anim, const ns_mat4 *m,
     return TRUE;
 }
 
+/* Returns the parent's inline-atomic entry that places this box, or NULL. */
 static const ns_inline_atomic *
 box_atomic_slot(const ns_box *b)
 {
@@ -450,6 +469,7 @@ box_atomic_slot(const ns_box *b)
     return NULL;
 }
 
+/* Computes a box's on-screen paint rect through ancestor transforms and scrolls. */
 gboolean
 ns_damage_box_visual_rect(const ns_box *b, ns_anim *anim, ns_damage_rect *out)
 {
@@ -514,6 +534,7 @@ ns_damage_box_visual_rect(const ns_box *b, ns_anim *anim, ns_damage_rect *out)
     return TRUE;
 }
 
+/* Appends visual rects for boxes of the given nodes; FALSE if any rect is unresolvable. */
 static gboolean
 nodes_visual_rects_walk(const ns_box *b, ns_anim *anim, GHashTable *nodes,
                         GHashTable *found, GArray *out)
@@ -536,6 +557,7 @@ nodes_visual_rects_walk(const ns_box *b, ns_anim *anim, GHashTable *nodes,
     return TRUE;
 }
 
+/* Collects visual rects of all boxes for the given nodes; FALSE means repaint fully. */
 gboolean
 ns_damage_nodes_visual_rects(const ns_box *root, ns_anim *anim,
                              GHashTable *nodes, GHashTable *found,

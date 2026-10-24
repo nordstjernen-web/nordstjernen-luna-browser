@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — WebExtensions loader and content-script host.
+ * Parses MV2/MV3 manifests, match patterns, storage, declarativeNetRequest and Adblock lists.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -63,6 +64,7 @@ static char *ns_ext_default_dir(void);
 static GHashTable *g_blocked_hosts;
 static GHashTable *g_private_storage;
 
+/* Returns TRUE for the storage areas extensions may use: local, sync and managed. */
 static gboolean
 ns_ext_area_ok(const char *area)
 {
@@ -98,6 +100,7 @@ ns_ext_wildcard(const char *pat, const char *str)
     }
 }
 
+/* Splits a URL into lowercased scheme and host (no userinfo/port) and path; caller frees. */
 static void
 ns_ext_url_split(const char *url, char **scheme, char **host, char **path)
 {
@@ -141,6 +144,7 @@ ns_ext_scheme_generic(const char *scheme)
                       strcmp(scheme, "wss") == 0);
 }
 
+/* Matches a host against a match-pattern host: "*", "*.suffix" (incl. apex) or exact. */
 static gboolean
 ns_ext_host_match(const char *pat, const char *host)
 {
@@ -156,6 +160,7 @@ ns_ext_host_match(const char *pat, const char *host)
     return strcmp(pat, host) == 0;
 }
 
+/* Tests a URL against a WebExtension match pattern, including <all_urls> and "*" scheme. */
 static gboolean
 ns_ext_pattern_match(const char *pattern, const char *url)
 {
@@ -198,6 +203,7 @@ ns_ext_lookup(const char *id)
     return NULL;
 }
 
+/* Finds a loaded extension by its random per-session URL id. */
 static ns_ext *
 ns_ext_lookup_url_id(const char *url_id)
 {
@@ -209,6 +215,7 @@ ns_ext_lookup_url_id(const char *url_id)
     return NULL;
 }
 
+/* Returns the 0600 JSON file for an extension's storage area; NULL in private mode. */
 static char *
 ns_ext_storage_path(const char *id, const char *area)
 {
@@ -226,12 +233,14 @@ ns_ext_storage_path(const char *id, const char *area)
     return g_build_filename(dir, file, NULL);
 }
 
+/* Builds the in-memory private-mode storage key "id\narea"; caller frees. */
 static char *
 ns_ext_storage_key(const char *id, const char *area)
 {
     return g_strconcat(id ? id : "", "\n", area ? area : "", NULL);
 }
 
+/* JS helper: returns an extension's raw manifest JSON, or "{}" if unknown. */
 static JSValue
 ns_ext_js_manifest(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -245,6 +254,7 @@ ns_ext_js_manifest(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* JS helper (runtime.getURL): maps a path inside the extension dir to its extension URL. */
 static JSValue
 ns_ext_js_url(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -277,6 +287,7 @@ ns_ext_js_url(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* JS helper: reads an extension storage area as JSON from disk or private-mode memory. */
 static JSValue
 ns_ext_js_sread(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -301,6 +312,7 @@ ns_ext_js_sread(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* JS helper: writes an extension storage area's JSON to disk or private-mode memory. */
 static JSValue
 ns_ext_js_swrite(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -326,6 +338,7 @@ ns_ext_js_swrite(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, ok);
 }
 
+/* JS helper: returns the runtime.getPlatformInfo os name (win, mac or linux). */
 static JSValue
 ns_ext_js_platform(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -340,6 +353,7 @@ ns_ext_js_platform(JSContext *ctx, JSValueConst this_val,
 #endif
 }
 
+/* JS helper: returns the runtime.getPlatformInfo arch name for the build target. */
 static JSValue
 ns_ext_js_arch(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -356,6 +370,7 @@ ns_ext_js_arch(JSContext *ctx, JSValueConst this_val,
 #endif
 }
 
+/* JS helper: returns the UI language as a BCP 47 tag derived from the locale name. */
 static JSValue
 ns_ext_js_uilang(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -411,6 +426,7 @@ static const char ns_ext_shim_prelude[] =
 
 static const char ns_ext_shim_epilogue[] = "})\n";
 
+/* Returns a string-valued property of obj as a new C string, or NULL; caller frees. */
 static char *
 ns_ext_js_string(JSContext *ctx, JSValueConst obj, const char *key)
 {
@@ -425,6 +441,7 @@ ns_ext_js_string(JSContext *ctx, JSValueConst obj, const char *key)
     return out;
 }
 
+/* Appends each element of a JS array, stringified, to out. */
 static void
 ns_ext_collect_strings(JSContext *ctx, JSValueConst arr, GPtrArray *out)
 {
@@ -458,6 +475,7 @@ ns_ext_real_path(const char *path)
 #endif
 }
 
+/* Resolves rel under base_dir, rejecting paths that escape it; caller frees. */
 static char *
 ns_ext_safe_path(const char *base_dir, const char *rel)
 {
@@ -475,6 +493,7 @@ ns_ext_safe_path(const char *base_dir, const char *rel)
     return canon;
 }
 
+/* Concatenates the files listed under key in a content-script entry; NULL if none read. */
 static char *
 ns_ext_read_files(const char *base_dir, JSContext *ctx, JSValueConst entry,
                   const char *key)
@@ -512,6 +531,7 @@ ns_ext_cs_free(gpointer p)
     g_free(cs);
 }
 
+/* Parses manifest content_scripts into match rules plus inlined JS and CSS. */
 static void
 ns_ext_parse_content_scripts(ns_ext *e, JSContext *ctx, JSValueConst manifest)
 {
@@ -575,6 +595,7 @@ ns_dnr_rule_free(gpointer p)
     g_free(r);
 }
 
+/* Reads a lowercased string list from a DNR rule condition; NULL when absent or empty. */
 static GPtrArray *
 ns_dnr_domains(JSContext *ctx, JSValueConst cond, const char *key)
 {
@@ -594,6 +615,7 @@ ns_dnr_domains(JSContext *ctx, JSValueConst cond, const char *key)
     return out;
 }
 
+/* Parses a declarativeNetRequest block/allow rule and its condition; NULL if unsupported. */
 static ns_dnr_rule *
 ns_dnr_parse_rule(JSContext *ctx, JSValueConst r)
 {
@@ -642,6 +664,7 @@ ns_dnr_parse_rule(JSContext *ctx, JSValueConst r)
     return rule;
 }
 
+/* Loads a DNR rule-resource JSON file from the extension and appends its rules. */
 static void
 ns_ext_load_rule_file(ns_ext *e, JSContext *ctx, const char *path)
 {
@@ -671,6 +694,7 @@ ns_ext_load_rule_file(ns_ext *e, JSContext *ctx, const char *path)
     g_free(raw);
 }
 
+/* Loads every enabled declarative_net_request rule resource from the manifest. */
 static void
 ns_ext_parse_dnr(ns_ext *e, JSContext *ctx, JSValueConst manifest)
 {
@@ -711,6 +735,7 @@ ns_cosmetic_rule_free(gpointer p)
     g_free(c);
 }
 
+/* Splits an Adblock domain list into included and "~"-excluded lowercased domains. */
 static void
 ns_abp_split_domains(const char *spec, char sep,
                      GPtrArray **inc, GPtrArray **exc)
@@ -733,6 +758,7 @@ ns_abp_split_domains(const char *spec, char sep,
     g_strfreev(parts);
 }
 
+/* Maps an Adblock resource-type option to its DNR type name, or NULL if unsupported. */
 static const char *
 ns_abp_type_token(const char *t)
 {
@@ -744,6 +770,7 @@ ns_abp_type_token(const char *t)
     return NULL;
 }
 
+/* Returns TRUE for Adblock options the engine cannot honor, so the filter is dropped. */
 static gboolean
 ns_abp_option_unsupported(const char *o)
 {
@@ -759,6 +786,7 @@ ns_abp_option_unsupported(const char *o)
     return FALSE;
 }
 
+/* Returns TRUE for a plain "||host^" filter that can go in the blocked-host index. */
 static gboolean
 ns_abp_is_simple_host(const char *pat)
 {
@@ -769,6 +797,7 @@ ns_abp_is_simple_host(const char *pat)
     return strlen(pat) > 3;
 }
 
+/* Parses an Adblock network filter into the host index or a DNR-style rule. */
 static void
 ns_abp_parse_network(ns_ext *e, const char *line)
 {
@@ -847,6 +876,7 @@ ns_abp_parse_network(ns_ext *e, const char *line)
     g_ptr_array_add(e->dnr_rules, rule);
 }
 
+/* Parses a "domains##selector" hiding rule, rejecting selectors that could inject CSS. */
 static void
 ns_abp_parse_cosmetic(ns_ext *e, const char *line, const char *sep)
 {
@@ -871,6 +901,7 @@ ns_abp_parse_cosmetic(ns_ext *e, const char *line, const char *sep)
     g_ptr_array_add(e->cosmetic_rules, c);
 }
 
+/* Loads an Adblock-syntax filter list, skipping comments and unsupported cosmetic forms. */
 static void
 ns_ext_load_filter_list(ns_ext *e, const char *path)
 {
@@ -893,6 +924,7 @@ ns_ext_load_filter_list(ns_ext *e, const char *path)
     g_free(raw);
 }
 
+/* Loads the filter lists named by the manifest's northstar_filter_lists key. */
 static void
 ns_ext_parse_filter_lists(ns_ext *e, JSContext *ctx, JSValueConst manifest)
 {
@@ -907,6 +939,7 @@ ns_ext_parse_filter_lists(ns_ext *e, JSContext *ctx, JSValueConst manifest)
     JS_FreeValue(ctx, arr);
 }
 
+/* Returns the gecko extension id from the manifest, else the directory name; caller frees. */
 static char *
 ns_ext_parse_id(JSContext *ctx, JSValueConst manifest, const char *dir)
 {
@@ -992,6 +1025,7 @@ ns_ext_relative_path_is_plain(const char *relative)
     return TRUE;
 }
 
+/* Returns TRUE if a resource path matches one of the extension's web-accessible globs. */
 static gboolean
 ns_ext_is_web_accessible(const ns_ext *e, const char *relative)
 {
@@ -1004,6 +1038,7 @@ ns_ext_is_web_accessible(const ns_ext *e, const char *relative)
     return FALSE;
 }
 
+/* Loads a MV2/MV3 extension from dir: manifest, content scripts, DNR and filter lists. */
 static void
 ns_ext_load_one(const char *dir, JSContext *ctx)
 {
@@ -1051,6 +1086,7 @@ ns_ext_load_one(const char *dir, JSContext *ctx)
     g_ptr_array_add(g_exts, e);
 }
 
+/* Loads root as one extension if it has a manifest, else each subdirectory. */
 static void
 ns_ext_scan_root(const char *root, JSContext *ctx)
 {
@@ -1071,6 +1107,7 @@ ns_ext_scan_root(const char *root, JSContext *ctx)
     g_dir_close(d);
 }
 
+/* Creates extension registries and loads from NS_EXTENSIONS_DIR and the default dir. */
 static void
 ns_ext_do_init(void)
 {
@@ -1110,6 +1147,7 @@ ns_ext_default_dir(void)
                             NS_APP_DIR_NAME "-extensions", NULL);
 }
 
+/* Moves the legacy extensions dir to the new default once and ensures it exists. */
 void
 ns_ext_migrate_default_dir(void)
 {
@@ -1156,6 +1194,7 @@ ns_ext_js_bound(JSContext *ctx, JSValueConst this_val, int argc,
     return r;
 }
 
+/* Builds the native helper object for content scripts, binding id-scoped helpers to ext_id. */
 JSValue
 ns_ext_content_script_helpers(JSContext *ctx, const char *ext_id)
 {
@@ -1183,6 +1222,7 @@ ns_ext_init(void)
     }
 }
 
+/* Appends id with backslashes and double quotes escaped. */
 static void
 ns_ext_append_id(GString *out, const char *id)
 {
@@ -1192,6 +1232,7 @@ ns_ext_append_id(GString *out, const char *id)
     }
 }
 
+/* Appends s as a double-quoted JS string literal with basic escapes. */
 static void
 ns_ext_append_js_string(GString *out, const char *s)
 {
@@ -1230,6 +1271,7 @@ ns_ext_glob_list_matches(GPtrArray *patterns, const char *url)
     return FALSE;
 }
 
+/* Applies matches, exclude_matches, include_globs and exclude_globs to a URL. */
 static gboolean
 ns_ext_content_script_matches(const ns_ext_cs *cs, const char *url)
 {
@@ -1241,6 +1283,7 @@ ns_ext_content_script_matches(const ns_ext_cs *cs, const char *url)
     return !ns_ext_glob_list_matches(cs->exclude_globs, url);
 }
 
+/* Returns a JS array source of per-extension shims for scripts matching url and run_at. */
 char *
 ns_ext_content_scripts_for_url(const char *url, gboolean at_start)
 {
@@ -1327,6 +1370,7 @@ ns_ext_content_scripts_for_url(const char *url, gboolean at_start)
     return g_string_free(out, FALSE);
 }
 
+/* Serves a web-accessible northstar-extension:// resource; FALSE if not such a URL. */
 gboolean
 ns_ext_resource_load(const char *url, GBytes **bytes,
                      char **content_type, char **error)
@@ -1387,6 +1431,7 @@ ns_ext_resource_load(const char *url, GBytes **bytes,
     return TRUE;
 }
 
+/* Returns TRUE for urlFilter "^" separator characters. */
 static gboolean
 ns_dnr_sep(char c)
 {
@@ -1394,6 +1439,7 @@ ns_dnr_sep(char c)
              c == '_' || c == '-' || c == '.' || c == '%');
 }
 
+/* Matches a urlFilter body with "*" and "^" at s, with one backtrack point. */
 static gboolean
 ns_dnr_match_here(const char *p, const char *s, gboolean end_anchor)
 {
@@ -1423,6 +1469,7 @@ ns_dnr_match_here(const char *p, const char *s, gboolean end_anchor)
     }
 }
 
+/* Matches a DNR urlFilter with "||" domain, "|" start/end anchors against a URL. */
 static gboolean
 ns_dnr_urlfilter_match(const char *filter, const char *url, gboolean cs)
 {
@@ -1455,6 +1502,7 @@ ns_dnr_urlfilter_match(const char *filter, const char *url, gboolean cs)
     }
 }
 
+/* Returns TRUE if host equals domain or is a subdomain of it. */
 static gboolean
 ns_dnr_domain_match(const char *domain, const char *host)
 {
@@ -1474,6 +1522,7 @@ ns_dnr_domain_list_match(GPtrArray *list, const char *host)
     return FALSE;
 }
 
+/* Builds display:none CSS from cosmetic rules applying to host; caller frees. */
 static char *
 ns_ext_cosmetic_css_for_host(const char *host)
 {
@@ -1497,6 +1546,7 @@ ns_ext_cosmetic_css_for_host(const char *host)
     return g_string_free(css, FALSE);
 }
 
+/* Guesses a DNR resource type from the URL path extension; NULL if unknown. */
 static const char *
 ns_dnr_infer_type(const char *url)
 {
@@ -1537,6 +1587,7 @@ ns_dnr_type_in_list(GPtrArray *list, const char *type)
     return FALSE;
 }
 
+/* Returns host without a port, keeping IPv6 brackets; caller frees. */
 static char *
 ns_ext_strip_port(const char *host)
 {
@@ -1549,6 +1600,7 @@ ns_ext_strip_port(const char *host)
     return c ? g_strndup(host, c - host) : g_strdup(host);
 }
 
+/* Compares registrable domains via PSL: 1 third-party, 0 same-site, -1 unknown. */
 static int
 ns_ext_third_party(const char *req_host, const char *init_host)
 {
@@ -1565,6 +1617,7 @@ ns_ext_third_party(const char *req_host, const char *init_host)
     return strcmp(rr, ir) == 0 ? 0 : 1;
 }
 
+/* Returns TRUE if host or any parent domain is in the blocked-host index. */
 static gboolean
 ns_ext_host_indexed(const char *host)
 {
@@ -1578,6 +1631,7 @@ ns_ext_host_indexed(const char *host)
     return FALSE;
 }
 
+/* Tests a rule's party, domain, initiator, urlFilter, regex and resource-type conditions. */
 static gboolean
 ns_dnr_rule_matches(const ns_dnr_rule *r, const char *url,
                     const char *host, const char *init_host, int tp)
@@ -1611,6 +1665,7 @@ ns_dnr_rule_matches(const ns_dnr_rule *r, const char *url,
     return TRUE;
 }
 
+/* Decides blocking for an http(s) request by highest-priority rule; allow wins ties. */
 gboolean
 ns_ext_should_block(const char *url, const char *initiator)
 {

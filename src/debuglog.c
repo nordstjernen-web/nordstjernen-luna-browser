@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — in-process debug event log shared with the JS console.
+/* Nordstjernen Web Browser — in-process debug event log: bounded ring, subscribers, log file.
+ * Fed by engine, network and JS console messages; file logging is on by default on Windows.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -29,6 +30,7 @@ static char    *g_dlog_file_path;
 static FILE    *g_dlog_file;
 static gboolean g_dlog_file_tried;
 
+/* File logging is on by default on Windows (NS_NO_LOG_FILE) and opt-in elsewhere. */
 static gboolean
 ns_dlog_file_enabled(void)
 {
@@ -39,6 +41,7 @@ ns_dlog_file_enabled(void)
 #endif
 }
 
+/* Returns the log file path from NS_LOG_FILE or the user data dir; NULL if disabled. */
 const char *
 ns_debug_log_file_path(void)
 {
@@ -54,6 +57,7 @@ ns_debug_log_file_path(void)
     return g_dlog_file_path;
 }
 
+/* Appends an entry to the log file, opening it on first use; caller holds the lock. */
 static void
 ns_dlog_file_write(const ns_dlog_entry *e)
 {
@@ -111,6 +115,7 @@ ns_dlog_level_name(ns_dlog_level lvl)
     return "?";
 }
 
+/* Calls every subscriber with the entry, using a snapshot taken under the lock. */
 static void
 ns_dlog_dispatch(const ns_dlog_entry *snap)
 {
@@ -131,6 +136,7 @@ ns_dlog_dispatch(const ns_dlog_entry *snap)
 }
 
 G_GNUC_PRINTF(3, 0)
+/* Records a log entry: notifies subscribers, writes the file, keeps a bounded ring. */
 static void
 ns_debug_log_emit_v(ns_dlog_level level, const char *category,
                     const char *fmt, va_list ap)
@@ -163,6 +169,7 @@ ns_debug_log_emit(ns_dlog_level level, const char *category,
     va_end(ap);
 }
 
+/* Registers a log listener; returns a nonzero id for unsubscribing. */
 guint
 ns_debug_log_subscribe(ns_dlog_listener cb, gpointer user_data)
 {

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — Performance API: performance.*, PerformanceObserver (QuickJS).
+ * Coarsened now(), marks/measures, navigation, paint and resource timing entries.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -31,6 +32,7 @@ ns_perf_entry_free(gpointer p)
     g_free(e);
 }
 
+/* Deep-copies a performance entry for an observer's record queue. */
 static ns_perf_entry *
 ns_perf_entry_clone(const ns_perf_entry *e)
 {
@@ -47,6 +49,7 @@ ns_perf_entry_clone(const ns_perf_entry *e)
 
 #define NS_TIMER_RESOLUTION_US 100
 
+/* Milliseconds since the time origin, both coarsened to 100 us to limit timing attacks. */
 double
 ns_perf_relative_ms(gint64 now_us, gint64 origin_us)
 {
@@ -56,6 +59,7 @@ ns_perf_relative_ms(gint64 now_us, gint64 origin_us)
     return (double)(now_us - origin_us) / 1000.0;
 }
 
+/* performance.now() value for this realm: coarsened monotonic time since its origin. */
 double
 ns_perf_now_ms(const ns_js *js)
 {
@@ -71,6 +75,7 @@ ns_window_performance_now(JSContext *ctx, JSValueConst this_val,
     return JS_NewFloat64(ctx, ns_perf_now_ms(js_from_ctx(ctx)));
 }
 
+/* Converts an entry to a JS PerformanceEntry, adding synthesized resource-timing fields. */
 static JSValue
 ns_perf_entry_to_js(JSContext *ctx, const ns_perf_entry *e)
 {
@@ -117,6 +122,7 @@ ns_perf_entry_to_js(JSContext *ctx, const ns_perf_entry *e)
     return o;
 }
 
+/* Builds the PerformanceNavigationTiming entry from recorded navigation timings. */
 static JSValue
 ns_perf_build_navigation_entry(JSContext *ctx, ns_js *js)
 {
@@ -164,6 +170,7 @@ ns_perf_build_navigation_entry(JSContext *ctx, ns_js *js)
     return o;
 }
 
+/* Builds a synthetic "paint" PerformanceEntry with the given name and start time. */
 static JSValue
 ns_perf_build_paint_entry(JSContext *ctx, const char *name, double start)
 {
@@ -177,6 +184,7 @@ ns_perf_build_paint_entry(JSContext *ctx, const char *name, double start)
 
 static void ns_perf_observer_queue(ns_js *js, const ns_perf_entry *entry);
 
+/* Records a resource timing entry (skips data:/blob:/about:) and queues it to observers. */
 void
 ns_perf_add_resource(ns_js *js, const char *url, const char *initiator,
                      double start_ms, double duration_ms, gint64 size)
@@ -200,6 +208,7 @@ ns_perf_add_resource(ns_js *js, const char *url, const char *initiator,
 
 static JSClassID ns_perf_observer_class_id;
 
+/* Converts native entry records to a JS array of PerformanceEntry objects. */
 static JSValue
 ns_perf_records_to_array(JSContext *ctx, GPtrArray *records)
 {
@@ -212,6 +221,7 @@ ns_perf_records_to_array(JSContext *ctx, GPtrArray *records)
     return arr;
 }
 
+/* PerformanceObserverEntryList.getEntries(): copies the stored entry array. */
 static JSValue
 ns_perf_entry_list_getEntries(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -232,6 +242,7 @@ ns_perf_entry_list_getEntries(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* TRUE if a JS entry matches the optional name and entryType filters. */
 static gboolean
 ns_perf_js_entry_matches(JSContext *ctx, JSValueConst entry,
                          const char *name, const char *type)
@@ -255,6 +266,7 @@ ns_perf_js_entry_matches(JSContext *ctx, JSValueConst entry,
     return TRUE;
 }
 
+/* PerformanceObserverEntryList.getEntriesByName(name, type?). */
 static JSValue
 ns_perf_entry_list_getEntriesByName(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -286,6 +298,7 @@ ns_perf_entry_list_getEntriesByName(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* PerformanceObserverEntryList.getEntriesByType(type). */
 static JSValue
 ns_perf_entry_list_getEntriesByType(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv)
@@ -313,6 +326,7 @@ ns_perf_entry_list_getEntriesByType(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Wraps an entries array as a PerformanceObserverEntryList object. */
 static JSValue
 ns_perf_entry_list_from_array(JSContext *ctx, JSValueConst entries)
 {
@@ -334,6 +348,7 @@ ns_perf_observer_free(ns_js *js, ns_perf_observer *o)
     g_free(o);
 }
 
+/* GC finalizer: unregisters the observer from the realm and frees it. */
 static void
 ns_perf_observer_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -356,6 +371,7 @@ ns_unwrap_perf_observer(JSValueConst v)
     return JS_GetOpaque(v, ns_perf_observer_class_id);
 }
 
+/* TRUE if the observer is subscribed to entries of the given type. */
 static gboolean
 ns_perf_observer_wants(const ns_perf_observer *o, const char *type)
 {
@@ -367,6 +383,7 @@ ns_perf_observer_wants(const ns_perf_observer *o, const char *type)
     return FALSE;
 }
 
+/* Adds an entry type to the observer's subscription, ignoring duplicates. */
 static void
 ns_perf_observer_add_type(ns_perf_observer *o, const char *type)
 {
@@ -378,6 +395,7 @@ ns_perf_observer_add_type(ns_perf_observer *o, const char *type)
 static void
 ns_perf_schedule_drain(ns_js *js);
 
+/* Queues an entry copy to each interested observer, pins it, and schedules delivery. */
 static void
 ns_perf_observer_queue(ns_js *js, const ns_perf_entry *entry)
 {
@@ -401,6 +419,7 @@ ns_perf_observer_queue(ns_js *js, const ns_perf_entry *entry)
     if (queued) ns_perf_schedule_drain(js);
 }
 
+/* Microtask job delivering each observer's buffered entries to its callback. */
 static JSValue
 ns_perf_drain_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -441,6 +460,7 @@ ns_perf_drain_job(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* Enqueues the observer delivery job once per batch. */
 static void
 ns_perf_schedule_drain(ns_js *js)
 {
@@ -449,6 +469,7 @@ ns_perf_schedule_drain(ns_js *js)
     JS_EnqueueJob(js->ctx, ns_perf_drain_job, 0, NULL);
 }
 
+/* Collects entry types from observe() options' type and entryTypes members. */
 static void
 ns_perf_observer_collect_types(JSContext *ctx, ns_perf_observer *o,
                                JSValueConst options)
@@ -479,6 +500,7 @@ ns_perf_observer_collect_types(JSContext *ctx, ns_perf_observer *o,
     JS_FreeValue(ctx, entry_types);
 }
 
+/* PerformanceObserver.observe(): sets types, pins the wrapper, replays buffered entries. */
 JSValue
 ns_perf_observer_observe(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -514,6 +536,7 @@ ns_perf_observer_observe(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* PerformanceObserver.disconnect(): drops records and types and unpins the wrapper. */
 JSValue
 ns_perf_observer_disconnect(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -531,6 +554,7 @@ ns_perf_observer_disconnect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* PerformanceObserver.takeRecords(): returns and clears pending entries. */
 JSValue
 ns_perf_observer_takeRecords(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -547,6 +571,7 @@ ns_perf_observer_takeRecords(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* PerformanceObserver constructor: wraps native state and registers it with the realm. */
 JSValue
 ns_perf_observer_ctor(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -593,6 +618,7 @@ ns_perf_observer_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* PerformanceObserver.supportedEntryTypes array. */
 JSValue
 ns_perf_supported_entry_types(JSContext *ctx)
 {
@@ -603,6 +629,7 @@ ns_perf_supported_entry_types(JSContext *ctx)
     return arr;
 }
 
+/* Appends a mark/measure entry to the capped buffer and notifies observers. */
 static void
 ns_perf_push(ns_js *js, const char *type, const char *name,
              double start_time, double duration)
@@ -619,6 +646,7 @@ ns_perf_push(ns_js *js, const char *type, const char *name,
     ns_perf_observer_queue(js, e);
 }
 
+/* performance.mark(name): records a mark at now and returns the entry. */
 JSValue
 ns_window_performance_mark(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -638,6 +666,7 @@ ns_window_performance_mark(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Finds the most recent mark by name and returns its start time. */
 static gboolean
 ns_perf_lookup_mark(const ns_js *js, const char *name, double *out_time)
 {
@@ -653,6 +682,7 @@ ns_perf_lookup_mark(const ns_js *js, const char *name, double *out_time)
     return FALSE;
 }
 
+/* Resolves a measure endpoint given as number or mark name; fallback when absent. */
 static gboolean
 ns_perf_resolve_time(JSContext *ctx, JSValueConst v, const ns_js *js,
                      double fallback, double *out)
@@ -679,6 +709,7 @@ ns_perf_resolve_time(JSContext *ctx, JSValueConst v, const ns_js *js,
     return TRUE;
 }
 
+/* performance.measure(name, start, end) with mark-name or numeric endpoints. */
 JSValue
 ns_window_performance_measure(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -706,6 +737,7 @@ ns_window_performance_measure(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Removes buffered entries matching a type and optional name. */
 static void
 ns_perf_clear(ns_js *js, const char *type, const char *name)
 {
@@ -745,6 +777,7 @@ ns_window_performance_clearMeasures(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* performance.getEntries(): navigation, synthetic paint and buffered entries. */
 JSValue
 ns_window_performance_getEntries(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
@@ -769,6 +802,7 @@ ns_window_performance_getEntries(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* performance.getEntriesByName(name, type?) over buffered entries. */
 JSValue
 ns_window_performance_getEntriesByName(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv)
@@ -793,6 +827,7 @@ ns_window_performance_getEntriesByName(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* performance.getEntriesByType(): includes synthetic navigation/paint entries. */
 JSValue
 ns_window_performance_getEntriesByType(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv)
@@ -823,6 +858,7 @@ ns_window_performance_getEntriesByType(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* performance.memory getter from QuickJS runtime memory usage. */
 JSValue
 ns_window_performance_memory_get(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)

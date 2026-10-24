@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — headless engine driver.
+/* Nordstjernen Web Browser — headless engine driver: load a URL, run actions/eval, dump the result.
+ * Text/DOM/layout/PNG/PDF dumps, box inspection, simulated input and WPT result collection.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -43,6 +44,7 @@ settle_quit_cb(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* Parses a comma list of debug-log level names (or "all") into a level bitmask. */
 unsigned
 ns_headless_debug_mask(const char *spec)
 {
@@ -61,6 +63,7 @@ ns_headless_debug_mask(const char *spec)
     return mask;
 }
 
+/* Prints debug-log entries whose level is in the subscribed mask to stderr. */
 static void
 headless_dlog_listener(const ns_dlog_entry *e, gpointer user_data)
 {
@@ -72,6 +75,7 @@ headless_dlog_listener(const ns_dlog_entry *e, gpointer user_data)
 
 static ns_print_setup g_headless_print_setup;
 
+/* Writes the layout as paged print PDF, plain PDF or PNG depending on the dump kind. */
 static int
 write_capture(const ns_box *root, const char *path, ns_headless_dump kind)
 {
@@ -114,6 +118,7 @@ headless_nav_capture_clear_post(headless_nav_capture *cap)
     cap->pending_post_ct = NULL;
 }
 
+/* JS navigation hook: records the requested URL for the headless driver to follow. */
 static void
 headless_js_navigate(const char *url, gboolean reload, gpointer user_data)
 {
@@ -142,6 +147,7 @@ headless_reveal_add(GArray *items, ns_node *node, headless_reveal_kind kind)
     g_array_append_val(items, item);
 }
 
+/* Reveals a fragment target by clearing hidden=until-found and opening enclosing details. */
 static void
 headless_reveal_fragment(ns_node *doc, const char *frag)
 {
@@ -170,6 +176,7 @@ headless_reveal_fragment(ns_node *doc, const char *frag)
     g_array_free(items, TRUE);
 }
 
+/* Serializes a form submission into a pending GET URL or POST body on the nav capture. */
 static void
 headless_js_form_submit(const ns_node *form, const ns_node *submitter,
                         gpointer user_data)
@@ -233,6 +240,7 @@ static const rdrv_keymap rdrv_keys[] = {
     {"Home", "Home", 36}, {"End", "End", 35},
 };
 
+/* Copies the page session's buffered console output to stderr. */
 static void
 rdrv_drain_console(ns_page_session *s)
 {
@@ -244,6 +252,7 @@ rdrv_drain_console(ns_page_session *s)
     free(log);
 }
 
+/* Follows up to six chained session navigations; frees href and always returns NULL. */
 static char *
 rdrv_follow_nav(ns_page_session *s, char *href, int vw, int vh, int settle_ms,
                 gboolean user_activated)
@@ -267,6 +276,7 @@ rdrv_follow_nav(ns_page_session *s, char *href, int vw, int vh, int settle_ms,
     return NULL;
 }
 
+/* Cairo PNG write callback appending bytes to a GByteArray. */
 static cairo_status_t
 rdrv_png_sink(void *closure, const unsigned char *data, unsigned int length)
 {
@@ -274,6 +284,7 @@ rdrv_png_sink(void *closure, const unsigned char *data, unsigned int length)
     return CAIRO_STATUS_SUCCESS;
 }
 
+/* Renders one session frame and returns any pending navigation URL; caller frees. */
 static char *
 rdrv_tick_take_nav(ns_page_session *s, int vw, int vh)
 {
@@ -284,6 +295,7 @@ rdrv_tick_take_nav(ns_page_session *s, int vw, int vh)
     return nav;
 }
 
+/* Parses "X,Y" or "sel=CSS [dx=] [dy=]" into page coordinates via the element's center. */
 static gboolean
 rdrv_point(ns_page_session *s, const char *arg, double *x, double *y)
 {
@@ -310,6 +322,7 @@ rdrv_point(ns_page_session *s, const char *arg, double *x, double *y)
     return ok;
 }
 
+/* Runs a ';'-separated action script (click, move, type, key, shot, wait...) on a session. */
 static void
 rdrv_run_actions(ns_page_session *s, const char *spec, int vw, int vh,
                  int settle_ms)
@@ -460,6 +473,7 @@ rdrv_run_actions(ns_page_session *s, const char *spec, int vw, int vh,
     g_strfreev(acts);
 }
 
+/* Session-based headless run: open, follow navs, actions, eval, then dump. */
 static int
 ns_headless_run_session(const ns_headless_opts *o)
 {
@@ -513,6 +527,7 @@ ns_headless_run_session(const ns_headless_opts *o)
     return 0;
 }
 
+/* Returns TRUE when options can use the session path rather than the legacy in-process run. */
 static gboolean
 ns_headless_renderer_capable(const ns_headless_opts *opts)
 {
@@ -525,6 +540,7 @@ ns_headless_renderer_capable(const ns_headless_opts *opts)
     return TRUE;
 }
 
+/* Headless entry point: validates options, wires debug logging and picks the run path. */
 int
 ns_headless_run(const ns_headless_opts *opts)
 {
@@ -567,6 +583,7 @@ typedef struct headless_flush_ctx {
     gsize              anchor;
 } headless_flush_ctx;
 
+/* Returns the JS-focused node, falling back to the driver's own focus tracking. */
 static const ns_node *
 headless_focus(const headless_flush_ctx *c)
 {
@@ -574,6 +591,7 @@ headless_focus(const headless_flush_ctx *c)
     return focused ? focused : c->focused;
 }
 
+/* Discards and rebuilds styles and layout for the document, updating the JS bindings. */
 static void
 headless_relayout(headless_flush_ctx *c)
 {
@@ -591,6 +609,7 @@ headless_relayout(headless_flush_ctx *c)
     g_headless_styles_stale = FALSE;
 }
 
+/* JS layout-flush hook: relayouts only when DOM mutations or a dirty flag require it. */
 static void
 headless_flush_layout(gpointer ud)
 {
@@ -603,6 +622,7 @@ headless_flush_layout(gpointer ud)
     headless_relayout(c);
 }
 
+/* Returns TRUE if any computed style has a non-normal container-type. */
 static gboolean
 headless_styles_have_containers(GHashTable *styles)
 {
@@ -620,6 +640,7 @@ headless_styles_have_containers(GHashTable *styles)
     return FALSE;
 }
 
+/* JS style-flush hook: recomputes the cascade, relayouting if container queries exist. */
 static void
 headless_flush_style(gpointer ud)
 {
@@ -658,6 +679,7 @@ typedef struct {
     gboolean            pending_mutation;
 } settle_state;
 
+/* 16ms tick: advances images, animations and rAF; relayouts on mutation at most every 200ms. */
 static gboolean
 settle_raf_tick(gpointer user_data)
 {
@@ -685,6 +707,7 @@ settle_raf_tick(gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
+/* Runs the main loop for ms milliseconds with animation-frame ticks. */
 static void
 settle_main_loop(int ms, headless_flush_ctx *fc)
 {
@@ -712,6 +735,7 @@ static const char *const ns_wpt_poll_js =
     "    return \"0\";"
     "})()";
 
+/* Returns TRUE once the injected WPT hook reports that testharness has finished. */
 static gboolean
 wpt_results_ready(ns_js *js)
 {
@@ -745,6 +769,7 @@ wpt_eval(ns_js *js, const char *src)
     return r;
 }
 
+/* Waits for WPT results up to the timeout, prints report and JSON; returns exit code. */
 static int
 headless_wpt_finish(headless_flush_ctx *fc, const ns_headless_opts *opts)
 {
@@ -793,6 +818,7 @@ headless_wpt_finish(headless_flush_ctx *fc, const ns_headless_opts *opts)
     return rc;
 }
 
+/* Replaces [lo,hi) of the focused control's value honoring numeric filter and maxlength. */
 static void
 headless_edit_replace(headless_flush_ctx *fc, gsize lo, gsize hi, const char *ins)
 {
@@ -850,6 +876,7 @@ headless_edit_replace(headless_flush_ctx *fc, gsize lo, gsize hi, const char *in
     }
 }
 
+/* Validates and dispatches submit for the trigger's form, then captures the navigation. */
 static void
 headless_submit_form_from(headless_flush_ctx *fc, headless_nav_capture *nav,
                           const ns_node *trigger)
@@ -885,6 +912,7 @@ headless_emit_pointer_and_mouse(headless_flush_ctx *fc, const ns_node *target,
                                 const char *ptr_type, const char *mouse_type,
                                 double x, double y, int button, int buttons);
 
+/* Simulates a click: label retargeting, pointer/mouse events, focus, activation and links. */
 static void
 headless_click(headless_flush_ctx *fc, headless_nav_capture *nav,
                double x, double y)
@@ -1062,6 +1090,7 @@ headless_attr_false(const ns_node *n, const char *name)
     return v && g_ascii_strcasecmp(v, "false") == 0;
 }
 
+/* Finds the draggable element at a point: draggable=true, or a link/image by default. */
 static const ns_node *
 headless_drag_source_at(ns_box *layout, double x, double y)
 {
@@ -1082,6 +1111,7 @@ headless_drag_source_at(ns_box *layout, double x, double y)
     return NULL;
 }
 
+/* Returns the element at a point for drop events, falling back to body or the document. */
 static const ns_node *
 headless_drag_target_at(headless_flush_ctx *fc, double x, double y)
 {
@@ -1093,6 +1123,7 @@ headless_drag_target_at(headless_flush_ctx *fc, double x, double y)
     return body ? body : fc->doc;
 }
 
+/* Puts the absolute href/src of a link or image source into the drag data as text and URI. */
 static void
 headless_seed_drag_data(headless_flush_ctx *fc, ns_js_drag_session *session,
                         const ns_node *source)
@@ -1111,6 +1142,7 @@ headless_seed_drag_data(headless_flush_ctx *fc, ns_js_drag_session *session,
     g_free(abs);
 }
 
+/* Dispatches one drag event of type at a point; returns TRUE if it was canceled. */
 static gboolean
 headless_dispatch_drag(headless_flush_ctx *fc, ns_js_drag_session *session,
                        const ns_node *target, const char *type,
@@ -1127,6 +1159,7 @@ headless_dispatch_drag(headless_flush_ctx *fc, ns_js_drag_session *session,
     return prevented;
 }
 
+/* Simulates HTML drag and drop: dragstart, dragenter/over, drop or dragleave, dragend. */
 static void
 headless_drag(headless_flush_ctx *fc,
               double x0, double y0, double x1, double y1)
@@ -1175,6 +1208,7 @@ headless_mouse_target_at(headless_flush_ctx *fc, double x, double y)
     return fc && fc->doc ? ns_node_find_first_element(fc->doc, "body") : NULL;
 }
 
+/* Dispatches a pointer event then its mouse twin; returns TRUE if either was canceled. */
 static gboolean
 headless_emit_pointer_and_mouse(headless_flush_ctx *fc, const ns_node *target,
                                 const char *ptr_type, const char *mouse_type,
@@ -1193,6 +1227,7 @@ headless_emit_pointer_and_mouse(headless_flush_ctx *fc, const ns_node *target,
     return prevented;
 }
 
+/* Moves the virtual pointer, firing out/over transitions and move events, then relayouts. */
 static void
 headless_mouse_move(headless_flush_ctx *fc, double x, double y)
 {
@@ -1224,6 +1259,7 @@ headless_mouse_move(headless_flush_ctx *fc, double x, double y)
     headless_relayout(fc);
 }
 
+/* Simulates a mouse drag as down, eight interpolated moves with settling, and up. */
 static void
 headless_mouse_drag(headless_flush_ctx *fc,
                     double x0, double y0, double x1, double y1)
@@ -1249,6 +1285,7 @@ headless_mouse_drag(headless_flush_ctx *fc,
                                         x1, y1, 0, 0);
 }
 
+/* Simulates a named key on the focused control: key events, Tab, editing, Enter submit. */
 static void
 headless_key(headless_flush_ctx *fc, headless_nav_capture *nav,
              const char *name)
@@ -1376,6 +1413,7 @@ headless_key(headless_flush_ctx *fc, headless_nav_capture *nav,
     }
 }
 
+/* Runs a ';'-separated action script in the legacy driver until a navigation is pending. */
 static void
 headless_run_actions(headless_flush_ctx *fc, headless_nav_capture *nav,
                      const char *spec)
@@ -1505,6 +1543,7 @@ headless_run_actions(headless_flush_ctx *fc, headless_nav_capture *nav,
     g_strfreev(acts);
 }
 
+/* Formats a computed CSS value into buf for inspect output. */
 static void
 inspect_value_str(const ns_css_value *v, char *buf, size_t cap)
 {
@@ -1533,6 +1572,7 @@ inspect_value_str(const ns_css_value *v, char *buf, size_t cap)
     }
 }
 
+/* Formats a node as tag#id.class for inspect output. */
 static void
 inspect_node_label(const ns_node *n, char *buf, size_t cap)
 {
@@ -1555,6 +1595,7 @@ inspect_node_label(const ns_node *n, char *buf, size_t cap)
     g_string_free(s, TRUE);
 }
 
+/* Depth-first search for the first box generated by a DOM node. */
 static const ns_box *
 inspect_find_box(const ns_box *root, const ns_node *dom)
 {
@@ -1577,6 +1618,7 @@ inspect_prop_line(GString *out, const ns_style *s, ns_css_prop p,
     g_string_append_printf(out, "    %-15s %s\n", label, b);
 }
 
+/* Prints a box's geometry, key computed properties, children and ancestor path. */
 static void
 inspect_print_box(const ns_box *box, GString *out)
 {
@@ -1661,6 +1703,7 @@ inspect_print_box(const ns_box *box, GString *out)
     g_ptr_array_free(chain, TRUE);
 }
 
+/* Collects elements matching any selector in document order, depth-limited to 512. */
 static void
 headless_collect_matches(const ns_node *n, GPtrArray *sels, GPtrArray *out,
                          int depth)
@@ -1680,6 +1723,7 @@ headless_collect_matches(const ns_node *n, GPtrArray *sels, GPtrArray *out,
 
 static GHashTable *g_inspect_styles;
 
+/* Writes an inspect report for every element matching selector, rendered or not. */
 static void
 headless_inspect(const ns_box *layout, const ns_node *doc, const char *selector,
                  GString *out)
@@ -1723,6 +1767,7 @@ headless_inspect(const ns_box *layout, const ns_node *doc, const char *selector,
     g_ptr_array_free(sels, TRUE);
 }
 
+/* Writes the box stack at a point, innermost first, then details of the hit box. */
 static void
 headless_inspect_at(const ns_box *layout, double x, double y, GString *out)
 {
@@ -1749,6 +1794,7 @@ headless_inspect_at(const ns_box *layout, double x, double y, GString *out)
     inspect_print_box(hit, out);
 }
 
+/* Legacy in-process run: fetch, parse, script, settle, follow navs, then dump or capture. */
 static int
 ns_headless_run_one(const ns_headless_opts *opts, const char *fetch_url, int hop,
                     const char *post_body, gsize post_len, const char *post_ct,

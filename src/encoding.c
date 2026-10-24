@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — WHATWG Encoding Standard: labels, decoders and encoders.
+/* Nordstjernen Web Browser — WHATWG Encoding Standard decoders and encoders on lexbor's tables.
+ * Label lookup, streaming decode with BOM sniffing, CJK index encoders and URL percent-encoding.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -75,6 +76,7 @@ static const ns_encoding ns_encodings[] = {
     { LXB_ENCODING_X_USER_DEFINED, NS_KIND_X_USER_DEFINED },
 };
 
+/* Lexbor 128-entry high-half table for a single-byte encoding; windows-1252 by default. */
 static const lxb_encoding_single_index_t *
 single_byte_index(lxb_encoding_t id)
 {
@@ -361,6 +363,7 @@ static const gsize ns_index_sizes[] = {
     [NS_INDEX_BIG5] = G_N_ELEMENTS(lxb_encoding_multi_big5_map),
 };
 
+/* Lexbor code point table backing a WHATWG multi-byte index. */
 static const lxb_codepoint_t *
 index_map(ns_index_id id)
 {
@@ -414,6 +417,7 @@ struct ns_decoder {
     guint8 output_state;
 };
 
+/* WHATWG "index code point" lookup for pointer; 0 when out of range or unmapped. */
 static guint32
 index_code_point(ns_index_id id, guint pointer)
 {
@@ -422,6 +426,7 @@ index_code_point(ns_index_id id, guint pointer)
     return cp == LXB_ENCODING_ERROR_CODEPOINT ? 0 : cp;
 }
 
+/* WHATWG "index gb18030 ranges code point" via binary search; 0 for invalid pointers. */
 static guint32
 gb18030_ranges_code_point(guint32 pointer)
 {
@@ -437,6 +442,7 @@ gb18030_ranges_code_point(guint32 pointer)
     return ranges[lo].codepoint + pointer - ranges[lo].index;
 }
 
+/* Maps a lexbor encoding id to its static ns_encoding entry. */
 static const ns_encoding *
 ns_encoding_by_id(lxb_encoding_t id)
 {
@@ -445,6 +451,7 @@ ns_encoding_by_id(lxb_encoding_t id)
     return NULL;
 }
 
+/* WHATWG "get an encoding": trims ASCII whitespace and matches labels case-insensitively. */
 const ns_encoding *
 ns_encoding_for_label(const char *label)
 {
@@ -471,6 +478,7 @@ ns_encoding_name(const ns_encoding *enc)
     return enc ? (const char *)lxb_encoding_data(enc->id)->name : "UTF-8";
 }
 
+/* Finds an encoding by canonical name, falling back to label lookup. */
 const ns_encoding *
 ns_encoding_for_name(const char *name)
 {
@@ -506,6 +514,7 @@ ns_encoding_is_replacement(const ns_encoding *enc)
     return enc && enc->kind == NS_KIND_REPLACEMENT;
 }
 
+/* Pushes bytes back onto the decoder's input queue ("prepend to stream"); 8-byte cap. */
 static void
 prepend(ns_decoder *d, const guint8 *bytes, guint n)
 {
@@ -523,6 +532,7 @@ prepend_byte(ns_decoder *d, int byte)
     prepend(d, &b, 1);
 }
 
+/* WHATWG UTF-8 decoder handler for one byte (or EOS); returns code points or a step code. */
 static int
 utf8_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -572,6 +582,7 @@ utf8_step(ns_decoder *d, int byte, guint32 *out)
     return 1;
 }
 
+/* WHATWG shared UTF-16 decoder handler, combining surrogate pairs; be selects byte order. */
 static int
 utf16_step(ns_decoder *d, int byte, gboolean be, guint32 *out)
 {
@@ -609,6 +620,7 @@ utf16_step(ns_decoder *d, int byte, gboolean be, guint32 *out)
     return 1;
 }
 
+/* WHATWG single-byte decoder: ASCII passthrough, high bytes via the encoding's index. */
 static int
 single_byte_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -623,6 +635,7 @@ single_byte_step(ns_decoder *d, int byte, guint32 *out)
     return 1;
 }
 
+/* WHATWG gb18030 decoder handler covering two- and four-byte sequences. */
 static int
 gb18030_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -690,6 +703,7 @@ gb18030_step(ns_decoder *d, int byte, guint32 *out)
     return NS_STEP_ERROR;
 }
 
+/* WHATWG Big5 decoder handler, emitting two code points for the four special pointers. */
 static int
 big5_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -735,6 +749,7 @@ big5_step(ns_decoder *d, int byte, guint32 *out)
     return NS_STEP_ERROR;
 }
 
+/* WHATWG EUC-JP decoder handler with half-width katakana and JIS X 0212 support. */
 static int
 euc_jp_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -781,6 +796,7 @@ euc_jp_step(ns_decoder *d, int byte, guint32 *out)
     return NS_STEP_ERROR;
 }
 
+/* ISO-2022-JP escape state: switches charset on a valid escape, else reprocesses bytes. */
 static int
 iso_2022_jp_escape(ns_decoder *d, int byte)
 {
@@ -804,6 +820,7 @@ iso_2022_jp_escape(ns_decoder *d, int byte)
     return NS_STEP_ERROR;
 }
 
+/* WHATWG ISO-2022-JP decoder state machine for one byte. */
 static int
 iso_2022_jp_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -861,6 +878,7 @@ iso_2022_jp_step(ns_decoder *d, int byte, guint32 *out)
     }
 }
 
+/* WHATWG Shift_JIS decoder handler, including the EUDC private-use range. */
 static int
 shift_jis_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -904,6 +922,7 @@ shift_jis_step(ns_decoder *d, int byte, guint32 *out)
     return NS_STEP_ERROR;
 }
 
+/* WHATWG EUC-KR decoder handler. */
 static int
 euc_kr_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -937,6 +956,7 @@ euc_kr_step(ns_decoder *d, int byte, guint32 *out)
     return NS_STEP_ERROR;
 }
 
+/* Dispatches one byte to the decoder handler for the encoding kind. */
 static int
 decoder_step(ns_decoder *d, int byte, guint32 *out)
 {
@@ -973,6 +993,7 @@ ns_decoder_new(const ns_encoding *enc, gboolean fatal)
     return d;
 }
 
+/* Resets decoder state to initial while keeping its encoding and fatal flag. */
 void
 ns_decoder_reset(ns_decoder *d)
 {
@@ -993,6 +1014,7 @@ ns_decoder_free(ns_decoder *d)
     g_free(d);
 }
 
+/* Length of the leading valid UTF-8 run, used as a decode fast path. */
 static gsize
 utf8_valid_run(const guint8 *data, gsize len)
 {
@@ -1001,6 +1023,7 @@ utf8_valid_run(const guint8 *data, gsize len)
     return (gsize)((const guint8 *)end - data);
 }
 
+/* Streams bytes through the decoder into UTF-8; FALSE on error in fatal mode. */
 gboolean
 ns_decoder_decode(ns_decoder *d, const guint8 *data, gsize len,
                   gboolean flush, GString *out)
@@ -1038,6 +1061,7 @@ ns_decoder_decode(ns_decoder *d, const guint8 *data, gsize len,
     }
 }
 
+/* One-shot replacement-mode decode to a new UTF-8 string; caller frees. */
 char *
 ns_encoding_decode(const ns_encoding *enc, const char *data, gsize len,
                    gsize *out_len)
@@ -1050,6 +1074,7 @@ ns_encoding_decode(const ns_encoding *enc, const char *data, gsize len,
     return g_string_free(out, FALSE);
 }
 
+/* Decodes with BOM sniffing (UTF-8/UTF-16BE/LE) overriding enc; caller frees. */
 char *
 ns_encoding_decode_sniffed(const ns_encoding *enc, const char *data, gsize len,
                            gsize *out_len)
@@ -1072,6 +1097,7 @@ mime_is_space(char c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
+/* Extracts the charset parameter from a MIME type string; caller frees, NULL if absent. */
 char *
 ns_encoding_mime_charset(const char *mime)
 {
@@ -1133,6 +1159,7 @@ typedef struct {
 static ns_rev_map ns_rev_maps[NS_REV_COUNT];
 static gsize ns_rev_ready[NS_REV_COUNT];
 
+/* Orders reverse-index entries by code point, then pointer. */
 static int
 rev_entry_cmp(const void *a, const void *b)
 {
@@ -1142,6 +1169,7 @@ rev_entry_cmp(const void *a, const void *b)
     return x->pointer < y->pointer ? -1 : x->pointer > y->pointer;
 }
 
+/* Code points whose Big5 encoder uses the last index pointer rather than the first. */
 static gboolean
 big5_prefers_last(guint32 cp)
 {
@@ -1149,6 +1177,7 @@ big5_prefers_last(guint32 cp)
            cp == 0x5341 || cp == 0x5345;
 }
 
+/* Pointers skipped when building encoder maps (Shift_JIS 8272..8835, Big5 below 0xA1 leads). */
 static gboolean
 rev_pointer_excluded(ns_rev_id id, guint32 pointer)
 {
@@ -1157,6 +1186,7 @@ rev_pointer_excluded(ns_rev_id id, guint32 pointer)
     return FALSE;
 }
 
+/* Builds a sorted code point to pointer map from an index, keeping the spec-chosen pointer. */
 static void
 rev_map_build(ns_rev_id id, ns_rev_map *map)
 {
@@ -1191,6 +1221,7 @@ rev_map_build(ns_rev_id id, ns_rev_map *map)
     map->len = kept;
 }
 
+/* WHATWG "index pointer" lookup via a lazily built, thread-safe reverse map. */
 static gboolean
 rev_pointer(ns_rev_id id, guint32 cp, guint32 *pointer)
 {
@@ -1235,6 +1266,7 @@ encode_two(guint32 lead, guint32 trail, guint8 *out)
     return 2;
 }
 
+/* Single-byte encoder by linear search of the high-half table. */
 static int
 encode_single_byte(const ns_encoder *e, guint32 cp, guint8 *out)
 {
@@ -1244,6 +1276,7 @@ encode_single_byte(const ns_encoder *e, guint32 cp, guint8 *out)
     return NS_ENCODE_ERROR;
 }
 
+/* WHATWG "index gb18030 ranges pointer" for a code point. */
 static guint32
 gb18030_ranges_pointer(guint32 cp)
 {
@@ -1258,6 +1291,7 @@ gb18030_ranges_pointer(guint32 cp)
     return ranges[lo].index + cp - ranges[lo].codepoint;
 }
 
+/* WHATWG gb18030/GBK encoder handler; GBK forbids four-byte sequences. */
 static int
 encode_gb18030(const ns_encoder *e, guint32 cp, guint8 *out)
 {
@@ -1292,6 +1326,7 @@ encode_gb18030(const ns_encoder *e, guint32 cp, guint8 *out)
     return 4;
 }
 
+/* WHATWG Big5 encoder handler. */
 static int
 encode_big5(guint32 cp, guint8 *out)
 {
@@ -1302,6 +1337,7 @@ encode_big5(guint32 cp, guint8 *out)
                       trail + (trail < 0x3F ? 0x40 : 0x62), out);
 }
 
+/* WHATWG EUC-JP encoder handler. */
 static int
 encode_euc_jp(guint32 cp, guint8 *out)
 {
@@ -1315,6 +1351,7 @@ encode_euc_jp(guint32 cp, guint8 *out)
     return encode_two(pointer / 94 + 0xA1, pointer % 94 + 0xA1, out);
 }
 
+/* Emits the ISO-2022-JP escape for a new state and asks to re-encode the code point. */
 static int
 iso_2022_jp_switch(ns_encoder *e, guint8 state, guint8 *out, gboolean *again)
 {
@@ -1326,6 +1363,7 @@ iso_2022_jp_switch(ns_encoder *e, guint8 state, guint8 *out, gboolean *again)
     return 3;
 }
 
+/* WHATWG ISO-2022-JP encoder handler; may emit an escape and request a retry. */
 static int
 encode_iso_2022_jp(ns_encoder *e, guint32 cp, guint8 *out, gboolean *again)
 {
@@ -1355,6 +1393,7 @@ encode_iso_2022_jp(ns_encoder *e, guint32 cp, guint8 *out, gboolean *again)
     return encode_two(pointer / 94 + 0x21, pointer % 94 + 0x21, out);
 }
 
+/* WHATWG Shift_JIS encoder handler. */
 static int
 encode_shift_jis(guint32 cp, guint8 *out)
 {
@@ -1370,6 +1409,7 @@ encode_shift_jis(guint32 cp, guint8 *out)
                       trail + (trail < 0x3F ? 0x40 : 0x41), out);
 }
 
+/* WHATWG EUC-KR encoder handler. */
 static int
 encode_euc_kr(guint32 cp, guint8 *out)
 {
@@ -1378,6 +1418,7 @@ encode_euc_kr(guint32 cp, guint8 *out)
     return encode_two(pointer / 190 + 0x81, pointer % 190 + 0x41, out);
 }
 
+/* Encodes one code point in the output encoding; negative on unmappable. */
 static int
 encode_step(ns_encoder *e, guint32 cp, guint8 *out, gboolean *again)
 {
@@ -1401,6 +1442,7 @@ encode_step(ns_encoder *e, guint32 cp, guint8 *out, gboolean *again)
     }
 }
 
+/* Emits the final ISO-2022-JP return-to-ASCII escape if needed. */
 static int
 encode_end(ns_encoder *e, guint8 *out)
 {
@@ -1410,6 +1452,7 @@ encode_end(ns_encoder *e, guint8 *out)
     return iso_2022_jp_switch(e, NS_ISO_ASCII, out, &again);
 }
 
+/* WHATWG "get an output encoding": UTF-16 and replacement map to UTF-8. */
 const ns_encoding *
 ns_encoding_output(const ns_encoding *enc)
 {
@@ -1418,6 +1461,7 @@ ns_encoding_output(const ns_encoding *enc)
     return enc;
 }
 
+/* TRUE if a byte must be percent-encoded in the special-query or form-urlencoded set. */
 static gboolean
 percent_encode_byte(guint8 b, ns_percent_set set)
 {
@@ -1429,6 +1473,7 @@ percent_encode_byte(guint8 b, ns_percent_set set)
            b != '_';
 }
 
+/* Appends bytes percent-encoded per set, optionally writing space as '+'. */
 static void
 percent_append(GString *out, const guint8 *bytes, int n, ns_percent_set set,
                gboolean space_as_plus)
@@ -1444,6 +1489,7 @@ percent_append(GString *out, const guint8 *bytes, int n, ns_percent_set set,
     }
 }
 
+/* URL "percent-encode after encoding"; unmappables become %26%23NNN%3B. */
 void
 ns_encoding_percent_encode(const ns_encoding *enc, const char *input,
                            gsize len, ns_percent_set set,

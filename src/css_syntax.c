@@ -1,4 +1,6 @@
-/* Nordstjernen Web Browser — CSS Syntax tokenizer and component-value parser. */
+/* Nordstjernen Web Browser — CSS Syntax tokenizer and component-value parser.
+ * Validity and self-containment checks over raw CSS text, used by css.c and @property matching.
+ */
 
 #include "css_syntax.h"
 #include "dom.h"
@@ -15,6 +17,7 @@ typedef struct ns_css_syntax_parser {
     gboolean valid;
 } ns_css_syntax_parser;
 
+/* True for CSS ident-start code units: letters, underscore and non-ASCII. */
 static gboolean
 css_syntax_name_start(guchar c)
 {
@@ -27,6 +30,7 @@ css_syntax_name(guchar c)
     return css_syntax_name_start(c) || g_ascii_isdigit(c) || c == '-';
 }
 
+/* Returns the offset after a CSS escape at offset, or offset itself if it is invalid. */
 static gsize
 css_syntax_escape_end(const char *input, gsize length, gsize offset)
 {
@@ -49,6 +53,7 @@ css_syntax_escape_end(const char *input, gsize length, gsize offset)
     return offset + 1;
 }
 
+/* Consumes an ident sequence including escapes; returns the end offset. */
 static gsize
 css_syntax_name_end(const char *input, gsize length, gsize offset)
 {
@@ -68,6 +73,7 @@ css_syntax_name_end(const char *input, gsize length, gsize offset)
     return offset;
 }
 
+/* CSS Syntax "two code points are a valid escape" check at offset. */
 static gboolean
 css_syntax_valid_escape(const char *input, gsize length, gsize offset)
 {
@@ -76,6 +82,7 @@ css_syntax_valid_escape(const char *input, gsize length, gsize offset)
            input[offset + 1] != '\f';
 }
 
+/* CSS Syntax "would start an ident sequence" check at offset. */
 static gboolean
 css_syntax_starts_ident(const char *input, gsize length, gsize offset)
 {
@@ -90,6 +97,7 @@ css_syntax_starts_ident(const char *input, gsize length, gsize offset)
            css_syntax_valid_escape(input, length, offset + 1);
 }
 
+/* CSS Syntax "starts with a number" check at offset. */
 static gboolean
 css_syntax_starts_number(const char *input, gsize length, gsize offset)
 {
@@ -104,6 +112,7 @@ css_syntax_starts_number(const char *input, gsize length, gsize offset)
     return FALSE;
 }
 
+/* Consumes a number (sign, digits, fraction, exponent); returns the end offset. */
 static gsize
 css_syntax_number_end(const char *input, gsize length, gsize offset)
 {
@@ -146,6 +155,7 @@ ns_css_component_free(ns_css_component *component)
     g_free(component);
 }
 
+/* Skips a comment, running to end of input if unterminated. */
 static void
 css_syntax_skip_comment(ns_css_syntax_parser *parser)
 {
@@ -163,6 +173,7 @@ css_syntax_skip_comment(ns_css_syntax_parser *parser)
 static GPtrArray *css_syntax_parse_list(ns_css_syntax_parser *parser,
                                         char closing);
 
+/* Consumes a quoted string token; an unescaped newline marks the parse invalid. */
 static ns_css_component *
 css_syntax_consume_string(ns_css_syntax_parser *parser)
 {
@@ -199,6 +210,7 @@ css_syntax_consume_string(ns_css_syntax_parser *parser)
     return component;
 }
 
+/* Consumes a number, percentage or dimension token; value holds the unit. */
 static ns_css_component *
 css_syntax_consume_numeric(ns_css_syntax_parser *parser)
 {
@@ -224,6 +236,7 @@ css_syntax_consume_numeric(ns_css_syntax_parser *parser)
     return component;
 }
 
+/* Consumes an ident, at-keyword, hash or function (with parsed arguments). */
 static ns_css_component *
 css_syntax_consume_ident(ns_css_syntax_parser *parser, gboolean at,
                          gboolean hash)
@@ -253,6 +266,7 @@ css_syntax_consume_ident(ns_css_syntax_parser *parser, gboolean at,
     return component;
 }
 
+/* Consumes one component value: whitespace, string, numeric, ident-like, delim or block. */
 static ns_css_component *
 css_syntax_consume(ns_css_syntax_parser *parser)
 {
@@ -299,6 +313,7 @@ css_syntax_consume(ns_css_syntax_parser *parser)
     return component;
 }
 
+/* Parses component values up to closing; stray closers or excess depth mark invalid. */
 static GPtrArray *
 css_syntax_parse_list(ns_css_syntax_parser *parser, char closing)
 {
@@ -333,6 +348,7 @@ css_syntax_parse_list(ns_css_syntax_parser *parser, char closing)
     return components;
 }
 
+/* Parses input into a component value tree; *valid reports syntax errors. Caller frees. */
 GPtrArray *
 ns_css_component_values_parse(const char *input, gssize len, gboolean *valid)
 {
@@ -346,6 +362,7 @@ ns_css_component_values_parse(const char *input, gssize len, gboolean *valid)
     return components;
 }
 
+/* Returns the first top-level terminator char outside strings, comments and brackets. */
 const char *
 ns_css_syntax_scan(const char *input, const char *end,
                    const char *terminators, char *terminator)
@@ -396,6 +413,7 @@ ns_css_syntax_scan(const char *input, const char *end,
     return p;
 }
 
+/* True if CSS text ends with every string, comment, block and at-rule closed. */
 gboolean
 ns_css_syntax_is_self_contained(const char *input, gsize len)
 {
@@ -459,6 +477,7 @@ ns_css_syntax_is_self_contained(const char *input, gsize len)
     return !quote && depth == 0 && stmt == STMT_NONE;
 }
 
+/* True if input parses as component values with no syntax errors. */
 gboolean
 ns_css_component_value_valid(const char *input)
 {

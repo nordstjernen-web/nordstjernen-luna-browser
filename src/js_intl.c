@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — native ECMA-402 (Intl) implementation over QuickJS, ICU-free.
+ * Collator, NumberFormat, DateTimeFormat, PluralRules, Segmenter etc. with mostly English data.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -52,6 +53,7 @@ intl_str(JSContext *ctx, const char *s)
     return JS_NewString(ctx, s ? s : "");
 }
 
+/* Copies a POSIX-style locale name with '_' turned into BCP 47 '-'; NULL if empty. */
 static char *
 intl_norm_locale(const char *s)
 {
@@ -62,6 +64,7 @@ intl_norm_locale(const char *s)
     return out;
 }
 
+/* Default locale: UI language, else a usable GLib language, else en-US; caller frees. */
 static char *
 intl_default_locale(void)
 {
@@ -77,6 +80,7 @@ intl_default_locale(void)
     return g_strdup("en-US");
 }
 
+/* Resolves a locales argument (string or first array entry) to a tag; caller frees. */
 static char *
 intl_arg_locale(JSContext *ctx, JSValueConst v)
 {
@@ -95,6 +99,7 @@ intl_arg_locale(JSContext *ctx, JSValueConst v)
     return intl_default_locale();
 }
 
+/* Writes the lowercased primary language subtag of a locale tag into out. */
 static void
 intl_lang_subtag(const char *locale, char *out, size_t n)
 {
@@ -104,6 +109,7 @@ intl_lang_subtag(const char *locale, char *out, size_t n)
     out[i] = '\0';
 }
 
+/* TRUE if the locale's primary language is in the NULL-terminated list. */
 static gboolean
 intl_lang_in(const char *locale, const char *const *langs)
 {
@@ -114,12 +120,14 @@ intl_lang_in(const char *locale, const char *const *langs)
     return FALSE;
 }
 
+/* Defines a non-enumerable, non-writable internal slot property on an Intl object. */
 static void
 intl_hide(JSContext *ctx, JSValueConst obj, const char *key, JSValue val)
 {
     JS_DefinePropertyValueStr(ctx, obj, key, val, 0);
 }
 
+/* Reads a string internal slot from an Intl object; caller frees, NULL if absent. */
 static char *
 intl_hget_str(JSContext *ctx, JSValueConst obj, const char *key)
 {
@@ -133,6 +141,7 @@ intl_hget_str(JSContext *ctx, JSValueConst obj, const char *key)
     return r;
 }
 
+/* Reads an integer internal slot from an Intl object, or dflt when missing. */
 static int
 intl_hget_int(JSContext *ctx, JSValueConst obj, const char *key, int dflt)
 {
@@ -145,6 +154,7 @@ intl_hget_int(JSContext *ctx, JSValueConst obj, const char *key, int dflt)
     return r;
 }
 
+/* Reads a string option from an options bag; NULL if missing or not a string. */
 static char *
 intl_opt_str(JSContext *ctx, JSValueConst o, const char *key)
 {
@@ -169,6 +179,7 @@ intl_opt_present(JSContext *ctx, JSValueConst o, const char *key)
     return p;
 }
 
+/* Reads a numeric option into *out; FALSE when absent or not convertible. */
 static gboolean
 intl_opt_num(JSContext *ctx, JSValueConst o, const char *key, double *out)
 {
@@ -183,6 +194,7 @@ intl_opt_num(JSContext *ctx, JSValueConst o, const char *key, double *out)
     return ok;
 }
 
+/* Reads a boolean option as 0/1, or dflt when missing or null. */
 static int
 intl_opt_bool(JSContext *ctx, JSValueConst o, const char *key, int dflt)
 {
@@ -194,6 +206,7 @@ intl_opt_bool(JSContext *ctx, JSValueConst o, const char *key, int dflt)
     return r;
 }
 
+/* Finds the prototype for a new instance: new.target, this.service, then global Intl. */
 static JSValue
 intl_instance_proto(JSContext *ctx, JSValueConst this_val, const char *service)
 {
@@ -217,6 +230,7 @@ intl_instance_proto(JSContext *ctx, JSValueConst this_val, const char *service)
     return JS_NULL;
 }
 
+/* Creates an Intl service instance object with the resolved prototype. */
 static JSValue
 intl_new(JSContext *ctx, JSValueConst this_val, const char *service)
 {
@@ -227,6 +241,7 @@ intl_new(JSContext *ctx, JSValueConst this_val, const char *service)
     return obj;
 }
 
+/* Builds a {type, value} formatToParts entry. */
 static JSValue
 intl_part(JSContext *ctx, const char *type, const char *value)
 {
@@ -236,6 +251,7 @@ intl_part(JSContext *ctx, const char *type, const char *value)
     return p;
 }
 
+/* supportedLocalesOf: echoes back the requested string tags (all locales accepted). */
 static JSValue
 intl_supportedLocalesOf(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -267,6 +283,7 @@ intl_bind(JSContext *ctx, JSValueConst obj, const char *name,
 
 typedef struct { const char *name; JSCFunction *fn; int argc; } intl_method;
 
+/* Defines a configurable Symbol.toStringTag on obj. */
 static void
 intl_set_to_string_tag(JSContext *ctx, JSValueConst obj, const char *tag)
 {
@@ -284,6 +301,7 @@ intl_set_to_string_tag(JSContext *ctx, JSValueConst obj, const char *tag)
     JS_FreeValue(ctx, global);
 }
 
+/* Creates an Intl.<name> constructor with methods, toStringTag and supportedLocalesOf. */
 static JSValue
 intl_register(JSContext *ctx, JSValueConst intl, const char *name,
               JSCFunction *ctor, int ctor_argc,
@@ -304,6 +322,7 @@ intl_register(JSContext *ctx, JSValueConst intl, const char *name,
     return func;
 }
 
+/* Case-canonicalizes a BCP 47 tag (lang lower, Script title, REGION upper); caller frees. */
 static char *
 intl_canonicalize(const char *tag)
 {
@@ -333,6 +352,7 @@ intl_canonicalize(const char *tag)
     return g_string_free(out, FALSE);
 }
 
+/* Intl.getCanonicalLocales: case-canonicalized, de-duplicated tag list. */
 static JSValue
 intl_getCanonicalLocales(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -381,6 +401,7 @@ intl_make_array(JSContext *ctx, const char *const *items)
     return a;
 }
 
+/* Intl.supportedValuesOf: fixed lists of supported calendars, currencies, units, etc. */
 static JSValue
 intl_supportedValuesOf(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -412,6 +433,7 @@ intl_supportedValuesOf(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Returns the value of a -u- extension key (ca/co/nu/hc) in a tag, lowercased; caller frees. */
 static char *
 intl_subtag_after(const char *tag, char kind)
 {
@@ -436,6 +458,7 @@ intl_subtag_after(const char *tag, char kind)
     return out;
 }
 
+/* Intl.Locale constructor: splits language/script/region and reads -u- keys or options. */
 static JSValue
 intl_locale_ctor(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -496,6 +519,7 @@ intl_locale_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Intl.Locale toString: returns baseName, or "und". */
 static JSValue
 intl_locale_toString(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -515,6 +539,7 @@ intl_locale_identity(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* Intl.Collator constructor: stores usage/sensitivity/caseFirst/numeric, binds compare. */
 static JSValue
 intl_collator_ctor(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -538,6 +563,7 @@ intl_collator_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Collation key after NFKD, mark stripping and casefold as dictated by sensitivity. */
 static char *
 intl_collation_key(const char *s, const char *sensitivity)
 {
@@ -573,6 +599,7 @@ intl_collation_key(const char *s, const char *sensitivity)
     return key;
 }
 
+/* Compares two strings by collation key at a given sensitivity; returns -1/0/1. */
 static int
 intl_collation_key_compare(const char *a, const char *b, const char *sensitivity)
 {
@@ -584,6 +611,7 @@ intl_collation_key_compare(const char *a, const char *b, const char *sensitivity
     return r < 0 ? -1 : r > 0 ? 1 : 0;
 }
 
+/* Multi-level compare: base, then accents, then case (lowercase first), then full collate. */
 static int
 intl_collate(const char *a, const char *b, const char *sensitivity)
 {
@@ -601,6 +629,7 @@ intl_collate(const char *a, const char *b, const char *sensitivity)
     return r < 0 ? -1 : r > 0 ? 1 : 0;
 }
 
+/* Natural-order compare treating digit runs as integers (Collator numeric option). */
 static int
 intl_numeric_compare(const char *a, const char *b)
 {
@@ -626,6 +655,7 @@ intl_numeric_compare(const char *a, const char *b)
     return 0;
 }
 
+/* Collator.prototype.compare: numeric or sensitivity-aware comparison, -1/0/1. */
 static JSValue
 intl_collator_compare(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -651,6 +681,7 @@ intl_collator_compare(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, r);
 }
 
+/* Collator.prototype.resolvedOptions from the stored slots. */
 static JSValue
 intl_collator_resolved(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -674,6 +705,7 @@ intl_collator_resolved(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* Picks grouping and decimal separators for a locale's language (comma/NBSP tables). */
 static void
 intl_nf_separators(const char *locale, const char **group, const char **decimal)
 {
@@ -693,6 +725,7 @@ intl_nf_separators(const char *locale, const char **group, const char **decimal)
     *decimal = cd ? "," : ".";
 }
 
+/* Maps an ISO 4217 code to its display symbol; returns the code if unknown. */
 static const char *
 intl_currency_symbol(const char *code)
 {
@@ -709,6 +742,7 @@ intl_currency_symbol(const char *code)
     return code;
 }
 
+/* Intl.NumberFormat constructor: stores style/digit options; RangeError on bad digit counts. */
 static JSValue
 intl_nf_ctor(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
@@ -770,6 +804,7 @@ intl_nf_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Appends integer digits to out with sep inserted every three digits from the right. */
 static void
 intl_nf_group_into(GString *out, const char *digits, const char *sep)
 {
@@ -780,6 +815,7 @@ intl_nf_group_into(GString *out, const char *digits, const char *sep)
     }
 }
 
+/* Formats a number to formatToParts entries: sign, currency, grouping, fraction, compact. */
 static JSValue
 intl_nf_parts(JSContext *ctx, JSValueConst this_val, double num)
 {
@@ -901,6 +937,7 @@ done:
     return arr;
 }
 
+/* Concatenates the value fields of a parts array into a string; consumes parts. */
 static JSValue
 intl_join_parts(JSContext *ctx, JSValue parts)
 {
@@ -938,6 +975,7 @@ intl_nf_formatToParts(JSContext *ctx, JSValueConst this_val,
     return intl_nf_parts(ctx, this_val, num);
 }
 
+/* NumberFormat formatRange: formats both ends joined by an en dash. */
 static JSValue
 intl_nf_formatRange(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -958,6 +996,7 @@ intl_nf_formatRange(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* NumberFormat resolvedOptions, filling default fraction digits per style. */
 static JSValue
 intl_nf_resolved(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -994,6 +1033,7 @@ static const char *const intl_months[] = {
 static const char *const intl_days[] = {
     "Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday" };
 
+/* Intl.DateTimeFormat constructor: expands date/timeStyle into fields, defaults to y/m/d. */
 static JSValue
 intl_dtf_ctor(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -1063,6 +1103,7 @@ intl_dtf_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Formats epoch ms to DateTimeFormat parts in local time or UTC, ordered per language. */
 static JSValue
 intl_dtf_parts_core(JSContext *ctx, JSValueConst opts, const char *locale,
                     const char *tz, double ms)
@@ -1227,6 +1268,7 @@ intl_dtf_parts_core(JSContext *ctx, JSValueConst opts, const char *locale,
     return arr;
 }
 
+/* Date argument as epoch ms: now when omitted, NaN when not convertible. */
 static double
 intl_to_ms(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -1237,6 +1279,7 @@ intl_to_ms(JSContext *ctx, int argc, JSValueConst *argv)
     return ms;
 }
 
+/* Formats ms using this DateTimeFormat's stored options, locale and time zone. */
 static JSValue
 intl_dtf_parts(JSContext *ctx, JSValueConst this_val, double ms)
 {
@@ -1265,6 +1308,7 @@ intl_dtf_formatToParts(JSContext *ctx, JSValueConst this_val,
     return intl_dtf_parts(ctx, this_val, intl_to_ms(ctx, argc, argv));
 }
 
+/* DateTimeFormat formatRange: formats both dates joined by an en dash. */
 static JSValue
 intl_dtf_formatRange(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -1284,6 +1328,7 @@ intl_dtf_formatRange(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Cached best-effort IANA id of the local zone (Windows map, GLib, TZ), else UTC. */
 static const char *
 intl_local_tz_id(void)
 {
@@ -1372,6 +1417,7 @@ intl_local_tz_id(void)
     return cached;
 }
 
+/* DateTimeFormat resolvedOptions, reporting the resolved IANA time zone. */
 static JSValue
 intl_dtf_resolved(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -1413,6 +1459,7 @@ intl_pr_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* CLDR-style plural category for n in a locale's language (integer rules only). */
 static const char *
 intl_plural_category(const char *locale, double n)
 {
@@ -1475,6 +1522,7 @@ intl_pr_select(JSContext *ctx, JSValueConst this_val,
     return intl_str(ctx, cat);
 }
 
+/* PluralRules selectRange: category of the range end value. */
 static JSValue
 intl_pr_selectRange(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -1487,6 +1535,7 @@ intl_pr_selectRange(JSContext *ctx, JSValueConst this_val,
     return intl_str(ctx, cat);
 }
 
+/* PluralRules resolvedOptions; pluralCategories found by probing sample numbers. */
 static JSValue
 intl_pr_resolved(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -1530,6 +1579,7 @@ intl_lf_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* ListFormat parts: elements joined by ", " with "and"/"or" before the last (unit: commas). */
 static JSValue
 intl_lf_parts(JSContext *ctx, JSValueConst this_val, JSValueConst list)
 {
@@ -1623,6 +1673,7 @@ intl_rtf_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Lowercases a RelativeTimeFormat unit and strips a plural "s"; caller frees. */
 static char *
 intl_rtf_unit(JSContext *ctx, JSValueConst v)
 {
@@ -1634,6 +1685,7 @@ intl_rtf_unit(JSContext *ctx, JSValueConst v)
     return u;
 }
 
+/* English phrase for numeric:"auto" (yesterday, next week...), or NULL if none. */
 static const char *
 intl_rtf_auto(const char *unit, int v)
 {
@@ -1650,6 +1702,7 @@ intl_rtf_auto(const char *unit, int v)
     return NULL;
 }
 
+/* RelativeTimeFormat format: "in N units" / "N units ago", or auto phrases. */
 static JSValue
 intl_rtf_format(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -1671,6 +1724,7 @@ intl_rtf_format(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* RelativeTimeFormat formatToParts with an integer part tagged with its unit. */
 static JSValue
 intl_rtf_formatToParts(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -1720,6 +1774,7 @@ intl_rtf_resolved(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* English display name for a region code from a small table; NULL if unknown. */
 static const char *
 intl_region_name(const char *code)
 {
@@ -1738,6 +1793,7 @@ intl_region_name(const char *code)
     return NULL;
 }
 
+/* English display name for a tag's language subtag from a small table; NULL if unknown. */
 static const char *
 intl_language_name(const char *code)
 {
@@ -1756,6 +1812,7 @@ intl_language_name(const char *code)
     return NULL;
 }
 
+/* English display name for an ISO 15924 script code; NULL if unknown. */
 static const char *
 intl_script_name(const char *code)
 {
@@ -1769,6 +1826,7 @@ intl_script_name(const char *code)
     return NULL;
 }
 
+/* Intl.DisplayNames constructor: stores type, style and fallback. */
 static JSValue
 intl_dn_ctor(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
@@ -1787,6 +1845,7 @@ intl_dn_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* DisplayNames of(): English name by type; code or undefined per fallback when unknown. */
 static JSValue
 intl_dn_of(JSContext *ctx, JSValueConst this_val,
            int argc, JSValueConst *argv)
@@ -1850,6 +1909,7 @@ static const struct { const char *field; const char *unit; } intl_dur_units[] = 
     {"nanoseconds","nanosecond"},
 };
 
+/* DurationFormat parts: nonzero fields as narrow/short/long unit pieces, "0 sec" if none. */
 static JSValue
 intl_df_parts(JSContext *ctx, JSValueConst this_val, JSValueConst dur)
 {
@@ -1932,6 +1992,7 @@ intl_df_resolved(JSContext *ctx, JSValueConst this_val,
     return o;
 }
 
+/* Intl.Segmenter constructor: stores locale and granularity (default grapheme). */
 static JSValue
 intl_seg_ctor(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -1946,6 +2007,7 @@ intl_seg_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* segments.containing(i): the segment record whose range covers code point index i. */
 static JSValue
 intl_seg_containing(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -1969,6 +2031,7 @@ intl_seg_containing(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Segmenter segment(): grapheme/word/sentence segments from Pango log attrs, as an array. */
 static JSValue
 intl_seg_segment(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -2025,6 +2088,7 @@ intl_seg_segment(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* Number.prototype.toLocaleString via a fresh Intl.NumberFormat. */
 static JSValue
 intl_number_toLocaleString(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -2045,6 +2109,7 @@ intl_number_toLocaleString(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* Formats a Date's time value with a new Intl.DateTimeFormat(locales, options). */
 static JSValue
 intl_date_format_with(JSContext *ctx, JSValueConst this_val,
                       JSValueConst locales, JSValueConst options)
@@ -2064,6 +2129,7 @@ intl_date_format_with(JSContext *ctx, JSValueConst this_val,
 
 enum { INTL_DATE_FIELDS = 1, INTL_TIME_FIELDS = 2 };
 
+/* Shared Date toLocale*String: default date and/or time fields unless options given. */
 static JSValue
 intl_date_locale_string(JSContext *ctx, JSValueConst this_val, int argc,
                         JSValueConst *argv, int fields)
@@ -2114,6 +2180,7 @@ intl_date_toLocaleTimeString(JSContext *ctx, JSValueConst this_val,
                                    INTL_TIME_FIELDS);
 }
 
+/* String.prototype.localeCompare using the collator's sensitivity/numeric logic. */
 static JSValue
 intl_string_localeCompare(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -2138,6 +2205,7 @@ intl_string_localeCompare(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, r);
 }
 
+/* Defines a method that ignores this and calls fn with instance as data[0] (bound format). */
 static void
 intl_bind_bound(JSContext *ctx, JSValueConst obj, const char *name,
                 JSCFunctionData *fn, int argc, JSValueConst instance)
@@ -2171,6 +2239,7 @@ intl_dtf_format_b(JSContext *ctx, JSValueConst this_val, int argc,
     return intl_dtf_format(ctx, data[0], argc, argv);
 }
 
+/* Overrides ctor.prototype[method] on a global builtin with a native function. */
 static void
 intl_install_proto_hook(JSContext *ctx, JSValueConst global, const char *ctor,
                         const char *method, JSCFunction *fn, int argc)
@@ -2183,6 +2252,7 @@ intl_install_proto_hook(JSContext *ctx, JSValueConst global, const char *ctor,
     JS_FreeValue(ctx, c);
 }
 
+/* Installs the native Intl namespace and locale-aware builtin overrides unless Intl exists. */
 void
 ns_js_intl_install(JSContext *ctx, JSValueConst global)
 {

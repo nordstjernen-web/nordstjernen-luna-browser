@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — a video decoder running on its own thread, a few frames ahead.
+ * Seeks start a new epoch that drops queued work; tracks a global decode-rate estimate.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -46,6 +47,7 @@ static GMutex g_rate_lock;
 static double g_pixel_rate;
 static guint  g_rate_samples;
 
+/* Folds one decode's pixels per second into a smoothed global decode-rate estimate. */
 static void
 note_decode_rate(ns_texture *texture, gint64 us)
 {
@@ -59,6 +61,7 @@ note_decode_rate(ns_texture *texture, gint64 us)
     g_mutex_unlock(&g_rate_lock);
 }
 
+/* Returns the smoothed decode rate in pixels/s, or 0 until 30 samples exist. */
 double
 ns_video_decode_pixel_rate(void)
 {
@@ -90,6 +93,7 @@ drop_jobs(ns_video_worker *worker)
     while ((job = g_queue_pop_head(&worker->jobs)) != NULL) job_free(job);
 }
 
+/* Decodes one sample (flushing first if asked) and queues the picture if still current. */
 static void
 decode_job(ns_video_worker *worker, worker_job *job, gboolean flush)
 {
@@ -119,6 +123,7 @@ decode_job(ns_video_worker *worker, worker_job *job, gboolean flush)
                            flush ? " after flush" : "");
 }
 
+/* Returns TRUE if the next job can run without exceeding the picture queue limit. */
 static gboolean
 worker_may_decode(ns_video_worker *worker)
 {
@@ -128,6 +133,7 @@ worker_may_decode(ns_video_worker *worker)
            worker->pictures->len < worker->max_pictures;
 }
 
+/* Decode thread loop: runs jobs of the current epoch, flushing after each restart. */
 static gpointer
 worker_main(gpointer data)
 {
@@ -158,6 +164,7 @@ worker_main(gpointer data)
     return NULL;
 }
 
+/* Creates a decode worker thread that takes ownership of decoder. */
 ns_video_worker *
 ns_video_worker_new(ns_video_decoder *decoder)
 {
@@ -174,6 +181,7 @@ ns_video_worker_new(ns_video_decoder *decoder)
     return worker;
 }
 
+/* Stops and joins the worker thread, then frees the decoder and queued pictures. */
 void
 ns_video_worker_free(ns_video_worker *worker)
 {
@@ -191,6 +199,7 @@ ns_video_worker_free(ns_video_worker *worker)
     g_free(worker);
 }
 
+/* Starts a new epoch (e.g. after a seek), dropping queued jobs and decoded pictures. */
 void
 ns_video_worker_restart(ns_video_worker *worker)
 {
@@ -203,6 +212,7 @@ ns_video_worker_restart(ns_video_worker *worker)
     g_mutex_unlock(&worker->lock);
 }
 
+/* Queues a sample for decoding; want_texture FALSE decodes only to advance state. */
 void
 ns_video_worker_push(ns_video_worker *worker, GBytes *sample, GBytes *config,
                      double pts, gboolean want_texture)
@@ -232,6 +242,7 @@ ns_video_worker_set_max_pictures(ns_video_worker *worker, guint max_pictures)
     g_mutex_unlock(&worker->lock);
 }
 
+/* Returns TRUE if a picture for pts is decoding, decoded or queued. */
 gboolean
 ns_video_worker_expects(ns_video_worker *worker, double pts)
 {
@@ -263,6 +274,7 @@ ns_video_worker_counts(ns_video_worker *worker, guint *presented,
     g_mutex_unlock(&worker->lock);
 }
 
+/* Returns the number of decoded pictures and the newest pts among them. */
 guint
 ns_video_worker_ready(ns_video_worker *worker, double *newest_pts)
 {
@@ -281,6 +293,7 @@ ns_video_worker_ready(ns_video_worker *worker, double *newest_pts)
     return n;
 }
 
+/* Takes the newest picture at or before pts, dropping older ones; caller owns texture. */
 ns_texture *
 ns_video_worker_take(ns_video_worker *worker, double pts, double *taken_pts)
 {

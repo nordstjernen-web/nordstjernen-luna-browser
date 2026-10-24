@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — bookmarks storage.
+/* Nordstjernen Web Browser — bookmarks storage in a tab-separated url/title text file.
+ * Loaded from the app config dir and rewritten atomically (mode 0600) on add or remove.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -14,6 +15,7 @@ struct ns_bookmarks {
     char   *path;
 };
 
+/* Returns the bookmarks.txt path in the app config dir, creating the dir; caller frees. */
 static char *
 bookmarks_path(void)
 {
@@ -31,6 +33,7 @@ bookmark_clear(gpointer data)
     g_free(b->title);
 }
 
+/* Loads bookmarks from "url<TAB>title" lines, skipping blanks and # comments. */
 ns_bookmarks *
 ns_bookmarks_load(void)
 {
@@ -73,6 +76,7 @@ ns_bookmarks_free(ns_bookmarks *bm)
     g_free(bm);
 }
 
+/* Appends text with tabs and newlines replaced by spaces to keep the file format. */
 static void
 bookmark_append_sanitized(GString *out, const char *s)
 {
@@ -83,6 +87,7 @@ bookmark_append_sanitized(GString *out, const char *s)
     }
 }
 
+/* Atomically rewrites the bookmarks file (mode 0600). */
 static void
 ns_bookmarks_save(ns_bookmarks *bm)
 {
@@ -129,6 +134,7 @@ ns_bookmarks_contains(const ns_bookmarks *bm, const char *url)
     return FALSE;
 }
 
+/* Appends a bookmark unless the URL exists (title defaults to URL) and saves. */
 void
 ns_bookmarks_add(ns_bookmarks *bm, const char *url, const char *title)
 {
@@ -138,6 +144,7 @@ ns_bookmarks_add(ns_bookmarks *bm, const char *url, const char *title)
     ns_bookmarks_save(bm);
 }
 
+/* Removes the first bookmark with the URL and saves. */
 void
 ns_bookmarks_remove(ns_bookmarks *bm, const char *url)
 {

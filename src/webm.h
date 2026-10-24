@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — incremental WebM (Matroska subset) demuxing for Media Source Extensions.
+/* Nordstjernen Web Browser — incremental WebM demuxer API for Media Source Extensions.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

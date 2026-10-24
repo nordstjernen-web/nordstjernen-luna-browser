@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — Content-Security-Policy parser + check.
+/* Nordstjernen Web Browser — Content-Security-Policy API: parse, merge and query policy lists.
+ * Checks for fetches, inline scripts and handlers, eval, module imports and frame-ancestors.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

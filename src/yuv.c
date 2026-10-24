@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — YUV picture to BGRA texture conversion for the video decoders.
+ * BT.601/709 limited or full range, 8-16 bit samples, chroma subsampling and monochrome.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -18,6 +19,7 @@ typedef struct {
     int b_u;
 } yuv_coefficients;
 
+/* 16.16 fixed-point YUV to RGB coefficients for BT.601/709, limited or full range. */
 static yuv_coefficients
 coefficients_for(const ns_yuv_picture *picture)
 {
@@ -35,6 +37,7 @@ coefficients_for(const ns_yuv_picture *picture)
     return c;
 }
 
+/* Converts a 16.16 fixed-point value to a 0..255 channel. */
 static inline guint8
 clamp_channel(int value)
 {
@@ -42,6 +45,7 @@ clamp_channel(int value)
     return (guint8)(value < 0 ? 0 : value > 255 ? 255 : value);
 }
 
+/* Reads a plane sample, downshifting high-bit-depth 16-bit samples to 8 bits. */
 static inline int
 sample_at(const void *plane, ptrdiff_t stride, int x, int y, int shift)
 {
@@ -52,6 +56,7 @@ sample_at(const void *plane, ptrdiff_t stride, int x, int y, int shift)
     return row[x] >> shift;
 }
 
+/* Converts a planar YUV picture (8-16 bit, subsampled or mono) to an opaque BGRA texture. */
 ns_texture *
 ns_yuv_to_texture(const ns_yuv_picture *picture)
 {

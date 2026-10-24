@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — local phishing/malware blocklist and warning interstitial.
+/* Nordstjernen Web Browser — local phishing/malware blocklist of SHA-256 host hashes.
+ * Checks the host and parent domains, supports session allow-lists, builds the warning page.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -19,6 +20,7 @@ static gboolean    g_loaded;
 /* Queried from the network and engine threads; guards the three above. */
 static GMutex      g_sb_lock;
 
+/* Returns the lowercase hex SHA-256 of the lowercased host; caller frees. */
 static char *
 host_sha256_hex(const char *host)
 {
@@ -37,6 +39,7 @@ host_sha256_hex(const char *host)
     return g_string_free(hex, FALSE);
 }
 
+/* Adds host hashes (first token per line, 16+ chars, # comments) to the blocklist. */
 static void
 load_file(const char *path)
 {
@@ -59,6 +62,7 @@ load_file(const char *path)
     g_free(contents);
 }
 
+/* Loads the first bundled safebrowsing.list found near the executable or in data/. */
 static gboolean
 load_bundled(void)
 {
@@ -93,6 +97,7 @@ load_bundled(void)
     return FALSE;
 }
 
+/* Lazily loads the env or user list plus the bundled list; caller holds the lock. */
 static void
 ensure_loaded(void)
 {
@@ -117,6 +122,7 @@ ensure_loaded(void)
     load_bundled();
 }
 
+/* Exempts a host from blocking for this session (user chose to continue). */
 void
 ns_safebrowsing_allow_host(const char *host)
 {
@@ -128,6 +134,7 @@ ns_safebrowsing_allow_host(const char *host)
     g_mutex_unlock(&g_sb_lock);
 }
 
+/* True if the host or any parent domain's SHA-256 is blocklisted and not allowed. */
 gboolean
 ns_safebrowsing_blocked(const char *host)
 {
@@ -161,6 +168,7 @@ ns_safebrowsing_blocked(const char *host)
     return hit;
 }
 
+/* Builds the HTML warning page for a blocked URL; caller frees. */
 char *
 ns_safebrowsing_interstitial(const char *url, const char *host)
 {

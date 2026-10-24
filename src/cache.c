@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — SQLite-indexed HTTP cache with on-disk bodies.
+ * Keyed by URL, partition and Vary; Cache-Control/Expires freshness, 304 refresh, LRU eviction.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -23,6 +24,7 @@ static gboolean g_cache_disabled;
 static GMutex   g_cache_mutex;
 
 #ifdef G_OS_WIN32
+/* Windows: replaces the path's DACL with a protected full-access ACE for the current user. */
 static gboolean
 set_owner_only_w32(const char *utf8_path, gboolean container)
 {
@@ -70,6 +72,7 @@ set_owner_only_w32(const char *utf8_path, gboolean container)
 }
 #endif
 
+/* Restricts a cache file or directory to the current user (0600/0700 or owner-only ACL). */
 static void
 restrict_to_owner(const char *path, gboolean is_dir)
 {
@@ -86,6 +89,7 @@ static void delete_key(const char *key);
 static void evict_aged_out(void);
 static void evict_to_cap(void);
 
+/* Configured cache size cap in bytes (default 256 MiB). */
 static guint64
 cache_cap_bytes(void)
 {
@@ -95,6 +99,7 @@ cache_cap_bytes(void)
     return (guint64)mb * 1024ULL * 1024ULL;
 }
 
+/* SHA-256 cache key over the URL plus optional partition key; caller frees. */
 static char *
 base_key_for_url(const char *url, const char *partition)
 {
@@ -109,6 +114,7 @@ base_key_for_url(const char *url, const char *partition)
     return digest;
 }
 
+/* Returns bodies/<2-char prefix>/<rest> for a key, optionally creating the dir. */
 static char *
 body_path_for_key(const char *key, gboolean ensure_dir)
 {
@@ -123,6 +129,7 @@ body_path_for_key(const char *key, gboolean ensure_dir)
     return out;
 }
 
+/* Finds a "Name: value" request header case-insensitively and returns the value. */
 static const char *
 request_header_value(const char *const *headers, const char *name)
 {
@@ -137,6 +144,7 @@ request_header_value(const char *const *headers, const char *name)
     return NULL;
 }
 
+/* Builds the Vary selector from request headers; FALSE if Vary names an unsupported header. */
 static gboolean
 vary_selector(const char *vary, const char *const *request_headers, char **out)
 {
@@ -171,6 +179,7 @@ vary_selector(const char *vary, const char *const *request_headers, char **out)
     return TRUE;
 }
 
+/* Derives the row key from the base key and Vary selector (base key if no selector). */
 static char *
 row_key_for(const char *base_key, const char *selector)
 {
@@ -190,6 +199,7 @@ cache_exec(const char *sql)
     return ns_sqlite_exec(g_cache_db, "cache", sql);
 }
 
+/* Drops a pre-body_size entries table left by an older schema. */
 static void
 cache_drop_if_legacy(void)
 {
@@ -212,6 +222,7 @@ cache_drop_if_legacy(void)
 
 #define NS_CACHE_SCHEMA_VERSION 2
 
+/* Returns the database's PRAGMA user_version, or -1 on error. */
 static int
 cache_user_version(void)
 {
@@ -225,6 +236,7 @@ cache_user_version(void)
     return version;
 }
 
+/* Enables WAL and creates the schema, wiping entries and bodies on version mismatch. */
 static gboolean
 cache_schema(void)
 {
@@ -261,6 +273,7 @@ cache_schema(void)
            cache_exec("PRAGMA user_version=" G_STRINGIFY(NS_CACHE_SCHEMA_VERSION));
 }
 
+/* Finds the stored row whose Vary selector matches the current request headers. */
 static char *
 find_row_key(const char *base_key, const char *const *request_headers)
 {
@@ -283,6 +296,7 @@ find_row_key(const char *base_key, const char *const *request_headers)
     return found;
 }
 
+/* Opens the per-user SQLite HTTP cache unless disabled or in private mode. */
 void
 ns_cache_init(void)
 {
@@ -327,6 +341,7 @@ ns_cache_shutdown(void)
     g_clear_pointer(&g_cache_dir, g_free);
 }
 
+/* Deletes every cache entry and all stored bodies. */
 void
 ns_cache_clear(void)
 {
@@ -360,6 +375,7 @@ ns_cache_entry_free(ns_cache_entry *e)
     g_free(e);
 }
 
+/* Maps a three-letter English month abbreviation to 1..12, or 0. */
 static int
 month_from_name(const char *m)
 {
@@ -372,6 +388,7 @@ month_from_name(const char *m)
     return 0;
 }
 
+/* Parses ISO 8601, RFC 1123, RFC 850 or asctime dates to Unix seconds; 0 on failure. */
 static gint64
 parse_http_date(const char *s)
 {
@@ -412,6 +429,7 @@ parse_http_date(const char *s)
     return r;
 }
 
+/* Expiry time from Cache-Control/Expires; -1 for no-store, 0 for no-cache or unknown. */
 static gint64
 freshness_from_headers(const char *cache_control, const char *expires_header)
 {
@@ -438,6 +456,7 @@ freshness_from_headers(const char *cache_control, const char *expires_header)
     return 0;
 }
 
+/* True for status codes the cache stores (200, 203, 301, 410). */
 static gboolean
 is_cacheable_status(long s)
 {
@@ -450,6 +469,7 @@ now_seconds(void)
     return g_get_real_time() / G_USEC_PER_SEC;
 }
 
+/* Returns a copy of a text column, or NULL. */
 static char *
 column_dup(sqlite3_stmt *st, int col)
 {
@@ -457,6 +477,7 @@ column_dup(sqlite3_stmt *st, int col)
     return t ? g_strdup((const char *)t) : NULL;
 }
 
+/* Removes a cache row and its body file. */
 static void
 delete_key(const char *key)
 {
@@ -473,6 +494,7 @@ delete_key(const char *key)
     sqlite3_finalize(st);
 }
 
+/* Updates a row's last_used time for LRU eviction. */
 static void
 touch_key(const char *key)
 {
@@ -487,6 +509,7 @@ touch_key(const char *key)
     sqlite3_finalize(st);
 }
 
+/* Loads the cache entry matching url, partition and Vary; caller frees. Bumps LRU. */
 ns_cache_entry *
 ns_cache_get(const char *url, const char *partition,
              const char *const *request_headers)
@@ -564,6 +587,7 @@ ns_cache_get(const char *url, const char *partition,
     return e;
 }
 
+/* True if the entry's expiry time is still in the future. */
 gboolean
 ns_cache_is_fresh(const ns_cache_entry *e)
 {
@@ -571,6 +595,7 @@ ns_cache_is_fresh(const ns_cache_entry *e)
     return e->expires_at > now_seconds();
 }
 
+/* True for http(s) URLs with no control characters. */
 static gboolean
 url_should_cache(const char *url)
 {
@@ -581,6 +606,7 @@ url_should_cache(const char *url)
     return TRUE;
 }
 
+/* Stores a cacheable response row and body file honoring no-store/private and Vary. */
 void
 ns_cache_put(const char *url,
              const char *partition,
@@ -655,6 +681,7 @@ ns_cache_put(const char *url,
     evict_to_cap();
 }
 
+/* Extends a cached entry's expiry after a 304 revalidation if the new one is later. */
 void
 ns_cache_promote_304(const char *url,
                      const char *partition,
@@ -698,6 +725,7 @@ ns_cache_promote_304(const char *url,
     sqlite3_finalize(st);
 }
 
+/* Deletes every entry whose key is returned by the given query. */
 static void
 evict_by_select(const char *sql, gboolean has_bind, gint64 bind_value)
 {
@@ -717,6 +745,7 @@ evict_by_select(const char *sql, gboolean has_bind, gint64 bind_value)
     g_ptr_array_free(keys, TRUE);
 }
 
+/* Evicts entries unused for 30 days. */
 static void
 evict_aged_out(void)
 {
@@ -724,6 +753,7 @@ evict_aged_out(void)
                     TRUE, now_seconds() - NS_CACHE_MAX_AGE_SECONDS);
 }
 
+/* Evicts aged entries, then least-recently-used ones beyond the size cap. */
 static void
 evict_to_cap(void)
 {

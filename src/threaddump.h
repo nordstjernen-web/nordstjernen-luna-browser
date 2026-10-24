@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — per-process thread dump to stderr, incl. a SIGQUIT trigger.
+/* Nordstjernen Web Browser — installs a SIGQUIT handler that dumps the process's threads to stderr.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

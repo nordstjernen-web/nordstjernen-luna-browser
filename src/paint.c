@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — Cairo paint.
+/* Nordstjernen Web Browser — Cairo painter for the layout box tree.
+ * Backgrounds, borders, text via ns-pango, stacking, transforms, list markers and media controls.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -50,6 +51,7 @@ ns_paint_set_caret_visible(gboolean visible)
 static cairo_surface_t *texture_surface_cached(ns_texture *tex,
                                                const char *filter_kw);
 
+/* Creates a layout on a shared cached context with grayscale antialiasing font options. */
 static NsPangoLayout *
 paint_create_layout(void)
 {
@@ -69,6 +71,7 @@ paint_create_layout(void)
     return ns_pango_layout_new(cached_ctx);
 }
 
+/* Maps a CSS numeric font-weight onto the nearest Pango weight bucket. */
 NsPangoWeight
 ns_paint_pango_weight(int weight)
 {
@@ -92,6 +95,7 @@ ns_paint_pango_font_size(double size_px)
     return (int)(size_px * NS_PANGO_SCALE);
 }
 
+/* Maps a font-stretch rank 0..8 (clamped) to the Pango stretch enum. */
 NsPangoStretch
 ns_paint_pango_stretch(int rank)
 {
@@ -148,6 +152,7 @@ rgba_of(const ns_css_value *v, double dr, double dg, double db, double da)
     return c;
 }
 
+/* Box color from a running animation if any, else from the CSS value or default. */
 static rgba
 rgba_anim(const ns_box *b, ns_css_anim_target which,
           const ns_css_value *v, double dr, double dg, double db, double da)
@@ -172,6 +177,7 @@ set_source_rgba(cairo_t *cr, rgba c)
 
 #define keyword_is ns_css_keyword_is
 
+/* Resolves a length in background units to px; em/rem assume 16px, % uses basis. */
 static double
 bg_size_px(double v, ns_css_unit unit, double basis)
 {
@@ -202,6 +208,7 @@ typedef struct corner_radii {
     double y[4];
 } corner_radii;
 
+/* Resolves one axis of a border-radius value to px; FALSE if unset or unsupported. */
 static gboolean
 corner_radius_axis(const ns_css_value *v, gboolean vertical, double basis,
                    double *out)
@@ -218,6 +225,7 @@ corner_radius_axis(const ns_css_value *v, gboolean vertical, double basis,
     return TRUE;
 }
 
+/* Resolves all four corner radii from longhands, falling back to border-radius. */
 static corner_radii
 style_border_radii(const ns_style *s, double w, double h)
 {
@@ -253,6 +261,7 @@ corner_radii_zero(corner_radii c)
     return TRUE;
 }
 
+/* Scales all radii down uniformly so adjacent radii fit the box (overlapping-curves rule). */
 static void
 corner_radii_fit(corner_radii *c, double w, double h)
 {
@@ -284,6 +293,7 @@ corner_arc(cairo_t *cr, double cx, double cy, double rx, double ry,
     cairo_restore(cr);
 }
 
+/* Appends a rounded-rectangle path, fitting radii and degenerating to a plain rect. */
 static void
 rounded_rect_path(cairo_t *cr, double x, double y, double w, double h,
                   corner_radii c)
@@ -317,6 +327,7 @@ rounded_rect_path(cairo_t *cr, double x, double y, double w, double h,
     cairo_close_path(cr);
 }
 
+/* Fills the even-odd ring between an outer and inner rounded rect. */
 static void
 fill_outer_shadow(cairo_t *cr, double ox, double oy, double ow, double oh,
                   double ix, double iy, double iw, double ih, corner_radii radii)
@@ -358,6 +369,7 @@ shadow_key_equal(gconstpointer a, gconstpointer b)
     return memcmp(a, b, sizeof(shadow_key)) == 0;
 }
 
+/* Renders a triple box-blurred shadow shape, cached by geometry and color; caller unrefs. */
 static cairo_surface_t *
 blurred_shadow_surface(double sw, double sh_h, corner_radii radii, int radius,
                        int pad, int surf_w, int surf_h,
@@ -413,6 +425,7 @@ blurred_shadow_surface(double sw, double sh_h, corner_radii radii, int radius,
     return surf;
 }
 
+/* Paints a blurred outer box-shadow, clipped to exclude the box's own border area. */
 static void
 paint_blurred_box_shadow(cairo_t *cr, double sx, double sy, double sw, double sh_h,
                          corner_radii radii, double blur,
@@ -462,6 +475,7 @@ style_side_visible(const ns_style *s, ns_css_prop wp, ns_css_prop sp)
     return !keyword_is(st, "none") && !keyword_is(st, "hidden");
 }
 
+/* TRUE if all four borders are visible, solid and equal width and color; returns them. */
 static gboolean
 style_uniform_solid_border(const ns_style *s, double *out_w, rgba *out_color)
 {
@@ -512,6 +526,7 @@ style_uniform_solid_border(const ns_style *s, double *out_w, rgba *out_color)
     return bw > 0;
 }
 
+/* CSS-resolved width of an inline form control plus its chrome, else its layout width. */
 static double
 inline_control_css_width(const ns_inline_attr *r, const ns_box *b)
 {
@@ -524,6 +539,7 @@ inline_control_css_width(const ns_inline_attr *r, const ns_box *b)
     return w > 0 ? w : r->box_w;
 }
 
+/* Resolves an inline control's CSS min-width plus chrome extra; 0 when unset. */
 static double
 inline_control_css_min_width(const ns_inline_attr *r, const ns_box *b)
 {
@@ -535,6 +551,7 @@ inline_control_css_min_width(const ns_inline_attr *r, const ns_box *b)
     return mn;
 }
 
+/* Paints outer box-shadows for an inline box, approximating blur with stepped rings. */
 static void
 paint_inline_box_shadow(cairo_t *cr, const ns_style *s, double x, double y,
                         double w, double h, corner_radii radii)
@@ -573,6 +590,7 @@ paint_inline_box_shadow(cairo_t *cr, const ns_style *s, double x, double y,
     }
 }
 
+/* TRUE if image-rendering requests nearest-neighbour scaling (pixelated/crisp-edges). */
 static gboolean
 style_pixelated(const ns_style *s)
 {
@@ -582,6 +600,7 @@ style_pixelated(const ns_style *s)
             strcmp(ir->u.keyword, "crisp-edges") == 0);
 }
 
+/* Paints a background image honoring repeat, size (cover/contain) and position, clipped. */
 static void
 paint_bg_image_core(cairo_t *cr, ns_image *img,
                     const ns_css_value *rep_v, const ns_css_value *sz,
@@ -681,6 +700,7 @@ paint_bg_image_core(cairo_t *cr, ns_image *img,
     cairo_restore(cr);
 }
 
+/* Interpolates the conic-gradient color at an angle fraction, handling repeating stops. */
 static void
 conic_color_at(const ns_css_gradient *gr, double frac,
                double *r, double *g, double *b, double *a)
@@ -708,6 +728,7 @@ conic_color_at(const ns_css_gradient *gr, double frac,
     *a = (gr->stops[lo].a * (1 - t) + gr->stops[hi].a * t) / 255.0;
 }
 
+/* Paints a linear, radial or conic gradient; conic is built from mesh-pattern wedges. */
 static void
 paint_bg_gradient_core(cairo_t *cr, const ns_css_gradient *gr,
                        double border_x, double border_y,
@@ -823,6 +844,7 @@ paint_bg_gradient_core(cairo_t *cr, const ns_css_gradient *gr,
     }
 }
 
+/* Paints an inline box's background-image over its full rect. */
 static void
 paint_inline_background_image(cairo_t *cr, const ns_inline_attr *r,
                               const ns_style *s, double x, double y,
@@ -839,6 +861,7 @@ paint_inline_background_image(cairo_t *cr, const ns_inline_attr *r,
         x, y, w, h, x, y, w, h, radii);
 }
 
+/* Paints shadow, background and borders for an inline box (e.g. a styled span). */
 static void
 paint_inline_css_chrome(cairo_t *cr, const ns_inline_attr *r, double x, double y,
                         double w, double h)
@@ -918,6 +941,7 @@ ns_paint_clear_device_viewport(void)
     g_paint_have_device_vp = FALSE;
 }
 
+/* Viewport bounds in user space from the device viewport, else the clip extents. */
 static void
 paint_viewport_user_extents(cairo_t *cr, double *x0, double *y0,
                             double *x1, double *y1)
@@ -949,6 +973,7 @@ bg_layer_keyword(const ns_style *s, ns_css_prop prop, int li)
     return v && v->kind == NS_CSS_V_KEYWORD ? v->u.keyword : NULL;
 }
 
+/* Computes the background-clip rect (border/padding/content box) for a layer. */
 static void
 bg_layer_clip_area(const ns_box *b, int li,
                    double bx, double by, double bw, double bh,
@@ -970,6 +995,7 @@ bg_layer_clip_area(const ns_box *b, int li,
     if (*h < 0) *h = 0;
 }
 
+/* Computes the background positioning area for a layer; fixed uses the viewport. */
 static void
 bg_layer_origin_area(const ns_box *b, int li,
                      double bx, double by, double bw, double bh,
@@ -1000,6 +1026,7 @@ bg_layer_origin_area(const ns_box *b, int li,
     if (*h < 1) *h = 1;
 }
 
+/* Parses a 1-4 value border-image-width/outset list into px per side (top, right, ...). */
 static void
 border_image_quad(const char *text, double font_px, double box_w, double box_h,
                   const double border_px[4], const double slice_px[4],
@@ -1039,6 +1066,7 @@ border_image_quad(const char *text, double font_px, double box_w, double box_h,
     g_strfreev(tokens);
 }
 
+/* Parses border-image-slice into px against the image size; reports the fill keyword. */
 static void
 border_image_slices(const char *text, double iw, double ih, double out[4],
                     gboolean *fill)
@@ -1070,6 +1098,7 @@ border_image_slices(const char *text, double iw, double ih, double out[4],
     g_strfreev(tokens);
 }
 
+/* Draws one nine-slice piece into its destination with stretch/repeat/round tiling. */
 static void
 border_image_draw_piece(cairo_t *cr, cairo_surface_t *surf,
                         double sx, double sy, double sw, double sh,
@@ -1134,6 +1163,7 @@ border_image_draw_piece(cairo_t *cr, cairo_surface_t *surf,
     cairo_restore(cr);
 }
 
+/* Paints border-image (url or gradient source) as nine slices; FALSE if not applicable. */
 static gboolean
 paint_border_image(cairo_t *cr, const ns_box *b,
                    double bx, double by, double bw, double bh)
@@ -1220,6 +1250,7 @@ paint_border_image(cairo_t *cr, const ns_box *b,
     return TRUE;
 }
 
+/* Paints a block's decorations: shadows, background layers, mask, borders and outline. */
 static void
 paint_block(cairo_t *cr, const ns_box *b)
 {
@@ -1568,6 +1599,7 @@ paint_block(cairo_t *cr, const ns_box *b)
     if (legend_gap) cairo_restore(cr);
 }
 
+/* Returns the style of the nearest ancestor box that has one. */
 static const ns_style *
 inherited_style(const ns_box *b)
 {
@@ -1586,6 +1618,7 @@ attr_insert_range(NsPangoAttrList *attrs, NsPangoAttribute *a,
     ns_pango_attr_list_insert(attrs, a);
 }
 
+/* Finds needle in hay from start, honoring the search case flag; (gsize)-1 if absent. */
 static gsize
 find_ci_substring(const char *hay, gsize hay_len,
                   const char *needle, gsize needle_len,
@@ -1602,6 +1635,7 @@ find_ci_substring(const char *hay, gsize hay_len,
     return (gsize)-1;
 }
 
+/* Returns the first non-empty value of attr on the node or its element ancestors. */
 static const char *
 nearest_node_attr(const ns_node *n, const char *attr)
 {
@@ -1613,6 +1647,7 @@ nearest_node_attr(const ns_node *n, const char *attr)
     return NULL;
 }
 
+/* Maps word-break and overflow-wrap to a Pango wrap mode; word wrap by default. */
 NsPangoWrapMode
 ns_paint_wrap_mode_for(const ns_style *style)
 {
@@ -1636,6 +1671,7 @@ ns_paint_wrap_mode_for(const ns_style *style)
     return NS_PANGO_WRAP_WORD;
 }
 
+/* TRUE if white-space is nowrap or pre. */
 static gboolean
 ns_style_is_nowrap(const ns_style *style)
 {
@@ -1646,6 +1682,7 @@ ns_style_is_nowrap(const ns_style *style)
             strcmp(ws->u.keyword, "pre") == 0);
 }
 
+/* Approximates line-height: normal as a per-family factor of font size, rounded up. */
 double
 ns_paint_normal_line_height_px(const ns_style *s)
 {
@@ -1665,6 +1702,7 @@ ns_paint_normal_line_height_px(const ns_style *s)
     return ceil(font_size * factor);
 }
 
+/* Resolves line-height to px for the style; -1 when unsupported or no style. */
 double
 ns_paint_css_line_height_px(const ns_style *s)
 {
@@ -1730,6 +1768,7 @@ ns_paint_css_line_height_px(const ns_style *s)
     }
 }
 
+/* Sets layout line spacing so lines match the CSS line-height in px. */
 void
 ns_paint_apply_css_line_spacing(NsPangoLayout *layout, const ns_style *s)
 {
@@ -1746,6 +1785,7 @@ ns_paint_apply_css_line_spacing(NsPangoLayout *layout, const ns_style *s)
     ns_pango_layout_set_line_spacing(layout, (float)(lh_px / natural));
 }
 
+/* Applies hyphens, lang/xml:lang and dir/direction from the box or ancestors to a layout. */
 void
 ns_paint_apply_i18n(NsPangoLayout *layout, NsPangoAttrList *attrs,
                     const ns_box *b)
@@ -1798,6 +1838,7 @@ append_font_feature(GString *out, const char *feature)
     g_string_append(out, feature);
 }
 
+/* Appends the kern OpenType feature for font-kerning none/normal/auto. */
 static void
 append_font_kerning_features(GString *out, const ns_css_value *v)
 {
@@ -1809,6 +1850,7 @@ append_font_kerning_features(GString *out, const ns_css_value *v)
         append_font_feature(out, "kern=1");
 }
 
+/* Maps one font-variant-ligatures keyword to liga/clig/dlig/hlig/calt feature toggles. */
 static void
 append_font_ligature_token(GString *out, const char *token)
 {
@@ -1845,6 +1887,7 @@ append_font_ligature_token(GString *out, const char *token)
     }
 }
 
+/* Appends OpenType features for a whitespace-separated font-variant-ligatures value. */
 static void
 append_font_ligature_features(GString *out, const char *ligatures)
 {
@@ -1864,6 +1907,7 @@ paint_font_feature_skip_ws(const char *p)
     return p;
 }
 
+/* Reads a quoted 4-character OpenType tag and advances the cursor; FALSE if malformed. */
 static gboolean
 paint_font_feature_read_tag(const char **pp, char tag[5])
 {
@@ -1879,6 +1923,7 @@ paint_font_feature_read_tag(const char **pp, char tag[5])
     return TRUE;
 }
 
+/* Reads an optional feature value (on/off or integer, default 1) after a tag. */
 static gboolean
 paint_font_feature_read_value(const char **pp, int *out)
 {
@@ -1913,6 +1958,7 @@ paint_font_feature_read_value(const char **pp, int *out)
     return TRUE;
 }
 
+/* Converts CSS font-feature-settings into Pango "tag=value" features, stopping on errors. */
 static void
 append_font_feature_settings_features(GString *out, const char *settings)
 {
@@ -1931,6 +1977,7 @@ append_font_feature_settings_features(GString *out, const char *settings)
     }
 }
 
+/* Reads a numeric axis value and formats it into value; FALSE if missing or non-finite. */
 static gboolean
 paint_font_variation_read_value(const char **pp, char value[32])
 {
@@ -1944,6 +1991,7 @@ paint_font_variation_read_value(const char **pp, char value[32])
     return TRUE;
 }
 
+/* Converts font-variation-settings to a Pango variations string; NULL if invalid. */
 static char *
 paint_font_variations_from_css(const char *settings)
 {
@@ -1971,6 +2019,7 @@ paint_font_variations_from_css(const char *settings)
     return g_string_free(out, FALSE);
 }
 
+/* Builds a font-features attribute from kerning, ligature and settings; NULL if empty. */
 NsPangoAttribute *
 ns_paint_font_features_attr_from_values(int kerning, const char *ligatures,
                                         const char *settings)
@@ -1992,6 +2041,7 @@ ns_paint_font_features_attr_from_values(int kerning, const char *ligatures,
     return a;
 }
 
+/* Builds a font-desc attribute carrying variation axes; NULL if none parse. */
 NsPangoAttribute *
 ns_paint_font_variations_attr_from_values(const char *settings)
 {
@@ -2005,6 +2055,7 @@ ns_paint_font_variations_attr_from_values(const char *settings)
     return a;
 }
 
+/* Inserts a font-features attribute over [start,end) from the style's font properties. */
 void
 ns_paint_apply_font_features(NsPangoAttrList *attrs, const ns_style *s,
                              guint start, guint end)
@@ -2030,6 +2081,7 @@ ns_paint_apply_font_features(NsPangoAttrList *attrs, const ns_style *s,
     ns_pango_attr_list_insert(attrs, a);
 }
 
+/* Font-available oracle: installed families (cached per font map serial) or webfonts. */
 static gboolean
 ns_paint_font_available(const char *family)
 {
@@ -2092,6 +2144,7 @@ font_metrics_key_free(gpointer v)
     g_free(k);
 }
 
+/* Measures ex, cap, ch and ic sizes for a font by laying out sample glyphs. */
 static void
 font_metrics_measure(const char *family, double size_px, int weight,
                      gboolean italic, ns_css_font_metrics *out)
@@ -2132,6 +2185,7 @@ font_metrics_measure(const char *family, double size_px, int weight,
     g_object_unref(l);
 }
 
+/* Font-metrics oracle for CSS font-relative units, cached until the font map changes. */
 static void
 ns_paint_font_metrics(const char *family, double size_px, int weight,
                       gboolean italic, ns_css_font_metrics *out)
@@ -2181,6 +2235,7 @@ ns_paint_font_metrics(const char *family, double size_px, int weight,
     *out = m;
 }
 
+/* Combines the font map serial and webfont generation into one change counter. */
 guint64
 ns_paint_font_generation(void)
 {
@@ -2189,6 +2244,7 @@ ns_paint_font_generation(void)
     return ((guint64)serial << 32) | ns_font_generation();
 }
 
+/* Installs this module's font availability, generation and metrics callbacks into CSS. */
 void
 ns_paint_register_font_oracle(void)
 {
@@ -2197,6 +2253,7 @@ ns_paint_register_font_oracle(void)
     ns_css_set_font_metrics_cb(ns_paint_font_metrics);
 }
 
+/* Sets the layout font description from CSS font properties and installs tab-size stops. */
 void
 ns_paint_apply_inline_font(NsPangoLayout *layout, const ns_style *s)
 {
@@ -2259,6 +2316,7 @@ ns_paint_apply_inline_font(NsPangoLayout *layout, const ns_style *s)
     }
 }
 
+/* Maps text-align (including start/end under RTL) onto layout alignment or justify. */
 void
 ns_paint_apply_text_align(NsPangoLayout *layout, const ns_style *s)
 {
@@ -2278,6 +2336,7 @@ ns_paint_apply_text_align(NsPangoLayout *layout, const ns_style *s)
         ns_pango_layout_set_alignment(layout, NS_PANGO_ALIGN_LEFT);
 }
 
+/* Start-aligns a layout when every non-empty line overflows its width. */
 void
 ns_paint_start_align_overflowing_lines(NsPangoLayout *layout)
 {
@@ -2307,6 +2366,7 @@ ns_paint_start_align_overflowing_lines(NsPangoLayout *layout)
     if (any_overflow) ns_pango_layout_set_alignment(layout, start);
 }
 
+/* Gives unwrapped centered/right layouts the content width so alignment takes effect. */
 static void
 apply_nowrap_align_width(NsPangoLayout *layout, const ns_box *b)
 {
@@ -2321,6 +2381,7 @@ apply_nowrap_align_width(NsPangoLayout *layout, const ns_box *b)
 
 static void paint_walk(cairo_t *cr, const ns_box *b, const char *highlight);
 
+/* TRUE if the inline box's attribute runs include an input field or button. */
 static gboolean
 inline_has_form_controls(const ns_box *b)
 {
@@ -2336,6 +2397,7 @@ inline_has_form_controls(const ns_box *b)
     return FALSE;
 }
 
+/* Computes CSS strut offset, height and baseline for a single-line inline with atomics. */
 gboolean
 ns_paint_inline_strut_line(const ns_box *b, const ns_style *s,
                            NsPangoLayout *layout, double *out_offset,
@@ -2370,6 +2432,7 @@ ns_paint_inline_strut_line(const ns_box *b, const ns_style *s,
     return TRUE;
 }
 
+/* Vertical offset of an inline layout in its box: strut offset or centered slack. */
 static double
 ns_paint_inline_y_offset_for_layout(const ns_box *b, NsPangoLayout *layout)
 {
@@ -2388,6 +2451,7 @@ ns_paint_inline_y_offset_for_layout(const ns_box *b, NsPangoLayout *layout)
     return y_offset;
 }
 
+/* Applies ::first-line font, color, background and decoration as attrs over a range. */
 static void
 apply_first_line_attrs(NsPangoAttrList *attrs, const ns_style *fl,
                        guint start, guint end)
@@ -2461,6 +2525,7 @@ apply_first_line_attrs(NsPangoAttrList *attrs, const ns_style *fl,
                           start, len);
 }
 
+/* Returns "dotted" or "dashed" from text-decoration-style, else NULL. */
 static const char *
 underline_dash_style(const ns_inline_attr *r, const ns_style *s)
 {
@@ -2477,6 +2542,7 @@ underline_dash_style(const ns_inline_attr *r, const ns_style *s)
     return NULL;
 }
 
+/* Strokes dotted/dashed underline, overline and line-through runs per layout line. */
 static void
 paint_inline_dashed_decorations(cairo_t *cr, const ns_box *b, NsPangoLayout *layout,
                                double text_x, double y_origin,
@@ -2565,6 +2631,7 @@ paint_inline_dashed_decorations(cairo_t *cr, const ns_box *b, NsPangoLayout *lay
     ns_pango_layout_iter_free(iter);
 }
 
+/* In-place separable box blur of an A8 mask with edge clamping. */
 static void
 ns_box_blur_a8(unsigned char *data, int w, int h, int stride, int radius)
 {
@@ -2602,6 +2669,7 @@ ns_box_blur_a8(unsigned char *data, int w, int h, int stride, int radius)
     g_free(tmp);
 }
 
+/* Paints one text-shadow by blurring a downsampled A8 glyph mask; unblurred if huge. */
 static void
 paint_text_shadow_layer(cairo_t *cr, NsPangoLayout *layout, double x, double y,
                         const ns_css_shadow *sh)
@@ -2672,6 +2740,7 @@ paint_text_shadow_layer(cairo_t *cr, NsPangoLayout *layout, double x, double y,
     cairo_surface_destroy(mask);
 }
 
+/* Adds red error underlines to misspelled words (2+ letters) within a byte range. */
 static void
 spell_underline_range(NsPangoAttrList *attrs, const char *t,
                       gsize rstart, gsize rend)
@@ -2710,6 +2779,7 @@ spell_underline_range(NsPangoAttrList *attrs, const char *t,
     }
 }
 
+/* Underlines misspellings in spellcheck runs, or whole text in a spellcheck host. */
 static void
 paint_spell_underlines(NsPangoAttrList *attrs, const ns_box *b)
 {
@@ -2742,6 +2812,7 @@ paint_spell_underlines(NsPangoAttrList *attrs, const ns_box *b)
         spell_underline_range(attrs, b->text, 0, tlen);
 }
 
+/* Drops the box's cached paint layout so it is rebuilt on next paint. */
 void
 ns_paint_drop_box_cache(ns_box *box)
 {
@@ -2751,6 +2822,7 @@ ns_paint_drop_box_cache(ns_box *box)
     }
 }
 
+/* Creates an inline box's base layout: font, wrap, indent, ellipsis, line-clamp, i18n. */
 static NsPangoLayout *
 paint_inline_layout_new(const ns_box *b, const ns_style *s,
                         NsPangoAttrList **attrs_out)
@@ -2789,6 +2861,7 @@ paint_inline_layout_new(const ns_box *b, const ns_style *s,
     return layout;
 }
 
+/* Maps a font-related inline run to a new Pango attribute; NULL for other kinds. */
 NsPangoAttribute *
 ns_paint_inline_font_attr(const ns_inline_attr *r)
 {
@@ -2829,6 +2902,7 @@ ns_paint_inline_font_attr(const ns_inline_attr *r)
     }
 }
 
+/* Builds a fully attributed inline layout: runs, decorations, find highlights, first-line. */
 static NsPangoLayout *
 paint_inline_make_layout(const ns_box *b, const ns_style *s,
                          const char *highlight)
@@ -3022,6 +3096,7 @@ paint_selection_run(const ns_box *b)
 
 typedef struct sel_rect { double x, y, w, h; } sel_rect;
 
+/* Computes per-line selection rectangles for a run; NULL if empty, caller frees. */
 static GArray *
 paint_selection_rects(NsPangoLayout *layout, double ox, double oy,
                       const ns_selection_run *run)
@@ -3063,6 +3138,7 @@ paint_selection_rects(NsPangoLayout *layout, double ox, double oy,
     return out;
 }
 
+/* Looks up a ::selection color property from the nearest styled ancestor. */
 static gboolean
 selection_pseudo_color(const ns_box *b, ns_css_prop prop, rgba *out)
 {
@@ -3079,6 +3155,7 @@ selection_pseudo_color(const ns_box *b, ns_css_prop prop, rgba *out)
     return TRUE;
 }
 
+/* Fills the selection highlight behind a run using ::selection background or default. */
 static void
 paint_selection_background(cairo_t *cr, const ns_box *b, NsPangoLayout *layout,
                            double ox, double oy, const ns_selection_run *run)
@@ -3098,6 +3175,7 @@ paint_selection_background(cairo_t *cr, const ns_box *b, NsPangoLayout *layout,
     g_array_free(rects, TRUE);
 }
 
+/* Repaints selected text clipped to the selection in the ::selection color, if set. */
 static void
 paint_selection_foreground(cairo_t *cr, const ns_box *b, NsPangoLayout *layout,
                            double ox, double oy, const ns_selection_run *run)
@@ -3119,6 +3197,7 @@ paint_selection_foreground(cairo_t *cr, const ns_box *b, NsPangoLayout *layout,
     g_array_free(rects, TRUE);
 }
 
+/* Paints an inline text box: controls, shadows, selection, text, caret, widgets, atomics. */
 static void
 paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
 {
@@ -3585,6 +3664,7 @@ paint_inline(cairo_t *cr, const ns_box *b, const char *highlight)
     g_object_unref(layout);
 }
 
+/* Builds an inline layout with font attrs only, for hit-testing and geometry queries. */
 static NsPangoLayout *
 ns_paint_build_inline_layout(const ns_box *b)
 {
@@ -3607,6 +3687,7 @@ ns_paint_build_inline_layout(const ns_box *b)
     return layout;
 }
 
+/* Recursively records each inline atomic's offset within its owning text box. */
 void
 ns_paint_sync_inline_atomic_offsets(ns_box *root)
 {
@@ -3638,6 +3719,7 @@ ns_paint_sync_inline_atomic_offsets(ns_box *root)
                 g_array_index(root->inline_atomics, ns_inline_atomic, i).box);
 }
 
+/* Maps a box-relative point to a byte offset in the inline box text. */
 gboolean
 ns_paint_inline_xy_to_byte(const ns_box *b, double rel_x, double rel_y,
                            gsize *out_byte)
@@ -3666,6 +3748,7 @@ ns_paint_inline_xy_to_byte(const ns_box *b, double rel_x, double rel_y,
     return TRUE;
 }
 
+/* Finds the word boundaries around a byte offset using Pango log attrs. */
 gboolean
 ns_paint_inline_word_range(const ns_box *b, gsize byte,
                            gsize *out_start, gsize *out_end)
@@ -3701,6 +3784,7 @@ ns_paint_inline_word_range(const ns_box *b, gsize byte,
     return ok;
 }
 
+/* Bounding rect of a byte range across all layout lines, relative to the box. */
 gboolean
 ns_paint_inline_range_extents(const ns_box *b, gsize start, gsize len,
                               double *out_x, double *out_y,
@@ -3757,6 +3841,7 @@ ns_paint_inline_range_extents(const ns_box *b, gsize start, gsize len,
     return TRUE;
 }
 
+/* Parses a filter function amount; percentages become fractions; -1 if no number. */
 static double
 parse_filter_amount(const char *p, const char **out_end)
 {
@@ -3778,6 +3863,7 @@ parse_filter_amount(const char *p, const char **out_end)
 static int
 clamp_i(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+/* In-place separable box blur of each ARGB32 channel with edge clamping. */
 static void
 box_blur_argb(guchar *data, int stride, int w, int h, int radius)
 {
@@ -3826,6 +3912,7 @@ filter_name_is(const char *name, gsize nlen, const char *want)
            g_ascii_strncasecmp(name, want, want_len) == 0;
 }
 
+/* Scans one "name(...)" function in a filter list, handling nesting; NULL at end. */
 static const char *
 filter_function_next(const char *p, const char **name_out, gsize *name_len_out,
                      const char **body_out, const char **body_end_out)
@@ -3858,6 +3945,7 @@ filter_function_next(const char *p, const char **name_out, gsize *name_len_out,
     return NULL;
 }
 
+/* TRUE if a filter list contains a per-pixel color function or blur. */
 static gboolean
 filter_has_bitmap_effect(const char *filter)
 {
@@ -3881,6 +3969,7 @@ filter_has_bitmap_effect(const char *filter)
     return FALSE;
 }
 
+/* Parses a filter length to px for absolute, font-relative (as 16px) and viewport units. */
 static gboolean
 parse_filter_length_px(const char *s, double *out)
 {
@@ -3955,6 +4044,7 @@ parse_filter_length_px(const char *s, double *out)
     return FALSE;
 }
 
+/* Splits a span on top-level whitespace into new strings; returns count, caller frees. */
 static int
 filter_split_ws(const char *start, const char *end, char *tokens[], int max)
 {
@@ -3977,6 +4067,7 @@ filter_split_ws(const char *start, const char *end, char *tokens[], int max)
     return n;
 }
 
+/* Parses drop-shadow() arguments (2-3 lengths and an optional color). */
 static gboolean
 parse_filter_shadow_body(const char *body, const char *body_end,
                          rgba current_color, image_drop_shadow *out)
@@ -4014,6 +4105,7 @@ parse_filter_shadow_body(const char *body, const char *body_end,
     return TRUE;
 }
 
+/* Collects up to max drop-shadow() entries from a filter list. */
 static int
 parse_filter_drop_shadows(const char *filter, rgba current_color,
                           image_drop_shadow shadows[], int max)
@@ -4037,6 +4129,7 @@ parse_filter_drop_shadows(const char *filter, rgba current_color,
     return n;
 }
 
+/* Renders an image's alpha as a tinted, blurred drop-shadow surface; caller destroys. */
 static cairo_surface_t *
 drop_shadow_surface(cairo_surface_t *src, int cw, int ch, double ox, double oy,
                     double sx, double sy, image_drop_shadow shadow,
@@ -4090,6 +4183,7 @@ drop_shadow_surface(cairo_surface_t *src, int cw, int ch, double ox, double oy,
     return shadow_surf;
 }
 
+/* Paints filter drop-shadow() layers for an image box beneath its content. */
 static void
 paint_texture_drop_shadows(cairo_t *cr, cairo_surface_t *surf, const ns_box *b,
                            double sx, double sy, double ox, double oy,
@@ -4120,6 +4214,7 @@ paint_texture_drop_shadows(cairo_t *cr, cairo_surface_t *surf, const ns_box *b,
     }
 }
 
+/* Applies CSS filter color functions in order and a max blur to premultiplied ARGB data. */
 static void
 apply_image_filter(guchar *data, int stride, int w, int h, const char *filter)
 {
@@ -4221,6 +4316,7 @@ apply_image_filter(guchar *data, int stride, int w, int h, const char *filter)
     }
 }
 
+/* Clips to the content box radii and basic clip-path shapes; TRUE if clipped. */
 static gboolean
 apply_box_content_clip(cairo_t *cr, const ns_box *b)
 {
@@ -4341,6 +4437,7 @@ texture_surfaces_free(gpointer data)
     g_free(ts);
 }
 
+/* Downloads a texture into a new ARGB surface, optionally applying a CSS filter. */
 static cairo_surface_t *
 texture_surface_create(ns_texture *tex, int iw, int ih, const char *filter_kw)
 {
@@ -4359,6 +4456,7 @@ texture_surface_create(ns_texture *tex, int iw, int ih, const char *filter_kw)
     return surf;
 }
 
+/* Returns the texture's cached plain or filtered surface (one filter cached); borrowed. */
 static cairo_surface_t *
 texture_surface_cached(ns_texture *tex, const char *filter_kw)
 {
@@ -4385,6 +4483,7 @@ texture_surface_cached(ns_texture *tex, const char *filter_kw)
     return surf;
 }
 
+/* Resolves object-position along one axis; centers by default. */
 static double
 object_position_offset(const ns_style *st, ns_css_prop prop,
                        double box_size, double object_size)
@@ -4399,6 +4498,7 @@ object_position_offset(const ns_style *st, ns_css_prop prop,
     return delta * 0.5;
 }
 
+/* Computes scale and offset for replaced content per object-fit and object-position. */
 static void
 object_fit_scale(const ns_box *b, int iw, int ih, double *out_sx,
                  double *out_sy, double *out_ox, double *out_oy)
@@ -4431,6 +4531,7 @@ object_fit_scale(const ns_box *b, int iw, int ih, double *out_sx,
     *out_oy = oy;
 }
 
+/* Punches a hole and records an MSE video layer rect for compositor overlay; TRUE if used. */
 static gboolean
 paint_video_layer(cairo_t *cr, const ns_box *b, const ns_image *img)
 {
@@ -4474,6 +4575,7 @@ paint_video_layer(cairo_t *cr, const ns_box *b, const ns_image *img)
     return TRUE;
 }
 
+/* Paints an image texture into the content box with object-fit, filters and clipping. */
 static gboolean
 paint_texture(cairo_t *cr, const ns_box *b, ns_texture *tex)
 {
@@ -4513,6 +4615,7 @@ paint_texture(cairo_t *cr, const ns_box *b, ns_texture *tex)
     return TRUE;
 }
 
+/* Draws the broken-image placeholder: white box with border and red cross. */
 static void
 paint_failed_image(cairo_t *cr, const ns_box *b)
 {
@@ -4540,6 +4643,7 @@ paint_failed_image(cairo_t *cr, const ns_box *b)
     cairo_stroke(cr);
 }
 
+/* Renders an inline SVG element into its content box. */
 static void
 paint_svg(cairo_t *cr, const ns_box *b)
 {
@@ -4555,6 +4659,7 @@ paint_svg(cairo_t *cr, const ns_box *b)
     cairo_restore(cr);
 }
 
+/* Paints a MathML element at its content origin using the box's font size and color. */
 static void
 paint_math(cairo_t *cr, const ns_box *b)
 {
@@ -4574,6 +4679,7 @@ paint_math(cairo_t *cr, const ns_box *b)
     ns_math_paint(cr, b->dom, ox, oy, fpx, r, g, bl, a);
 }
 
+/* Paints an img: loaded texture, broken placeholder, or grey placeholder with alt text. */
 static void
 paint_image(cairo_t *cr, const ns_box *b)
 {
@@ -4627,6 +4733,7 @@ paint_image(cairo_t *cr, const ns_box *b)
     cairo_restore(cr);
 }
 
+/* Formats seconds as m:ss or h:mm:ss, or "--:--" when unknown. */
 static void
 paint_media_time(char *buf, gsize len, double seconds)
 {
@@ -4641,6 +4748,7 @@ paint_media_time(char *buf, gsize len, double seconds)
         g_snprintf(buf, len, "%d:%02d", t / 60, t % 60);
 }
 
+/* Media duration, falling back to the data-durationhint attribute; NAN if unknown. */
 static double
 paint_media_duration(const ns_box *b, const ns_media_controls_state *st)
 {
@@ -4652,6 +4760,7 @@ paint_media_duration(const ns_box *b, const ns_media_controls_state *st)
     return end != hint && d > 0.0 ? d : NAN;
 }
 
+/* Draws a play triangle when paused, otherwise a pause glyph. */
 static void
 paint_media_play_icon(cairo_t *cr, double cx, double cy, double r,
                       gboolean paused)
@@ -4669,6 +4778,7 @@ paint_media_play_icon(cairo_t *cr, double cx, double cy, double r,
     cairo_fill(cr);
 }
 
+/* Draws a speaker glyph with sound waves, or a cross when muted. */
 static void
 paint_media_mute_icon(cairo_t *cr, double cx, double cy, double r,
                       gboolean muted)
@@ -4696,6 +4806,7 @@ paint_media_mute_icon(cairo_t *cr, double cx, double cy, double r,
     cairo_stroke(cr);
 }
 
+/* Paints native media controls: play, seek bar, time and mute, overlaid or standalone. */
 static void
 paint_media_controls(cairo_t *cr, const ns_box *b, gboolean overlay)
 {
@@ -4774,6 +4885,7 @@ paint_media_controls(cairo_t *cr, const ns_box *b, gboolean overlay)
     cairo_restore(cr);
 }
 
+/* Paints a video frame (or overlay layer), a dark placeholder, and the controls. */
 static void
 paint_video(cairo_t *cr, const ns_box *b)
 {
@@ -4818,6 +4930,7 @@ paint_video(cairo_t *cr, const ns_box *b)
     paint_media_controls(cr, b, TRUE);
 }
 
+/* Formats n as a Roman numeral for 1..3999, falling back to decimal outside that range. */
 static void
 roman_numeral(int n, gboolean upper, char *out, gsize sz)
 {
@@ -4840,6 +4953,7 @@ roman_numeral(int n, gboolean upper, char *out, gsize sz)
     g_string_free(s, TRUE);
 }
 
+/* Formats n as bijective base-26 letters (a..z, aa..) for alpha list markers. */
 static void
 alpha_label(int n, gboolean upper, char *out, gsize sz)
 {
@@ -4858,6 +4972,7 @@ alpha_label(int n, gboolean upper, char *out, gsize sz)
     out[len] = '\0';
 }
 
+/* Returns the canonical name if list-style-type is a supported ordered kind, else NULL. */
 static const char *
 ordered_marker_kind(const char *style_kw)
 {
@@ -4875,6 +4990,7 @@ ordered_marker_kind(const char *style_kw)
     return NULL;
 }
 
+/* TRUE if the item uses a numbered marker: any non-bullet style, or default under <ol>. */
 static gboolean
 marker_is_ordered(const ns_node *li, const char *style_kw)
 {
@@ -4886,6 +5002,7 @@ marker_is_ordered(const ns_node *li, const char *style_kw)
            strncmp(style_kw, "disclosure-", 11) != 0;
 }
 
+/* Maps an <ol type> attribute (A, a, I, i) to a list-style kind; decimal otherwise. */
 static const char *
 ordered_kind_from_type_attr(const char *type_attr)
 {
@@ -4902,6 +5019,7 @@ ordered_kind_from_type_attr(const char *type_attr)
 static void format_ordered_label(const char *kind, int n,
                                  char *out, gsize out_sz);
 
+/* Counts <li> element children of a list. */
 static int
 list_item_count(const ns_node *parent)
 {
@@ -4917,6 +5035,7 @@ static GHashTable *g_list_ordinals;
 static GHashTable *g_list_next_ordinal;
 static int         g_list_ordinal_scope;
 
+/* Opens a (nestable) scope that caches list item ordinals during a paint pass. */
 void
 ns_paint_list_ordinals_begin(void)
 {
@@ -4925,6 +5044,7 @@ ns_paint_list_ordinals_begin(void)
     g_list_next_ordinal = g_hash_table_new(g_direct_hash, g_direct_equal);
 }
 
+/* Closes an ordinal cache scope, freeing the caches when the outermost one ends. */
 void
 ns_paint_list_ordinals_end(void)
 {
@@ -4933,6 +5053,7 @@ ns_paint_list_ordinals_end(void)
     g_clear_pointer(&g_list_next_ordinal, g_hash_table_destroy);
 }
 
+/* Numbers <li> children honoring start, reversed and value; fills cache if no target. */
 static int
 list_item_number_children(const ns_node *parent, const ns_node *target)
 {
@@ -4956,6 +5077,7 @@ list_item_number_children(const ns_node *parent, const ns_node *target)
     return current;
 }
 
+/* Ordinal of an <li> from the per-pass cache, numbering its list on first use. */
 static int
 list_item_ordinal_cached(const ns_node *li, const ns_node *parent)
 {
@@ -4971,6 +5093,7 @@ list_item_ordinal_cached(const ns_node *li, const ns_node *parent)
     return GPOINTER_TO_INT(next);
 }
 
+/* Ordinal of an <li> within its list, using the paint-pass cache when active. */
 static int
 list_item_ordinal(const ns_node *li)
 {
@@ -4980,6 +5103,7 @@ list_item_ordinal(const ns_node *li)
     return list_item_number_children(parent, li);
 }
 
+/* Marker counter style: explicit ordered style, else the parent <ol type>, else style_kw. */
 static const char *
 marker_default_kind(const ns_node *li, const char *style_kw)
 {
@@ -4990,6 +5114,7 @@ marker_default_kind(const ns_node *li, const char *style_kw)
     return style_kw;
 }
 
+/* Appends a CSS string body to out with escapes resolved. */
 static void
 marker_append_escaped_string(GString *out, const char *start, gsize len)
 {
@@ -4999,6 +5124,7 @@ marker_append_escaped_string(GString *out, const char *start, gsize len)
     g_free(raw);
 }
 
+/* Expands counter(list-item[, style]) for an <li>; other counters expand to "". */
 static char *
 marker_counter_text(const char *body, const ns_node *li, const char *style_kw)
 {
@@ -5025,6 +5151,7 @@ marker_counter_text(const char *body, const ns_node *li, const char *style_kw)
     return g_strdup(buf);
 }
 
+/* Expands ::marker content strings, attr() and counter() into text; caller frees. */
 static char *
 marker_resolve_content_text(const char *raw, const ns_node *li,
                             const char *style_kw)
@@ -5083,6 +5210,7 @@ marker_resolve_content_text(const char *raw, const ns_node *li,
     return g_string_free(out, FALSE);
 }
 
+/* Text from ::marker content, or NULL; sets suppress_default for none/display:none. */
 static char *
 marker_custom_text(const ns_node *li, const ns_style *li_style,
                    const char *style_kw, gboolean *suppress_default)
@@ -5112,6 +5240,7 @@ marker_custom_text(const ns_node *li, const ns_style *li_style,
     return marker_resolve_content_text(raw, li, style_kw);
 }
 
+/* Draws a marker label right-aligned before the edge (left-aligned after it in RTL). */
 static void
 paint_marker_label(cairo_t *cr, const char *label, double edge_x,
                    gboolean rtl, double baseline_y, double font_size)
@@ -5126,6 +5255,7 @@ paint_marker_label(cairo_t *cr, const char *label, double edge_x,
     cairo_show_text(cr, label);
 }
 
+/* Formats n with lower-greek letters in bijective base 24. */
 static void
 greek_label(int n, char *out, gsize out_sz)
 {
@@ -5145,6 +5275,7 @@ greek_label(int n, char *out, gsize out_sz)
     g_string_free(s, TRUE);
 }
 
+/* Formats an ordinal in the given list-style kind (greek, alpha, roman, decimal...). */
 static void
 format_ordered_label(const char *kind, int n, char *out, gsize out_sz)
 {
@@ -5171,6 +5302,7 @@ format_ordered_label(const char *kind, int n, char *out, gsize out_sz)
     g_snprintf(out, out_sz, "%d", n);
 }
 
+/* TRUE if the element is a list item by display (or is an <li> with no display). */
 static gboolean
 li_generates_marker(const ns_node *li, const ns_style *li_style)
 {
@@ -5182,6 +5314,7 @@ li_generates_marker(const ns_node *li, const ns_style *li_style)
     return strstr(d->u.keyword, "list-item") != NULL;
 }
 
+/* Returns the UTF-8 triangle for disclosure-open/closed (direction-aware), else NULL. */
 static const char *
 disclosure_glyph(const char *style_kw, gboolean rtl)
 {
@@ -5190,6 +5323,7 @@ disclosure_glyph(const char *style_kw, gboolean rtl)
     return rtl ? "\xe2\x97\x82" : "\xe2\x96\xb8";
 }
 
+/* TRUE if list-style-position is inside. */
 gboolean
 ns_paint_li_is_inside(const ns_style *li_style)
 {
@@ -5199,6 +5333,7 @@ ns_paint_li_is_inside(const ns_style *li_style)
            strcmp(v->u.keyword, "inside") == 0;
 }
 
+/* Formats an inside marker's text (custom, ordinal with ". ", or bullet glyph). */
 gboolean
 ns_paint_li_marker_text(const ns_node *li, const ns_style *li_style,
                         char *out, gsize out_sz)
@@ -5241,6 +5376,7 @@ ns_paint_li_marker_text(const ns_node *li, const ns_style *li_style,
     return TRUE;
 }
 
+/* Paints an outside list marker: image, custom content, ordinal, disclosure or bullet. */
 static void
 paint_marker(cairo_t *cr, const ns_box *b)
 {
@@ -5354,6 +5490,7 @@ paint_marker(cairo_t *cr, const ns_box *b)
     }
 }
 
+/* TRUE if visibility is hidden/collapse or content-visibility is hidden. */
 static gboolean
 box_is_hidden(const ns_box *b)
 {
@@ -5369,6 +5506,7 @@ box_is_hidden(const ns_box *b)
            strcmp(cv->u.keyword, "hidden") == 0;
 }
 
+/* Effective opacity from a running animation or the style, clamped to 0..1. */
 static double
 box_opacity(const ns_box *b)
 {
@@ -5393,6 +5531,7 @@ box_opacity(const ns_box *b)
     return 1.0;
 }
 
+/* TRUE if position is relative, absolute, fixed or sticky. */
 static gboolean
 box_is_positioned(const ns_box *b)
 {
@@ -5405,6 +5544,7 @@ box_is_positioned(const ns_box *b)
            strcmp(kw, "fixed") == 0    || strcmp(kw, "sticky") == 0;
 }
 
+/* TRUE if the legacy clip rect on an absolute/fixed box has zero area. */
 static gboolean
 box_clip_hides(const ns_box *b)
 {
@@ -5427,6 +5567,7 @@ box_clip_hides(const ns_box *b)
     return (right - left) <= 0 || (bottom - top) <= 0;
 }
 
+/* Integer z-index of the box, 0 for auto. */
 static int
 box_z_index(const ns_box *b)
 {
@@ -5443,6 +5584,7 @@ typedef struct paint_entry {
     guint order;
 } paint_entry;
 
+/* Orders paint entries by layer key, then document order. */
 static int
 paint_entry_cmp(const void *a, const void *b)
 {
@@ -5460,6 +5602,7 @@ box_has_z_index(const ns_box *b)
     return v && v->kind == NS_CSS_V_LENGTH;
 }
 
+/* TRUE if the box's parent is a flex or grid container. */
 static gboolean
 box_is_flex_or_grid_item(const ns_box *b)
 {
@@ -5469,6 +5612,7 @@ box_is_flex_or_grid_item(const ns_box *b)
     return ns_display_is_flex_container(d) || ns_display_is_grid_container(d);
 }
 
+/* TRUE if z-index applies: positioned boxes, or flex/grid items with z-index. */
 static gboolean
 box_is_z_ordered(const ns_box *b)
 {
@@ -5485,6 +5629,7 @@ box_is_float(const ns_box *b)
             strcmp(v->u.keyword, "right") == 0);
 }
 
+/* Stacking sort key: z-index*2 for z-ordered boxes, 1 for floats, 0 otherwise. */
 static int
 box_paint_key(const ns_box *b)
 {
@@ -5492,12 +5637,14 @@ box_paint_key(const ns_box *b)
     return box_is_float(b) ? 1 : 0;
 }
 
+/* TRUE if the box paints in the positioned layer (z-ordered, z-index >= 0). */
 static gboolean
 box_defers_to_positioned_layer(const ns_box *b)
 {
     return box_is_z_ordered(b) && box_z_index(b) >= 0;
 }
 
+/* Compares two nodes in document order via their ancestor chains; 0 if unknown. */
 static int
 dom_tree_order_cmp(const ns_node *a, const ns_node *b)
 {
@@ -5517,6 +5664,7 @@ dom_tree_order_cmp(const ns_node *a, const ns_node *b)
     return 1;
 }
 
+/* TRUE if the box has a transform, making it a containing block for fixed descendants. */
 static gboolean
 box_contains_fixed(const ns_box *b)
 {
@@ -5525,6 +5673,7 @@ box_contains_fixed(const ns_box *b)
                  s->values[NS_CSS_ROTATE] || s->values[NS_CSS_SCALE]);
 }
 
+/* TRUE if clip's overflow clip applies to abs/fixed descendant d per containing blocks. */
 static gboolean
 overflow_clip_contains(const ns_box *clip, const ns_box *d)
 {
@@ -5550,6 +5699,7 @@ typedef struct deferred_capture {
 
 static guint g_paint_capture_seq;
 
+/* Orders deferred positioned boxes by z-index, document order, then capture sequence. */
 static int
 deferred_capture_cmp(const deferred_capture *a, const deferred_capture *b)
 {
@@ -5567,6 +5717,7 @@ deferred_capture_sort(gconstpointer va, gconstpointer vb)
                                 *(const deferred_capture *const *)vb);
 }
 
+/* Binary-inserts a capture into the sorted queue at or after index from. */
 static void
 deferred_queue_insert(GPtrArray *queue, guint from, deferred_capture *cap)
 {
@@ -5581,6 +5732,7 @@ deferred_queue_insert(GPtrArray *queue, guint from, deferred_capture *cap)
     g_ptr_array_insert(queue, (gint)lo, cap);
 }
 
+/* Paints deferred positioned boxes in z-order at their captured device offsets. */
 static void
 paint_flush_deferred(cairo_t *cr, GPtrArray *list, const char *highlight)
 {
@@ -5634,6 +5786,7 @@ paint_flush_deferred(cairo_t *cr, GPtrArray *list, const char *highlight)
 
 static double g_paint_anchor_dx, g_paint_anchor_dy;
 
+/* Restores cairo state and the saved anchor-positioning offsets. */
 static void
 paint_anchor_leave(cairo_t *cr, double saved_dx, double saved_dy)
 {
@@ -5642,6 +5795,7 @@ paint_anchor_leave(cairo_t *cr, double saved_dx, double saved_dy)
     g_paint_anchor_dy = saved_dy;
 }
 
+/* Paint offset for fixed (viewport origin) or sticky positioning against the viewport. */
 static void
 compute_sticky_offset(const ns_box *b, cairo_t *cr,
                       double *out_dx, double *out_dy)
@@ -5663,6 +5817,7 @@ compute_sticky_offset(const ns_box *b, cairo_t *cr,
                          out_dx, out_dy);
 }
 
+/* Maps mix-blend-mode to the corresponding cairo operator; OVER by default. */
 static cairo_operator_t
 blend_mode_operator(const ns_style *s)
 {
@@ -5693,6 +5848,7 @@ static gboolean g_paint_have_clip;
 static double g_paint_clip_y0, g_paint_clip_y1;
 static double g_paint_cull_margin = 400.0;
 
+/* Builds a linear or radial cairo pattern for a mask gradient; NULL for conic. */
 static cairo_pattern_t *
 mask_gradient_pattern(const ns_css_gradient *gr,
                       double bx, double by, double bw, double bh)
@@ -5738,6 +5894,7 @@ mask_gradient_pattern(const ns_css_gradient *gr,
     return pat;
 }
 
+/* Caches clip and viewport extents for culling and resets anchor offsets for a paint pass. */
 static void
 paint_cache_clip(cairo_t *cr)
 {
@@ -5781,6 +5938,7 @@ quad_tex_entry_free(gpointer p)
     g_free(e);
 }
 
+/* Computes the box's border-box rectangle. */
 static void
 box_border_rect(const ns_box *b, double *bx, double *by, double *bw, double *bh)
 {
@@ -5792,6 +5950,7 @@ box_border_rect(const ns_box *b, double *bx, double *by, double *bw, double *bh)
           b->border.top + b->border.bottom;
 }
 
+/* TRUE if a childless box draws nothing outside its border box (no shadow/filter/outline). */
 static gboolean
 box_ink_within_border_box(const ns_box *b)
 {
@@ -5826,6 +5985,7 @@ box_perspective_px(const ns_box *b)
     return 0;
 }
 
+/* TRUE if the box roots a 3D context: has perspective or starts a preserve-3d chain. */
 static gboolean
 box_establishes_3d(const ns_box *b)
 {
@@ -5834,6 +5994,7 @@ box_establishes_3d(const ns_box *b)
     return !(b->parent && box_preserve3d(b->parent));
 }
 
+/* TRUE if the box itself paints a background, border or outline. */
 static gboolean
 box_has_own_decor(const ns_box *b)
 {
@@ -5855,6 +6016,7 @@ box_has_own_decor(const ns_box *b)
     return FALSE;
 }
 
+/* TRUE if the box or any descendant draws visible content. */
 static gboolean
 box_subtree_paints(const ns_box *b)
 {
@@ -5868,6 +6030,7 @@ box_subtree_paints(const ns_box *b)
     return FALSE;
 }
 
+/* Resolves a transform-origin property to an absolute point, defaulting to center. */
 static void
 box_transform_origin(const ns_box *b, double bx, double by, double bw,
                      double bh, ns_css_prop prop,
@@ -5886,6 +6049,7 @@ box_transform_origin(const ns_box *b, double bx, double by, double bw,
     }
 }
 
+/* Flattens a preserve-3d subtree into quads, accumulating transforms and perspective. */
 static void
 collect_3d_quads(const ns_box *b, const ns_mat4 *pm, GArray *quads)
 {
@@ -5939,6 +6103,7 @@ collect_3d_quads(const ns_box *b, const ns_mat4 *pm, GArray *quads)
         collect_3d_quads(c, &cm, quads);
 }
 
+/* Renders a box to a texture (cached when static) and maps it onto its projected 3D quad. */
 static void
 paint_quad3(cairo_t *cr, const ns_quad3 *q, const char *highlight)
 {
@@ -6203,6 +6368,7 @@ paint_quad3(cairo_t *cr, const ns_quad3 *q, const char *highlight)
     g_free(gx);
 }
 
+/* Orders 3D quads back to front by depth, then collection order. */
 static int
 quad3_cmp(gconstpointer pa, gconstpointer pb)
 {
@@ -6222,6 +6388,7 @@ paint_3d_reg_value_free(gpointer v)
     g_array_free(v, TRUE);
 }
 
+/* Drops the cached 3D quad registry and quad textures. */
 void
 ns_paint_3d_invalidate(void)
 {
@@ -6229,6 +6396,7 @@ ns_paint_3d_invalidate(void)
     if (g_paint_3d_tex) g_hash_table_remove_all(g_paint_3d_tex);
 }
 
+/* TRUE if the box was registered as a 3D root last paint or establishes one. */
 gboolean
 ns_paint_3d_registered(const ns_box *b)
 {
@@ -6237,6 +6405,7 @@ ns_paint_3d_registered(const ns_box *b)
     return box_establishes_3d(b);
 }
 
+/* Stores a snapshot of a 3D root's quads for later hit testing. */
 static void
 paint_3d_register(const ns_box *root, const GArray *quads)
 {
@@ -6249,6 +6418,7 @@ paint_3d_register(const ns_box *root, const GArray *quads)
     g_hash_table_replace(g_paint_3d_reg, (gpointer)root, snap);
 }
 
+/* Inverts a quad's projective mapping at a screen point; returns u,v and depth if inside. */
 static gboolean
 quad3_unproject(const ns_quad3 *q, double sx, double sy,
                 double *u_out, double *v_out, double *depth_out)
@@ -6292,6 +6462,7 @@ typedef struct quad_pick_cand {
     double depth, u, v;
 } quad_pick_cand;
 
+/* Orders hit candidates front-most first (higher depth, then later quad). */
 static int
 quad_pick_cand_cmp(gconstpointer pa, gconstpointer pb)
 {
@@ -6305,6 +6476,7 @@ quad_pick_cand_cmp(gconstpointer pa, gconstpointer pb)
 
 static GArray *collect_root_quads(const ns_box *b);
 
+/* Hit-tests a 3D rendering context by unprojecting the point onto its quads, front to back. */
 const ns_box *
 ns_paint_3d_pick(const ns_box *root3d, double x, double y)
 {
@@ -6337,6 +6509,7 @@ ns_paint_3d_pick(const ns_box *root3d, double x, double y)
     return result;
 }
 
+/* Collects a 3D root's quads under its perspective and sorts them by center depth. */
 static GArray *
 collect_root_quads(const ns_box *b)
 {
@@ -6384,6 +6557,7 @@ collect_root_quads(const ns_box *b)
     return quads;
 }
 
+/* Paints a 3D rendering context: the root's own block, then its quads depth-sorted. */
 static void
 paint_3d_root(cairo_t *cr, const ns_box *b, const char *highlight)
 {
@@ -6445,6 +6619,7 @@ paint_3d_root(cairo_t *cr, const ns_box *b, const char *highlight)
     g_array_free(quads, TRUE);
 }
 
+/* Debug aid (NS_DBG_PAINT_AT): logs NaN geometry and boxes under the probe point. */
 static void
 ns_dbg_paint_probe(cairo_t *cr, const ns_box *b)
 {
@@ -6515,6 +6690,7 @@ ns_dbg_paint_probe(cairo_t *cr, const ns_box *b)
                x0, y0, x1 - x0, y1 - y0, bg, kx0, ky0, kx1, ky1);
 }
 
+/* TRUE if the box forms a stacking context that keeps negative-z descendants inside. */
 static gboolean
 box_keeps_negative_descendants(const ns_box *b)
 {
@@ -6534,6 +6710,7 @@ box_keeps_negative_descendants(const ns_box *b)
     return ns_css_keyword_is(s->values[NS_CSS_POSITION], "sticky");
 }
 
+/* TRUE if the box is a stacking context (fixed position or other triggers). */
 static gboolean
 box_is_stacking_context(const ns_box *b)
 {
@@ -6544,6 +6721,7 @@ box_is_stacking_context(const ns_box *b)
     return box_keeps_negative_descendants(b);
 }
 
+/* Collects negative-z descendants belonging to this stacking context for early painting. */
 static void
 collect_negative_z(const ns_box *b, GPtrArray *out)
 {
@@ -6560,6 +6738,7 @@ collect_negative_z(const ns_box *b, GPtrArray *out)
     }
 }
 
+/* TRUE if any descendant is z-ordered with a negative z-index. */
 static gboolean
 tree_has_negative_z(const ns_box *b)
 {
@@ -6570,6 +6749,7 @@ tree_has_negative_z(const ns_box *b)
     return FALSE;
 }
 
+/* Orders negative-z boxes by z-index, then document order. */
 static int
 negative_z_cmp(gconstpointer va, gconstpointer vb)
 {
@@ -6580,6 +6760,7 @@ negative_z_cmp(gconstpointer va, gconstpointer vb)
     return dom_tree_order_cmp(a->dom, b->dom);
 }
 
+/* Recursive painter: culling, stacking, transforms, opacity/blend groups, clips, scrollbars. */
 static void
 paint_walk(cairo_t *cr, const ns_box *b, const char *highlight)
 {
@@ -7179,6 +7360,7 @@ paint_walk(cairo_t *cr, const ns_box *b, const char *highlight)
     }
 }
 
+/* Depth-first search for the first box whose element has the given tag name. */
 static const ns_box *
 find_element_box_named(const ns_box *b, const char *name)
 {
@@ -7193,6 +7375,7 @@ find_element_box_named(const ns_box *b, const char *name)
     return NULL;
 }
 
+/* TRUE and the color if the box has a non-transparent background-color. */
 static gboolean
 box_solid_background(const ns_box *b, rgba *out)
 {
@@ -7206,6 +7389,7 @@ box_solid_background(const ns_box *b, rgba *out)
     return FALSE;
 }
 
+/* Canvas background propagated from the html, else body, background color. */
 static gboolean
 canvas_background_of(const ns_box *root, rgba *out)
 {
@@ -7217,6 +7401,7 @@ canvas_background_of(const ns_box *root, rgba *out)
     return FALSE;
 }
 
+/* Depth-first search for the box generated by a DOM node. */
 static const ns_box *
 find_box_for_node(const ns_box *b, const ns_node *node)
 {
@@ -7229,6 +7414,7 @@ find_box_for_node(const ns_box *b, const ns_node *node)
     return NULL;
 }
 
+/* Box of the active modal dialog in the top layer, if any. */
 static const ns_box *
 top_layer_box(const ns_box *root)
 {
@@ -7237,6 +7423,7 @@ top_layer_box(const ns_box *root)
     return find_box_for_node(root, modal);
 }
 
+/* Paints the modal top-layer box over everything, with its ::backdrop fill. */
 static void
 paint_top_layer(cairo_t *cr, const ns_box *root, const char *highlight)
 {
@@ -7263,6 +7450,7 @@ paint_top_layer(cairo_t *cr, const ns_box *root, const char *highlight)
     g_paint_skip_box = saved;
 }
 
+/* Paints a box tree: canvas background, main tree, then the top layer. */
 void
 ns_paint(cairo_t *cr, const ns_box *root, const char *highlight_query)
 {
@@ -7283,6 +7471,7 @@ ns_paint(cairo_t *cr, const ns_box *root, const char *highlight_query)
     ns_paint_list_ordinals_end();
 }
 
+/* Like ns_paint, but also highlights the given text selection. */
 void
 ns_paint_with_selection(cairo_t *cr, const ns_box *root,
                         const char *highlight_query,

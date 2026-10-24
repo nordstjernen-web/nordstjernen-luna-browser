@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — WebIDL receiver checks for the members of node interfaces.
+ * Wraps Node-derived prototype members so calls on a wrong receiver throw Illegal invocation.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -55,6 +56,7 @@ receiver_name_in(const char *name, const char *const *names, gsize n)
     return FALSE;
 }
 
+/* True if this_val's class is the Node or Attr class accepted by kind. */
 static gboolean
 receiver_matches(JSValueConst this_val, int kind, JSValueConst *data)
 {
@@ -69,6 +71,7 @@ receiver_matches(JSValueConst this_val, int kind, JSValueConst *data)
     return FALSE;
 }
 
+/* Returns a promise rejected with an Illegal invocation TypeError. */
 static JSValue
 receiver_rejected_promise(JSContext *ctx)
 {
@@ -88,6 +91,7 @@ receiver_rejected_promise(JSContext *ctx)
 static gboolean
 receiver_proto_extends(JSContext *ctx, JSValueConst proto, JSValueConst base);
 
+/* True for a plain object whose prototype chain includes Node.prototype. */
 static gboolean
 receiver_is_derived_ordinary_object(JSContext *ctx, JSValueConst this_val,
                                     JSValueConst *data)
@@ -104,6 +108,7 @@ receiver_is_derived_ordinary_object(JSContext *ctx, JSValueConst this_val,
     return derived;
 }
 
+/* Setter fallback that defines an own data property on the receiver. */
 static JSValue
 receiver_shadowing_set(JSContext *ctx, JSValueConst this_val, int argc,
                        JSValueConst *argv, JSValueConst *data)
@@ -117,6 +122,7 @@ receiver_shadowing_set(JSContext *ctx, JSValueConst this_val, int argc,
     return ok < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
+/* Wrapper body: forwards on a valid receiver, else throws, rejects or ignores. */
 static JSValue
 receiver_checked_call(JSContext *ctx, JSValueConst this_val, int argc,
                       JSValueConst *argv, int kind, JSValueConst *data)
@@ -131,6 +137,7 @@ receiver_checked_call(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_ThrowTypeError(ctx, "Illegal invocation");
 }
 
+/* Reads a function's length property, defaulting to 0 on error. */
 static int
 receiver_function_length(JSContext *ctx, JSValueConst fn)
 {
@@ -144,6 +151,7 @@ receiver_function_length(JSContext *ctx, JSValueConst fn)
     return n;
 }
 
+/* Returns a cached receiver-checking wrapper for fn, preserving name and length. */
 static JSValue
 receiver_checked(receiver_pass *pass, JSValueConst fn, int kind, JSAtom atom)
 {
@@ -190,6 +198,7 @@ receiver_checked(receiver_pass *pass, JSValueConst fn, int kind, JSAtom atom)
     return made;
 }
 
+/* Adds lenient-this or promise-rejecting behavior for specific member names. */
 static int
 receiver_kind_for(const char *name, int accepted, gboolean accessor)
 {
@@ -205,6 +214,7 @@ receiver_kind_for(const char *name, int accepted, gboolean accessor)
     return kind;
 }
 
+/* Replaces a configurable method or accessor on a prototype with checked wrappers. */
 static void
 receiver_check_member(receiver_pass *pass, JSValueConst proto, JSAtom atom,
                       int accepted)
@@ -241,6 +251,7 @@ receiver_check_member(receiver_pass *pass, JSValueConst proto, JSAtom atom,
     JS_FreeValue(ctx, desc.setter);
 }
 
+/* Wraps every own string-keyed member of a prototype. */
 static void
 receiver_check_proto(receiver_pass *pass, JSValueConst proto, int accepted)
 {
@@ -256,6 +267,7 @@ receiver_check_proto(receiver_pass *pass, JSValueConst proto, int accepted)
     js_free(ctx, tab);
 }
 
+/* Records EventTarget.prototype member atoms so they are left unwrapped. */
 static void
 receiver_note_event_target_names(receiver_pass *pass, JSValueConst target_proto)
 {
@@ -272,6 +284,7 @@ receiver_note_event_target_names(receiver_pass *pass, JSValueConst target_proto)
     js_free(ctx, tab);
 }
 
+/* Frees the recorded EventTarget member atoms and their set. */
 static void
 receiver_free_event_target_names(receiver_pass *pass)
 {
@@ -283,6 +296,7 @@ receiver_free_event_target_names(receiver_pass *pass)
     g_hash_table_destroy(pass->event_target_names);
 }
 
+/* prototype of the global interface object named by atom, or undefined. */
 static JSValue
 receiver_interface_proto(JSContext *ctx, JSValueConst global, JSAtom atom)
 {
@@ -310,6 +324,7 @@ receiver_named_proto(JSContext *ctx, JSValueConst global, const char *name)
     return proto;
 }
 
+/* True if base appears on proto's prototype chain (depth-limited). */
 static gboolean
 receiver_proto_extends(JSContext *ctx, JSValueConst proto, JSValueConst base)
 {
@@ -325,6 +340,7 @@ receiver_proto_extends(JSContext *ctx, JSValueConst proto, JSValueConst base)
     return found;
 }
 
+/* Wraps members of every global interface prototype that inherits from Node. */
 static void
 receiver_check_interfaces(receiver_pass *pass, JSValueConst global,
                           JSValueConst node_proto, JSValueConst attr_proto)
@@ -355,6 +371,7 @@ receiver_check_interfaces(receiver_pass *pass, JSValueConst global,
     js_free(ctx, tab);
 }
 
+/* Enforces WebIDL receiver checks on Node-derived interface members. */
 void
 ns_js_require_node_receivers(JSContext *ctx, JSValueConst global,
                              JSClassID node_class, JSClassID attr_class)

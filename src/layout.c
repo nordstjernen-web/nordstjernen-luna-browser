@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — block layout.
+/* Nordstjernen Web Browser — box tree construction and layout: block, inline, flex, grid, tables.
+ * Floats, positioning, multicol fragmentation, intrinsic sizing, replaced elements, hit testing.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -24,6 +25,7 @@
 static void hit_enter_box(const ns_box *b, double *x, double *y);
 static gboolean hit_enter_painted(const ns_box *b, double *x, double *y);
 
+/* Resolves a length or calc to px: % against basis, em/rem as 16px, viewport and cq units. */
 static double
 length_resolve(const ns_css_value *v, double basis, double fallback)
 {
@@ -93,6 +95,7 @@ length_is_auto(const ns_css_value *v)
            strcmp(v->u.keyword, "auto") == 0;
 }
 
+/* Effective self-alignment for an abspos box; normal is start if replaced, else stretch. */
 static const char *
 abs_self_alignment(const ns_box *abox, ns_css_prop prop)
 {
@@ -108,6 +111,7 @@ abs_self_alignment(const ns_box *abox, ns_css_prop prop)
     return k;
 }
 
+/* Returns aspect-ratio as w/h for a number pair, else -1; *with_auto reports a paired auto. */
 static double
 aspect_ratio_number(const ns_css_value *v, gboolean *with_auto)
 {
@@ -119,6 +123,7 @@ aspect_ratio_number(const ns_css_value *v, gboolean *with_auto)
     return v->u.size.w > 0 && v->u.size.h > 0 ? v->u.size.w / v->u.size.h : -1;
 }
 
+/* True when the value has a percentage component (length, calc, or math-function argument). */
 static gboolean
 value_is_percent(const ns_css_value *v)
 {
@@ -146,6 +151,7 @@ static gboolean size_keyword_is_intrinsic(const ns_css_value *v);
 static double intrinsic_keyword_width(ns_box *box, const char *kw,
                                       const ns_style *mi, double avail);
 
+/* Resolves a height; % uses the viewport for root/fixed, else the CB, else fallback. */
 static double
 resolve_used_height(const ns_box *box, const ns_css_value *hv,
                     double width_basis, double fallback)
@@ -172,6 +178,7 @@ resolve_used_height(const ns_box *box, const ns_css_value *hv,
     return length_resolve(hv, width_basis, fallback);
 }
 
+/* Clamps h by non-percentage max-height, then min-height, so min-height wins. */
 static double
 clamp_height_minmax_px(const ns_style *s, double h)
 {
@@ -191,6 +198,7 @@ clamp_height_minmax_px(const ns_style *s, double h)
     return h;
 }
 
+/* Converts a specified height to content height when box-sizing is border-box. */
 static double
 specified_height_to_content(const ns_box *b, double h)
 {
@@ -201,6 +209,7 @@ specified_height_to_content(const ns_box *b, double h)
     return h < 0 ? 0 : h;
 }
 
+/* Content height of an abspos box sized by non-auto top and bottom, else -1. */
 static double
 inset_sized_height(const ns_box *b)
 {
@@ -212,6 +221,7 @@ inset_sized_height(const ns_box *b)
     return b->content_height > 0 ? b->content_height : -1;
 }
 
+/* Finds the definite height of the containing block for % resolution; -1 if indefinite. */
 static double
 containing_block_definite_height(const ns_box *box)
 {
@@ -254,6 +264,7 @@ containing_block_definite_height(const ns_box *box)
         p, clamp_height_minmax_px(p->style, length_resolve(h, 0, -1)));
 }
 
+/* Resolves a height with % against height_basis (fallback when negative), else width basis. */
 static double
 resolve_height_with_basis(const ns_css_value *hv, double width_basis,
                           double height_basis, double fallback)
@@ -333,6 +344,7 @@ style_is_grid_container(const ns_style *s)
     return ns_display_is_grid_container(ns_css_display_of(s));
 }
 
+/* Returns the alignment base of a keyword property, or fallback when unset or not a keyword. */
 static const char *
 keyword_or(const ns_style *s, ns_css_prop p, const char *fallback)
 {
@@ -342,6 +354,7 @@ keyword_or(const ns_style *s, ns_css_prop p, const char *fallback)
     return ns_css_alignment_base(v->u.keyword);
 }
 
+/* Maps flex-direction to its physical axis in vertical writing modes (rtl, -reverse). */
 static const char *
 flex_direction_of(const ns_style *s)
 {
@@ -357,6 +370,7 @@ flex_direction_of(const ns_style *s)
     return reverse != right_to_left ? "row-reverse" : "row";
 }
 
+/* True when self-start on the given physical axis is the right/bottom edge per writing mode. */
 static gboolean
 self_start_is_far_side(const ns_style *s, gboolean horizontal_axis)
 {
@@ -384,6 +398,7 @@ box_css_order(const ns_box *b)
     return (int)number_or(b->style->values[NS_CSS_ORDER], 0);
 }
 
+/* Stable insertion sort of children by the CSS order property, relinking the sibling list. */
 static void
 reorder_children_by_order(ns_box *box)
 {
@@ -458,6 +473,7 @@ text_is_ws_only(const char *text)
     return TRUE;
 }
 
+/* Border width for one side; zero when that side's border style is none or hidden. */
 static double
 border_side_width(const ns_style *s, ns_css_prop width_prop,
                   ns_css_prop style_prop)
@@ -470,6 +486,7 @@ border_side_width(const ns_style *s, ns_css_prop width_prop,
     return length_or(s->values[width_prop], 0);
 }
 
+/* Resolves margin, padding (clamped to >= 0) and border widths; percentages against basis. */
 static void
 edges_from_style(const ns_style *s, double basis,
                  ns_edges *margin, ns_edges *padding, ns_edges *border)
@@ -532,6 +549,7 @@ box_set_fragment_context(ns_box *box, ns_fragment_context *context)
     box->fragment_context = context;
 }
 
+/* Allocates a zeroed box, reusing a pooled one if any; colspan/rowspan default to 1. */
 static ns_box *
 box_new(ns_box_kind kind)
 {
@@ -565,6 +583,7 @@ ns_box_media_ensure(ns_box *b)
     return b->media;
 }
 
+/* Prepends prefix's text, attrs, atomics and links onto suffix; frees prefix. */
 static ns_box *
 inline_merge_prefix(ns_box *prefix, ns_box *suffix)
 {
@@ -654,6 +673,7 @@ box_append_child(ns_box *parent, ns_box *child)
     parent->last_child = child;
 }
 
+/* Iteratively frees a box tree including inline atomics, returning boxes to the reuse pool. */
 void
 ns_box_free(ns_box *box)
 {
@@ -710,6 +730,7 @@ ns_box_free(ns_box *box)
 static gboolean box_clips_children(const ns_box *b);
 static gboolean box_first_baseline(const ns_box *b, double *out);
 
+/* True when a box other than the root, html or body clips its children. */
 static gboolean
 box_clips_for_page_height(const ns_box *b)
 {
@@ -721,6 +742,7 @@ box_clips_for_page_height(const ns_box *b)
     return box_clips_children(b);
 }
 
+/* Tracks the maximum content bottom in the subtree, not descending into clipping boxes. */
 static void
 box_walk_max_bottom(const ns_box *b, double *out)
 {
@@ -740,6 +762,7 @@ ns_box_max_bottom(const ns_box *root, double seed)
     return out;
 }
 
+/* True for replaced-element tags, plus table, that can force block layout of an inline. */
 static gboolean
 is_replaced_block_tag(const char *name)
 {
@@ -753,6 +776,7 @@ is_replaced_block_tag(const char *name)
                     strcmp(name, "table") == 0);
 }
 
+/* True for img/svg/picture/media/math/canvas elements that are not block-level. */
 static gboolean
 is_inline_level_replaced(const ns_node *n, GHashTable *styles)
 {
@@ -788,6 +812,7 @@ node_has_media_metadata(const ns_node *n)
 static gboolean tag_is_non_rendering(const char *name);
 static gboolean node_is_non_rendering(const ns_node *n);
 
+/* True when n is a child of an iframe or frame element, i.e. fallback content. */
 static gboolean
 node_is_frame_fallback(const ns_node *n)
 {
@@ -799,6 +824,7 @@ node_is_frame_fallback(const ns_node *n)
 
 static GHashTable *g_contains_block_media_cache;
 
+/* True if a rendered descendant forces block layout: block media, iframe or block-level box. */
 static gboolean
 contains_block_media_depth(const ns_node *n, GHashTable *styles, int depth)
 {
@@ -827,6 +853,7 @@ contains_block_media_depth(const ns_node *n, GHashTable *styles, int depth)
     return FALSE;
 }
 
+/* Memoized contains_block_media_depth using the per-layout node cache. */
 static gboolean
 contains_block_media(const ns_node *n, GHashTable *styles)
 {
@@ -844,6 +871,7 @@ contains_block_media(const ns_node *n, GHashTable *styles)
 
 static gboolean is_inline_dom(const ns_node *n, GHashTable *styles);
 
+/* True when an originally-inline abspos element follows inline content and so joins the run. */
 static gboolean
 abs_joins_inline_run(const ns_node *n, const ns_style *s, GHashTable *styles)
 {
@@ -869,6 +897,7 @@ abs_joins_inline_run(const ns_node *n, const ns_style *s, GHashTable *styles)
 
 static int clear_kind_of(const ns_style *s);
 
+/* Decides whether a DOM node joins an inline run instead of generating its own block box. */
 static gboolean
 is_inline_dom(const ns_node *n, GHashTable *styles)
 {
@@ -905,6 +934,7 @@ is_inline_dom(const ns_node *n, GHashTable *styles)
     return !style_is_block(s);
 }
 
+/* True for comments and display:none elements, which do not break an inline run. */
 static gboolean
 node_leaves_inline_run_open(const ns_node *n, GHashTable *styles)
 {
@@ -920,6 +950,7 @@ continues_inline_run(const ns_node *n, GHashTable *styles)
     return is_inline_dom(n, styles) || node_leaves_inline_run_open(n, styles);
 }
 
+/* Returns the element's internal table display type, or NS_DISPLAY_INTERNAL_NONE. */
 static ns_display_internal
 node_table_internal(const ns_node *n, GHashTable *styles)
 {
@@ -981,6 +1012,7 @@ node_is_table_internal(const ns_node *n, GHashTable *styles)
            is_table_caption(n, styles);
 }
 
+/* Collects table rows under n without descending into nested tables or captions. */
 static void
 collect_rows_recurse(const ns_node *n, GHashTable *styles, GPtrArray *out, int depth)
 {
@@ -1001,6 +1033,7 @@ collect_rows_recurse(const ns_node *n, GHashTable *styles, GPtrArray *out, int d
 
 typedef enum { ROW_GROUP_BODY, ROW_GROUP_HEADER, ROW_GROUP_FOOTER } row_group_kind;
 
+/* Classifies a table child as header, footer or body row group by tag or display. */
 static row_group_kind
 node_row_group(const ns_node *n, GHashTable *styles)
 {
@@ -1015,6 +1048,7 @@ node_row_group(const ns_node *n, GHashTable *styles)
     return ROW_GROUP_BODY;
 }
 
+/* Gathers a table's rows in render order: header groups, then bodies, then footers. */
 static void
 collect_rows(const ns_node *table, GHashTable *styles, GPtrArray *out)
 {
@@ -1066,6 +1100,7 @@ static void append_display_contents_children(ns_box *block, const ns_node *n,
                                              gboolean blockify_children,
                                              ns_box **pending_before);
 
+/* True if any element descendant is svg, img, picture, audio or video. */
 static gboolean
 button_has_replaced_child_depth(const ns_node *n, int depth)
 {
@@ -1089,6 +1124,7 @@ button_has_replaced_child(const ns_node *n)
     return button_has_replaced_child_depth(n, 0);
 }
 
+/* True when layout reads aria-label/title as a button label (no replaced content). */
 gboolean
 ns_layout_reads_label_attr(const ns_node *n, const char *name)
 {
@@ -1100,6 +1136,7 @@ ns_layout_reads_label_attr(const ns_node *n, const char *name)
            !button_has_replaced_child(n);
 }
 
+/* True if any side has a positive border width and a style other than none/hidden. */
 static gboolean
 style_has_visible_border(const ns_style *s)
 {
@@ -1124,6 +1161,7 @@ style_has_visible_border(const ns_style *s)
     return FALSE;
 }
 
+/* True when style gives an inline a visible box: size, background, radius, border. */
 static gboolean
 style_has_atomic_inline_box(const ns_style *s)
 {
@@ -1149,6 +1187,7 @@ style_has_atomic_inline_box(const ns_style *s)
     return bg && bg->kind == NS_CSS_V_COLOR && bg->u.color.a > 0;
 }
 
+/* Decides whether an element lays out as an atomic inline (controls, replaced, etc.). */
 static gboolean
 is_atomic_inline(const ns_node *n, GHashTable *styles)
 {
@@ -1227,6 +1266,7 @@ ns_layout_set_datalist_open(gboolean open)
     g_datalist_open_for_layout = open;
 }
 
+/* Returns text with a newline after each UTF-8 character; caller frees. */
 char *
 ns_vertical_stack_text(const char *text)
 {
@@ -1304,6 +1344,7 @@ static GHashTable  *g_abs_static;
 static GHashTable  *g_abs_seen;
 static const ns_node *g_inline_skip_node;
 
+/* Resolves src against the base URL and peeks the image cache; borrowed result. */
 static void *
 collect_peek_image(const char *src)
 {
@@ -1317,6 +1358,7 @@ collect_peek_image(const char *src)
     return img;
 }
 
+/* Records marker, border-image, background-layer and mask image sources on the box. */
 static void
 collect_box_bg_image(ns_box *box, const ns_style *s)
 {
@@ -1368,6 +1410,7 @@ collect_box_bg_image(ns_box *box, const ns_style *s)
     }
 }
 
+/* Builds a table-cell box with colspan/rowspan clamped to 1..100 and its generated content. */
 static ns_box *
 build_cell(const ns_node *n, GHashTable *styles)
 {
@@ -1383,6 +1426,7 @@ build_cell(const ns_node *n, GHashTable *styles)
     return cell;
 }
 
+/* Appends a (style, span) column hint to the table, using fallback when n has no style. */
 static void
 append_table_col_hint(ns_box *table, const ns_node *n, GHashTable *styles,
                       int span, const ns_style *fallback)
@@ -1397,6 +1441,7 @@ append_table_col_hint(ns_box *table, const ns_node *n, GHashTable *styles,
     g_array_append_val(table->table_col_hints, hint);
 }
 
+/* Collects col/colgroup hints; a colgroup without col children contributes its own span. */
 static void
 collect_table_col_hints(ns_box *table, const ns_node *n, GHashTable *styles)
 {
@@ -1435,6 +1480,7 @@ build_table_caption(const ns_node *n, GHashTable *styles)
     return caption;
 }
 
+/* Wraps a table's rowless content in one anonymous cell; returns NULL if nothing renders. */
 static ns_box *
 build_anonymous_table_cell(const ns_node *n, GHashTable *styles)
 {
@@ -1509,6 +1555,7 @@ build_table_row(const ns_node *tr, GHashTable *styles)
     return row;
 }
 
+/* Builds an anonymous row from cells in [start,end), skipping hidden/abspos ones. */
 static ns_box *
 build_row_from_cell_run(const ns_node *start, const ns_node *end,
                         const ns_node *dom, GHashTable *styles)
@@ -1527,6 +1574,7 @@ build_row_from_cell_run(const ns_node *start, const ns_node *end,
     return NULL;
 }
 
+/* Builds a table box: captions, then rows, else an anonymous row or anonymous cell. */
 static ns_box *
 build_table(const ns_node *n, GHashTable *styles)
 {
@@ -1566,6 +1614,7 @@ build_table(const ns_node *n, GHashTable *styles)
     return table;
 }
 
+/* Builds an anonymous table for stray rows, row groups and cells in [start,end). */
 static ns_box *
 build_anonymous_table(const ns_node *start, const ns_node *end,
                       GHashTable *styles)
@@ -1634,6 +1683,7 @@ typedef struct ns_atomic_raw {
     ns_box *box;
 } ns_atomic_raw;
 
+/* Approximates a control's padding on prop as a count of quarter-em spaces, capped at 12. */
 static int
 control_pad_spaces(const ns_style *s, ns_css_prop prop)
 {
@@ -1668,6 +1718,7 @@ text_input_size_attr(const ns_node *n)
     return size_str ? ns_parse_int(size_str, 20, 4, 80) : 20;
 }
 
+/* Visible columns of a text input: fitted value from the layout table, else size. */
 static int
 text_input_columns(const ns_node *n)
 {
@@ -1677,6 +1728,7 @@ text_input_columns(const ns_node *n)
     return fitted ? GPOINTER_TO_INT(fitted) : size;
 }
 
+/* True when the nearest ancestor dir attribute, or else CSS direction, is rtl. */
 static gboolean
 text_input_align_rtl(const ns_style *s, const ns_node *n)
 {
@@ -1690,6 +1742,7 @@ text_input_align_rtl(const ns_style *s, const ns_node *n)
     return keyword_is(s ? s->values[NS_CSS_DIRECTION] : NULL, "rtl");
 }
 
+/* Portion of span to shift for text-align center/right/end/start in a text input. */
 static glong
 text_input_align_offset(const ns_style *s, const ns_node *n, glong span)
 {
@@ -1706,6 +1759,7 @@ text_input_align_offset(const ns_style *s, const ns_node *n, glong span)
     return 0;
 }
 
+/* Leading codepoints to hide when an overflowing input value is end/center aligned. */
 static glong
 text_input_align_skip_cps(const ns_style *s, const ns_node *n,
                           glong cps, glong size)
@@ -1714,6 +1768,7 @@ text_input_align_skip_cps(const ns_style *s, const ns_node *n,
     return text_input_align_offset(s, n, cps - size);
 }
 
+/* Codepoints to scroll a focused input value so the caret stays within the visible size. */
 static glong
 text_input_focused_skip_cps(const char *value, gsize caret_byte,
                             glong cps, glong size)
@@ -1764,6 +1819,7 @@ style_is_italic(const ns_style *s)
            keyword_is(s->values[NS_CSS_FONT_STYLE], "oblique");
 }
 
+/* Baseline shift of an inline: super/sub, px vertical-align, relative top/bottom. */
 static double
 inline_rise_px(const ns_node *n, const ns_style *s, GHashTable *styles)
 {
@@ -1803,6 +1859,7 @@ tag_is_non_rendering(const char *name)
     return name_in(name, set);
 }
 
+/* True for style/script/head/title/noscript/template; noscript renders without JS. */
 static gboolean
 node_is_non_rendering(const ns_node *n)
 {
@@ -1823,6 +1880,7 @@ emit_attr(GArray *attrs, ns_inline_attr_kind k, gsize start, gsize end)
     g_array_append_val(attrs, a);
 }
 
+/* True if collected text is empty or ends, ignoring spaces/nbsp, at a newline or LS/PS. */
 static gboolean
 inline_run_at_line_start(const GString *out)
 {
@@ -1843,6 +1901,7 @@ inline_run_at_line_start(const GString *out)
     return FALSE;
 }
 
+/* True when a control is border-box: explicit box-sizing, or UA default for buttons etc. */
 static gboolean
 control_is_border_box(const ns_node *dom, const ns_style *s)
 {
@@ -1865,6 +1924,7 @@ control_is_border_box(const ns_node *dom, const ns_style *s)
            g_ascii_strcasecmp(type, "search") == 0;
 }
 
+/* Padding plus border width to add to a content-box control's CSS width; 0 for border-box. */
 double
 ns_control_css_extra_w(const ns_node *dom, const ns_style *s)
 {
@@ -1883,6 +1943,7 @@ ns_control_css_extra_h(const ns_node *dom, const ns_style *s)
     return p.top + p.bottom + b.top + b.bottom;
 }
 
+/* Border-box width of an inline form control from its CSS width, else its measured width. */
 static double
 inline_attr_control_width(const ns_inline_attr *r, const ns_box *box)
 {
@@ -1895,6 +1956,7 @@ inline_attr_control_width(const ns_inline_attr *r, const ns_box *box)
     return w > 0 ? w : r->box_w;
 }
 
+/* True if style paints a background colour or image, a box-shadow, or a visible border. */
 gboolean
 ns_style_has_box_paint(const ns_style *s)
 {
@@ -1913,6 +1975,7 @@ ns_style_has_box_paint(const ns_style *s)
     return style_has_visible_border(s);
 }
 
+/* True if style paints a box (see ns_style_has_box_paint) or has any border radius. */
 static gboolean
 style_has_visible_control_box(const ns_style *s)
 {
@@ -1925,6 +1988,7 @@ style_has_visible_control_box(const ns_style *s)
            length_or(s->values[NS_CSS_BORDER_BOTTOM_LEFT_RADIUS], 0) > 0;
 }
 
+/* True when all four border styles are none or hidden. */
 static gboolean
 control_style_strips_chrome(const ns_style *s)
 {
@@ -1941,6 +2005,7 @@ control_style_strips_chrome(const ns_style *s)
     return TRUE;
 }
 
+/* Decides whether a form control paints from CSS instead of native chrome. */
 static gboolean
 control_prefers_css_chrome(ns_inline_attr_kind k, const ns_node *dom,
                            const ns_style *s)
@@ -1959,6 +2024,7 @@ control_prefers_css_chrome(ns_inline_attr_kind k, const ns_node *dom,
     return FALSE;
 }
 
+/* Appends a form-control attr sized from CSS or textarea cols/rows, with background image. */
 static void
 emit_form_attr_sized(GArray *attrs, ns_inline_attr_kind k, gsize start, gsize end,
                      const ns_node *dom, GHashTable *styles)
@@ -2017,6 +2083,7 @@ emit_form_attr_sized(GArray *attrs, ns_inline_attr_kind k, gsize start, gsize en
     g_array_append_val(attrs, a);
 }
 
+/* Emits font attrs over a control and value colour/style; grey for placeholder/disabled. */
 static void
 emit_control_text_style(GArray *attrs, const ns_style *s,
                         gsize field_start, gsize field_end,
@@ -2116,6 +2183,7 @@ emit_font_stretch_attr(GArray *attrs, gsize start, gsize end, int font_stretch)
     g_array_append_val(attrs, a);
 }
 
+/* Maps font-kerning to 0 for none, 1 for normal/auto, -1 when unset or other. */
 static int
 font_kerning_int_from_style(const ns_style *s)
 {
@@ -2202,6 +2270,7 @@ emit_font_family_attr(GArray *attrs, gsize start, gsize end, const char *family)
     g_array_append_val(attrs, a);
 }
 
+/* Applies a counter-reset or counter-increment "name [int]" list to the table. */
 static void
 counter_apply_decl(GHashTable *counters, const char *decl, gboolean increment)
 {
@@ -2232,6 +2301,7 @@ counter_apply_decl(GHashTable *counters, const char *decl, gboolean increment)
     }
 }
 
+/* Formats a counter as decimal, roman, alpha/latin or lower-greek; caller frees. */
 static gchar *
 counter_format(gint v, const char *style)
 {
@@ -2282,6 +2352,7 @@ counter_format(gint v, const char *style)
     return g_strdup_printf("%d", v);
 }
 
+/* Applies a style's counter-reset, then its counter-increment. */
 static void
 counter_apply_style(GHashTable *current, const ns_style *s)
 {
@@ -2296,6 +2367,7 @@ counter_apply_style(GHashTable *current, const ns_style *s)
             s->values[NS_CSS_COUNTER_INCREMENT]->u.keyword, TRUE);
 }
 
+/* Applies counters in document order, snapshotting them where pseudo content uses counter(). */
 static void
 counter_walk(const ns_node *n, GHashTable *styles,
              GHashTable *current, GHashTable *snapshots, int depth)
@@ -2336,6 +2408,7 @@ counter_walk(const ns_node *n, GHashTable *styles,
 static void
 counter_snapshot_destroy(gpointer p) { g_hash_table_destroy(p); }
 
+/* Returns a node -> counter-values snapshot table for resolving counter(); caller frees. */
 static GHashTable *
 build_counter_snapshots(const ns_node *root, GHashTable *styles)
 {
@@ -2348,6 +2421,7 @@ build_counter_snapshots(const ns_node *root, GHashTable *styles)
     return snapshots;
 }
 
+/* Formats a counter()/counters() body from the host's snapshot; caller frees. */
 static char *
 substitute_one_counter(const char *body, const ns_node *host, gboolean is_counters)
 {
@@ -2388,6 +2462,7 @@ substitute_one_counter(const char *body, const ns_node *host, gboolean is_counte
     return formatted;
 }
 
+/* Expands content strings, attr(), counter()/counters(); NULL for none/normal. */
 static char *
 resolve_pseudo_content(const char *raw, const ns_node *host)
 {
@@ -2464,6 +2539,7 @@ resolve_pseudo_content(const char *raw, const ns_node *host)
     return g_string_free(out, FALSE);
 }
 
+/* Applies uppercase, lowercase or capitalize to UTF-8 text; new string, or NULL for others. */
 static char *
 apply_text_transform(const char *src, const char *tt)
 {
@@ -2505,6 +2581,7 @@ parse_float_attr(const ns_node *n, const char *attr, double *out)
     return ns_html_parse_float(ns_element_get_attr(n, attr), out);
 }
 
+/* Computes progress state per HTML: max defaults to 1; frac -1 if indeterminate. */
 ns_progress_state
 ns_progress_state_for(const ns_node *n)
 {
@@ -2523,6 +2600,7 @@ ns_progress_state_for(const ns_node *n)
     return st;
 }
 
+/* Computes meter state per HTML: clamps value/low/high/optimum, grades region 0..2. */
 ns_meter_state
 ns_meter_state_for(const ns_node *n)
 {
@@ -2558,6 +2636,7 @@ ns_meter_state_for(const ns_node *n)
     return st;
 }
 
+/* Quote for a nesting depth from quotes, else alternating curly quotes; caller frees. */
 static char *
 quotes_string_for(const ns_style *s, int depth, gboolean closing)
 {
@@ -2597,6 +2676,7 @@ quotes_string_for(const ns_style *s, int depth, gboolean closing)
     return g_strdup(closing ? "\xe2\x80\x99" : "\xe2\x80\x98");
 }
 
+/* Appends resolved ::before/::after content; open/close-quote use depth-0 quotes. */
 static void
 append_pseudo_content(GString *out, const ns_css_value *cv,
                       const ns_node *host, const ns_style *host_style)
@@ -2617,6 +2697,7 @@ append_pseudo_content(GString *out, const ns_css_value *cv,
     g_free(resolved);
 }
 
+/* Appends one line-separated option row of an open select dropdown as an input-field attr. */
 static void
 emit_open_select_option(collector_ctx *ctx, const ns_node *option)
 {
@@ -2632,6 +2713,7 @@ emit_open_select_option(collector_ctx *ctx, const ns_node *option)
                          start, ctx->out->len, option, ctx->styles);
 }
 
+/* Appends one option row of a listbox select, line-separated after the first row. */
 static void
 emit_listbox_option(collector_ctx *ctx, const ns_node *option, gboolean first)
 {
@@ -2647,6 +2729,7 @@ emit_listbox_option(collector_ctx *ctx, const ns_node *option, gboolean first)
                          start, ctx->out->len, option, ctx->styles);
 }
 
+/* Depth-first search under node for a datalist element with the given id. */
 static const ns_node *
 find_datalist_by_id(const ns_node *node, const char *id, int depth)
 {
@@ -2663,6 +2746,7 @@ find_datalist_by_id(const ns_node *node, const char *id, int depth)
     return NULL;
 }
 
+/* Returns an option's value attribute, else its label; caller frees. */
 static char *
 datalist_option_value(const ns_node *option)
 {
@@ -2671,6 +2755,7 @@ datalist_option_value(const ns_node *option)
     return ns_option_label_dup(option);
 }
 
+/* Emits a selection attr when anchor differs from caret, plus a one-byte caret attr. */
 static void
 emit_caret(collector_ctx *ctx, gsize anchor_pos, gsize caret_pos)
 {
@@ -2680,6 +2765,7 @@ emit_caret(collector_ctx *ctx, gsize anchor_pos, gsize caret_pos)
     emit_attr(ctx->attrs, NS_INLINE_CARET, caret_pos, caret_pos + 1);
 }
 
+/* Records a link range from start to the current output end for the enclosing a[href]. */
 static void
 emit_active_link(collector_ctx *ctx, gsize start)
 {
@@ -2694,6 +2780,7 @@ emit_active_link(collector_ctx *ctx, gsize start)
     g_array_append_val(ctx->links, r);
 }
 
+/* Finishes a text control: field attr, value style, spellcheck range, caret if focused. */
 static void
 emit_text_control(collector_ctx *ctx, const ns_node *n, const ns_style *s,
                   gsize start, gsize val_start, gsize disp_end,
@@ -2717,6 +2804,7 @@ emit_text_control(collector_ctx *ctx, const ns_node *n, const ns_style *s,
     if (focused) emit_caret(ctx, anchor_pos, caret_pos);
 }
 
+/* Appends up to 8 datalist options containing the input value (case-folded) as rows. */
 static void
 emit_datalist_suggestions(collector_ctx *ctx, const ns_node *input)
 {
@@ -2755,6 +2843,7 @@ emit_datalist_suggestions(collector_ctx *ctx, const ns_node *input)
     g_free(needle);
 }
 
+/* Flattens a DOM subtree into inline text plus attrs, links, controls and atomics. */
 static void
 collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
 {
@@ -3541,6 +3630,7 @@ collect_walk(const ns_node *n, collector_ctx *ctx, int depth)
 
 enum { NS_WS_COLLAPSE = 0, NS_WS_PRESERVE = 1, NS_WS_PRE_LINE = 2 };
 
+/* White-space handling from the nearest ancestor that sets it; pre and textarea preserve. */
 static int
 white_space_mode(const ns_node *node, GHashTable *styles)
 {
@@ -3568,6 +3658,7 @@ white_space_mode(const ns_node *node, GHashTable *styles)
     return NS_WS_COLLAPSE;
 }
 
+/* Builds an inline box for [first,last_excl), collapsing whitespace and remapping attrs. */
 static ns_box *
 build_inline_run_impl(const ns_node *first, const ns_node *last_excl,
                       GHashTable *styles, gboolean abs_placeholders)
@@ -3861,6 +3952,7 @@ build_inline_run_no_abs_placeholders(const ns_node *first,
     return build_inline_run_impl(first, last_excl, styles, FALSE);
 }
 
+/* Wraps the inline rendering of a block-level or abspos form control in its own block. */
 static ns_box *
 build_form_control_block(const ns_node *n, const ns_style *s, GHashTable *styles)
 {
@@ -3895,6 +3987,7 @@ srcset_valid_integer(const char *s, gsize n)
     return TRUE;
 }
 
+/* True if s[0..n) is a valid HTML floating-point number (sign, fraction, exponent). */
 static gboolean
 srcset_valid_float(const char *s, gsize n)
 {
@@ -3928,6 +4021,7 @@ srcset_number(const char *s, gsize n)
     return v;
 }
 
+/* Validates a candidate's descriptors per HTML srcset rules; extracts w width and x density. */
 static gboolean
 srcset_parse_descriptors(GPtrArray *descriptors, double *width, double *density)
 {
@@ -3966,6 +4060,7 @@ typedef enum {
     SRCSET_AFTER_DESCRIPTOR,
 } srcset_state;
 
+/* Tokenizes one candidate's descriptors per the HTML srcset parser; returns past the comma. */
 static const char *
 srcset_tokenize_descriptors(const char *p, GPtrArray *descriptors)
 {
@@ -4007,6 +4102,7 @@ srcset_tokenize_descriptors(const char *p, GPtrArray *descriptors)
     return p;
 }
 
+/* Parses srcset into url/width/density candidates, dropping invalid ones. */
 static GArray *
 srcset_parse(const char *input)
 {
@@ -4043,6 +4139,7 @@ srcset_candidates_free(GArray *candidates)
     g_array_free(candidates, TRUE);
 }
 
+/* Picks the srcset candidate with the smallest density >= 1, else the largest; caller frees. */
 static char *
 srcset_select(const char *srcset, const char *sizes, const char *src,
               double *density)
@@ -4107,6 +4204,7 @@ ns_pixbuf_likely_supports(const char *mime)
     return ns_image_supports_mime(mime);
 }
 
+/* First picture source matching type and media; prefers non-data: URLs over data: ones. */
 static char *
 pick_picture_source_url(const ns_node *picture, const ns_node *img,
                         double *density)
@@ -4157,6 +4255,7 @@ pick_picture_source_url(const ns_node *picture, const ns_node *img,
     return data_fallback;
 }
 
+/* Chooses an img URL, preferring lazy-load data-srcset/data-src over srcset and src. */
 static char *
 pick_img_url(const ns_node *n, double *density)
 {
@@ -4186,6 +4285,7 @@ pick_img_url(const ns_node *n, double *density)
     return NULL;
 }
 
+/* Image URL for an img or picture, preferring a non-data: source; *img_out gets the img. */
 static char *
 choose_img_url(const ns_node *n, const ns_node **img_out, double *density)
 {
@@ -4222,6 +4322,7 @@ choose_img_url(const ns_node *n, const ns_node **img_out, double *density)
     return url;
 }
 
+/* Parses a positive numeric dimension attribute; 0 when missing or invalid. */
 static double
 image_dimension_attr(const ns_node *n, const char *name)
 {
@@ -4233,6 +4334,7 @@ image_dimension_attr(const ns_node *n, const char *name)
     return v;
 }
 
+/* Synchronously decodes a data:image URL into the image cache under key (64 MiB budget). */
 static ns_image *
 decode_data_image_for_layout(const char *url, const char *key)
 {
@@ -4274,6 +4376,7 @@ ns_img_chosen_density(const ns_node *n)
     return density > 0 ? density : 1.0;
 }
 
+/* Builds an image box: chosen URL/density, attr size (data-file-* ratio), else 200x150. */
 static ns_box *
 build_image_box(const ns_node *n)
 {
@@ -4315,6 +4418,7 @@ build_image_box(const ns_node *n)
     return box;
 }
 
+/* First media URL: internal src attr, src, data-mp4, data-webm, else source selection. */
 static const char *
 first_media_source_url(const ns_node *n)
 {
@@ -4329,6 +4433,7 @@ first_media_source_url(const ns_node *n)
     return ns_media_select_source(n);
 }
 
+/* Builds a video-kind box for audio; only sized (default 250x32) when controls is set. */
 static ns_box *
 build_audio_box(const ns_node *n)
 {
@@ -4346,6 +4451,7 @@ build_audio_box(const ns_node *n)
     return box;
 }
 
+/* Builds a video box: source, poster fallbacks, size from attrs, frame or defaults. */
 static ns_box *
 build_video_box(const ns_node *n)
 {
@@ -4389,6 +4495,7 @@ build_video_box(const ns_node *n)
     return box;
 }
 
+/* Builds an inline box for ::before/::after content; atomic displays wrap a block. */
 static ns_box *
 build_pseudo_inline_for(const ns_style *ps, const ns_node *host)
 {
@@ -4525,6 +4632,7 @@ build_pseudo_inline_for(const ns_style *ps, const ns_node *host)
 
 static int g_build_block_depth;
 
+/* Returns the host's shadow-root child element (marked with NS_SHADOW_ATTR), or NULL. */
 static const ns_node *
 layout_shadow_root(const ns_node *host)
 {
@@ -4535,6 +4643,7 @@ layout_shadow_root(const ns_node *host)
     return NULL;
 }
 
+/* Returns the shadow host that owns a slot element, or NULL. */
 static const ns_node *
 layout_slot_host(const ns_node *slot)
 {
@@ -4556,6 +4665,7 @@ build_block(const ns_node *n, GHashTable *styles)
     return out;
 }
 
+/* Appends ::after as a block, or merges its inline content into the trailing inline run. */
 static void
 append_generated_after(ns_box *block, const ns_node *n, const ns_style *s)
 {
@@ -4612,6 +4722,7 @@ append_generated_after(ns_box *block, const ns_node *n, const ns_style *s)
 
 static int g_contents_depth;
 
+/* Splices a display:contents element's ::before, children and ::after into block. */
 static void
 append_display_contents_children(ns_box *block, const ns_node *n,
                                  GHashTable *styles,
@@ -4638,6 +4749,7 @@ append_display_contents_children(ns_box *block, const ns_node *n,
     g_contents_depth--;
 }
 
+/* Appends one flex/grid child as a blockified item; whitespace-only text is dropped. */
 static void
 append_blockified_child(ns_box *block, const ns_node *c, GHashTable *styles,
                         ns_box **pending_before, gboolean block_owns_pending)
@@ -4684,6 +4796,7 @@ append_blockified_child(ns_box *block, const ns_node *c, GHashTable *styles,
     if (item) box_append_child(block, item);
 }
 
+/* Appends n's children, grouping inline siblings into runs and merging pending ::before. */
 static void
 append_flow_children(ns_box *block, const ns_node *n, GHashTable *styles,
                      gboolean blockify_children, ns_box **pending_before)
@@ -4737,6 +4850,7 @@ append_flow_children(ns_box *block, const ns_node *n, GHashTable *styles,
     }
 }
 
+/* Builds a box's content with ::before/::after, registering abspos pseudo-elements. */
 static void
 append_generated_flow(ns_box *box, const ns_node *n, GHashTable *styles)
 {
@@ -4756,6 +4870,7 @@ append_generated_flow(ns_box *box, const ns_node *n, GHashTable *styles)
     append_generated_after(box, n, s);
 }
 
+/* Returns a block box for a block-level pseudo-element with empty content, else NULL. */
 static ns_box *
 build_pseudo_block_for(const ns_style *ps, const ns_node *host)
 {
@@ -4780,6 +4895,7 @@ build_pseudo_block_for(const ns_style *ps, const ns_node *host)
     return pb;
 }
 
+/* Queues an abspos/fixed pseudo-element that has content for later out-of-flow layout. */
 static void
 register_abs_pseudo(const ns_node *host, const ns_style *ps)
 {
@@ -4796,6 +4912,7 @@ register_abs_pseudo(const ns_node *host, const ns_style *ps)
     g_array_append_val(g_abs_pending, e);
 }
 
+/* Wraps an inline-level flex/grid child in a block item; NULL if it renders nothing. */
 static ns_box *
 build_blockified_inline_item(const ns_node *n, GHashTable *styles,
                              ns_box **pending_before)
@@ -4841,6 +4958,7 @@ build_blockified_inline_item(const ns_node *n, GHashTable *styles,
 static const ns_node *g_blockified_legend;
 static int float_side_of(const ns_style *s);
 
+/* True if a legend's style lets it be the rendered legend: displayed, unfloated, in flow. */
 static gboolean
 style_can_be_rendered_legend(const ns_style *s)
 {
@@ -4848,6 +4966,7 @@ style_can_be_rendered_legend(const ns_style *s)
            !style_is_absolute_or_fixed(s);
 }
 
+/* Returns the fieldset's first legend child eligible to be its rendered legend. */
 static const ns_node *
 fieldset_rendered_legend_node(const ns_node *n, GHashTable *styles)
 {
@@ -4860,6 +4979,7 @@ fieldset_rendered_legend_node(const ns_node *n, GHashTable *styles)
     return NULL;
 }
 
+/* Builds the fieldset's rendered legend as a block box, even if it is inline, and marks it. */
 static ns_box *
 build_rendered_legend(const ns_node *n, GHashTable *styles)
 {
@@ -4876,6 +4996,7 @@ build_rendered_legend(const ns_node *n, GHashTable *styles)
     return legend;
 }
 
+/* Main box builder for documents, replaced, controls, tables, slots and blocks. */
 static ns_box *
 build_block_impl(const ns_node *n, GHashTable *styles)
 {
@@ -5227,6 +5348,7 @@ build_block_impl(const ns_node *n, GHashTable *styles)
     return block;
 }
 
+/* New Pango layout on a shared cached context with the style's inline font; caller unrefs. */
 static NsPangoLayout *
 make_pango_layout(const ns_style *parent_style)
 {
@@ -5240,6 +5362,7 @@ make_pango_layout(const ns_style *parent_style)
     return layout;
 }
 
+/* Adds px letter-spacing and word-spacing spanning the whole text to the attribute list. */
 static void
 apply_inline_spacing(NsPangoAttrList *list, const ns_style *style, const char *text)
 {
@@ -5277,6 +5400,7 @@ layout_attr_insert_range(NsPangoAttrList *attrs, NsPangoAttribute *a,
     ns_pango_attr_list_insert(attrs, a);
 }
 
+/* Converts inline attrs to Pango font attrs; no breaks inside non-textarea controls. */
 static void
 apply_inline_layout_attrs(NsPangoAttrList *attrs, const ns_box *box)
 {
@@ -5301,6 +5425,7 @@ apply_inline_layout_attrs(NsPangoAttrList *attrs, const ns_box *box)
     }
 }
 
+/* True for an input-field attr on a text-like input type (text, search, password, etc.). */
 static gboolean
 field_attr_is_text_input(const ns_inline_attr *r)
 {
@@ -5320,6 +5445,7 @@ field_attr_is_text_input(const ns_inline_attr *r)
         g_ascii_strcasecmp(type, "password") == 0;
 }
 
+/* Adds Pango shape attrs reserving each inline atomic's box, placed by vertical-align. */
 void
 ns_inline_apply_atomic_shapes(NsPangoAttrList *list, const ns_box *box)
 {
@@ -5404,6 +5530,7 @@ ns_inline_apply_atomic_shapes(NsPangoAttrList *list, const ns_box *box)
 
 }
 
+/* Sets layout attrs, then stretches one-line text inputs to their CSS width via shape attrs. */
 void
 ns_inline_layout_set_attrs(NsPangoLayout *layout, NsPangoAttrList *list,
                            const ns_box *box)
@@ -5452,6 +5579,7 @@ inline_layout_atomics_prepare(ns_box *box, const ns_style *parent_style)
     }
 }
 
+/* Builds and sets the full Pango attr list: i18n, features, shapes, spacing, attrs. */
 static void
 inline_layout_apply_attrs(NsPangoLayout *layout, const ns_box *box,
                           const ns_style *parent_style)
@@ -5466,6 +5594,7 @@ inline_layout_apply_attrs(NsPangoLayout *layout, const ns_box *box,
     ns_pango_attr_list_unref(i18n);
 }
 
+/* Used line-height in px for the style, defaulting to 1.2 times the font size. */
 static double
 inline_line_height(const ns_style *parent_style)
 {
@@ -5481,6 +5610,7 @@ inline_control_is_textarea(const ns_inline_attr *r)
     return r->dom && r->dom->name && strcmp(r->dom->name, "textarea") == 0;
 }
 
+/* Raises line height to fit native-chrome inline controls (not textareas). */
 static double
 inline_control_line_height(const ns_box *box, double line_height)
 {
@@ -5523,6 +5653,7 @@ style_sets_block_height(const ns_style *s)
     return hv && (hv->kind == NS_CSS_V_LENGTH || hv->kind == NS_CSS_V_CALC);
 }
 
+/* Tallest inline textarea height plus native chrome, skipping one sized by its own style. */
 static double
 inline_textarea_total_height(const ns_box *box, const ns_style *parent_style)
 {
@@ -5543,6 +5674,7 @@ inline_textarea_total_height(const ns_box *box, const ns_style *parent_style)
     return out;
 }
 
+/* True for attr kinds that are text styling, not controls, caret or selection. */
 static gboolean
 inline_attr_is_text_only(ns_inline_attr_kind k)
 {
@@ -5564,6 +5696,7 @@ inline_attr_is_text_only(ns_inline_attr_kind k)
     }
 }
 
+/* True for attr kinds that change glyph metrics (font, rise, small caps). */
 static gboolean
 inline_attr_affects_measure(ns_inline_attr_kind k)
 {
@@ -5586,6 +5719,7 @@ inline_attr_affects_measure(ns_inline_attr_kind k)
     }
 }
 
+/* True when an inline box has no atomics or control attrs, so its measure can be cached. */
 static gboolean
 inline_box_measure_cacheable(const ns_box *box)
 {
@@ -5629,6 +5763,7 @@ inline_box_has_measure_attrs(const ns_box *box)
     return FALSE;
 }
 
+/* True if style sets letter/word spacing or non-default kerning, ligatures or features. */
 static gboolean
 inline_style_has_measure_adjustments(const ns_style *style)
 {
@@ -5660,6 +5795,7 @@ inline_text_simple_ascii(const char *text)
     return TRUE;
 }
 
+/* Fast min-content width of plain ASCII text via its longest word; -1 when not applicable. */
 static double
 measure_inline_ascii_min_width(ns_box *box, const ns_style *parent_style)
 {
@@ -5706,6 +5842,7 @@ measure_inline_ascii_min_width(ns_box *box, const ns_style *parent_style)
 
 static void shift_box_tree(ns_box *b, double dx, double dy);
 
+/* Measures vertical-mode text as line thickness and inline length; upright stacks. */
 static void
 ns_vertical_measure(ns_box *box, const ns_style *ps,
                     double *thickness, double *length)
@@ -5739,6 +5876,7 @@ ns_vertical_measure(ns_box *box, const ns_style *ps,
     g_object_unref(layout);
 }
 
+/* First in-flow baseline offset from b's top, recursing into children; FALSE if none. */
 static gboolean
 box_first_baseline(const ns_box *b, double *out)
 {
@@ -5761,6 +5899,7 @@ box_first_baseline(const ns_box *b, double *out)
     return FALSE;
 }
 
+/* Returns the item's align-self unless auto, else the container's align-items value. */
 static const char *
 flex_item_align(const ns_box *c, const char *container_align)
 {
@@ -5778,6 +5917,7 @@ flex_align_is_baseline(const char *align)
                      strcmp(align, "first baseline") == 0);
 }
 
+/* Baseline of a flex item; vertical items in vertical containers use their centre. */
 static double
 flex_item_baseline(const ns_box *c, double fallback)
 {
@@ -5804,6 +5944,7 @@ typedef struct measure_entry {
 static GHashTable *g_measure_cache;
 static gsize g_measure_cache_bytes;
 
+/* Reads NS_LAYOUT_CACHE once: "0" disables the measure cache, "verify" checks it, else on. */
 static int
 measure_cache_mode(void)
 {
@@ -5838,6 +5979,7 @@ measure_key_str(GByteArray *k, const char *s)
     if (s) measure_key_put(k, s, n);
 }
 
+/* Appends a metric-affecting inline attr's kind, range and value to the measure cache key. */
 static void
 measure_key_attr(GByteArray *k, const ns_inline_attr *a)
 {
@@ -5889,6 +6031,7 @@ measure_key_attr(GByteArray *k, const ns_inline_attr *a)
     }
 }
 
+/* Returns the nearest ancestor-or-self element's non-empty value for attr, or NULL. */
 static const char *
 node_nearest_attr(const ns_node *n, const char *attr)
 {
@@ -5900,6 +6043,7 @@ node_nearest_attr(const ns_node *n, const char *attr)
     return NULL;
 }
 
+/* Builds the inline measure cache key: style, sizes, font generation, lang/dir, text, attrs. */
 static GBytes *
 measure_key_new(const ns_box *box, const ns_style *parent_style,
                 double content_width)
@@ -5941,6 +6085,7 @@ measure_cache_lookup(GBytes *key)
     return g_measure_cache ? g_hash_table_lookup(g_measure_cache, key) : NULL;
 }
 
+/* Logs when a cached measurement differs from the freshly measured height or baseline. */
 static void
 measure_cache_check(const measure_entry *before, const ns_box *box,
                     double measured, double baseline, double width)
@@ -5951,6 +6096,7 @@ measure_cache_check(const measure_entry *before, const ns_box *box,
                    before->baseline, measured, baseline, width);
 }
 
+/* Stores a measurement under key holding a style ref; clears the whole cache past 16 MiB. */
 static void
 measure_cache_store(GBytes *key, const ns_style *parent_style, double height,
                     double baseline)
@@ -5973,6 +6119,7 @@ measure_cache_store(GBytes *key, const ns_style *parent_style, double height,
     g_measure_cache_bytes += bytes;
 }
 
+/* Lays out an inline run with Pango: height, first baseline, inline atomic positions. */
 static void
 inline_layout(ns_box *box, double content_width, const ns_style *parent_style)
 {
@@ -6230,6 +6377,7 @@ inline_attr_is_button_hit(ns_inline_attr_kind k)
            k == NS_INLINE_RADIO_CHECKED;
 }
 
+/* Hit-tests form controls in an inline run: atomics, then buttons, then fields. */
 static const ns_node *
 inline_box_form_hit(const ns_box *box, double local_x, double local_y,
                     const ns_style *parent_style)
@@ -6330,6 +6478,7 @@ inline_box_form_hit(const ns_box *box, double local_x, double local_y,
     return field_hit;
 }
 
+/* True when an inline run is plain wrapping text that can be split across columns. */
 static gboolean
 inline_box_can_fragment(const ns_box *box, const ns_style *style,
                         double basis)
@@ -6364,6 +6513,7 @@ range_end_clamped(gsize start, gsize len, gsize cap)
     return end > cap ? cap : end;
 }
 
+/* Copies bytes [start,end) of an inline box with attrs and links rebased; NULL if empty. */
 static ns_box *
 inline_box_clone_range(const ns_box *src, gsize start, gsize end)
 {
@@ -6420,6 +6570,7 @@ inline_box_clone_range(const ns_box *src, gsize start, gsize end)
     return out;
 }
 
+/* Builds a wrapped Pango layout of an inline box at content_width for fragmentation. */
 static NsPangoLayout *
 inline_box_fragment_layout(const ns_box *box, double content_width,
                            const ns_style *parent_style)
@@ -6441,6 +6592,7 @@ inline_box_fragment_layout(const ns_box *box, double content_width,
     return layout;
 }
 
+/* Splits a lone inline child into per-column fragments of equal line counts. */
 static gboolean
 layout_multicol_single_inline(ns_box *box, double inner_x, double inner_y,
                               double col_w, double col_gap, int n_cols,
@@ -6526,6 +6678,7 @@ layout_multicol_single_inline(ns_box *box, double inner_x, double inner_y,
     return TRUE;
 }
 
+/* Returns the overflow-x/y keyword, falling back to the overflow shorthand. */
 static const char *
 overflow_axis_keyword(const ns_style *s, ns_css_prop axis)
 {
@@ -6550,6 +6703,7 @@ overflow_kw_scrolls(const char *ov)
                   g_ascii_strcasecmp(ov, "scroll") == 0);
 }
 
+/* True when a block, caption or cell clips on either axis via its overflow value. */
 static gboolean
 box_clips_children(const ns_box *b)
 {
@@ -6640,6 +6794,7 @@ box_hit_uses_border_bounds(const ns_box *box)
                    box->kind == NS_BOX_TABLE_CELL);
 }
 
+/* True if the point is in the border box (blocks, tables) or the box; cells are half-open. */
 static gboolean
 box_hit_self_contains(const ns_box *root, double x, double y)
 {
@@ -6679,6 +6834,7 @@ hit_box_stack_key(const ns_box *b)
     return (int)v->u.length.v;
 }
 
+/* Orders two boxes by DOM document order within one tree, else by sibling order. */
 static int
 hit_tree_order_cmp(const ns_box *a, guint order_a,
                    const ns_box *b, guint order_b)
@@ -6698,6 +6854,7 @@ typedef struct {
     guint        order;
 } hit_stack_entry;
 
+/* Orders hit-test children by z-index, non-positioned first, then tree order. */
 static int
 hit_stack_cmp(const void *a, const void *b)
 {
@@ -6710,6 +6867,7 @@ hit_stack_cmp(const void *a, const void *b)
     return 0;
 }
 
+/* Children sorted in stacking order when any has a z-index, else NULL; caller frees. */
 static const ns_box **
 hit_children_stacked(const ns_box *parent, guint *out_n)
 {
@@ -6740,6 +6898,7 @@ hit_children_stacked(const ns_box *parent, guint *out_n)
 static gboolean box_hit_untransform_point(const ns_box *b, double *x,
                                           double *y);
 
+/* Maps a point into an inline atomic's coordinate space using its owner offset. */
 static void
 inline_atomic_hit_point(const ns_box *owner, const ns_inline_atomic *atomic,
                         double x, double y, double *child_x, double *child_y)
@@ -6750,6 +6909,7 @@ inline_atomic_hit_point(const ns_box *owner, const ns_inline_atomic *atomic,
     *child_y = y - dy;
 }
 
+/* Returns the topmost form control under the point, honouring clipping, scroll and z-order. */
 static const ns_node *
 ns_form_hit_walk(const ns_box *box, double x, double y,
                  const ns_style *inherited)
@@ -6809,6 +6969,7 @@ measure_min_content_width(ns_box *box, const ns_style *parent_style);
 static void
 table_border_spacing(const ns_style *s, double *hsp, double *vsp);
 
+/* Float side of a style: 0 for left, 1 for right, -1 for none. */
 static int
 float_side_of(const ns_style *s)
 {
@@ -6820,6 +6981,7 @@ float_side_of(const ns_style *s)
     return -1;
 }
 
+/* True when column-count is at least 2 or a positive column-width is set. */
 static gboolean
 style_is_multicol(const ns_style *s)
 {
@@ -6830,6 +6992,7 @@ style_is_multicol(const ns_style *s)
     return cw && cw->kind == NS_CSS_V_LENGTH && cw->u.length.v > 0;
 }
 
+/* Counts in-flow, non-floated block/table children, stopping at 2. */
 static int
 multicol_distributable_children(const ns_box *box)
 {
@@ -6843,6 +7006,7 @@ multicol_distributable_children(const ns_box *box)
     return n;
 }
 
+/* Returns the sole in-flow block child when it has 2+ distributable children, else NULL. */
 static ns_box *
 multicol_column_host(ns_box *box)
 {
@@ -6858,6 +7022,7 @@ multicol_column_host(ns_box *box)
     return only;
 }
 
+/* Maps clear to 1 for left, 2 for right, 3 for both, 0 otherwise. */
 static int
 clear_kind_of(const ns_style *s)
 {
@@ -6880,6 +7045,7 @@ typedef struct float_ref {
 
 static GArray *g_bfc_floats;
 
+/* Left and right float intrusion into the [cx0,cx1] line box at height y. */
 static void
 floats_offsets_at(const GArray *floats, double y, double cx0, double cx1,
                   double *left_out, double *right_out)
@@ -6902,6 +7068,7 @@ floats_offsets_at(const GArray *floats, double y, double cx0, double cx1,
     *right_out = r > 0 ? r : 0;
 }
 
+/* Maximum left and right float intrusion over the band [top,bottom). */
 static void
 floats_offsets_over(const GArray *floats, double top, double bottom,
                     double cx0, double cx1,
@@ -6925,6 +7092,7 @@ floats_offsets_over(const GArray *floats, double top, double bottom,
     *right_out = r > 0 ? r : 0;
 }
 
+/* Earliest float bottom strictly inside (top,bottom), or top when none. */
 static double
 floats_next_bottom_within(const GArray *floats, double top, double bottom)
 {
@@ -6938,6 +7106,7 @@ floats_next_bottom_within(const GArray *floats, double top, double bottom)
     return edge;
 }
 
+/* Moves y below the floats on the side(s) selected by clear. */
 static double
 floats_clear_y(const GArray *floats, double y, int clear)
 {
@@ -6952,6 +7121,7 @@ floats_clear_y(const GArray *floats, double y, int clear)
     return out;
 }
 
+/* Lowest bottom edge among non-intruding floats. */
 static double
 floats_max_bottom(const GArray *floats)
 {
@@ -6965,6 +7135,7 @@ floats_max_bottom(const GArray *floats)
     return y;
 }
 
+/* Moves y past float bottoms until width beside floats is readable; TRUE if moved. */
 static gboolean
 floats_advance_to_readable_width(const GArray *floats, double cw,
                                  double cx0, double *y, double *left_out,
@@ -7005,6 +7176,7 @@ floats_advance_to_readable_width(const GArray *floats, double cw,
 
 static gboolean box_is_block_level_replaced(const ns_box *c);
 
+/* True when a box establishes a new block formatting context (floats, clip, flex, etc.). */
 static gboolean
 box_establishes_bfc(const ns_box *b)
 {
@@ -7026,6 +7198,7 @@ box_establishes_bfc(const ns_box *b)
     return FALSE;
 }
 
+/* True for tables, block-level replaced boxes and BFC roots, which avoid floats. */
 static gboolean
 block_child_avoids_floats(const ns_box *c)
 {
@@ -7033,6 +7206,7 @@ block_child_avoids_floats(const ns_box *c)
            box_establishes_bfc(c);
 }
 
+/* Splits a run where a float ends so lower lines use the wider width; returns the head. */
 static ns_box *
 inline_split_below_floats(ns_box *parent, ns_box *run, const GArray *floats,
                           double inner_x, double cw, double run_y,
@@ -7107,6 +7281,7 @@ replaced_size_keyword(const ns_css_value *v)
             strcmp(v->u.keyword, "max-content") == 0);
 }
 
+/* Sizes a replaced box from specified size, intrinsic size/ratio, aspect-ratio and min/max. */
 static void
 layout_image(ns_box *box, double parent_content_width)
 {
@@ -7261,6 +7436,7 @@ layout_image(ns_box *box, double parent_content_width)
     box->content_height = h;
 }
 
+/* Returns the logical top in px of the given layout line. */
 static double
 pango_layout_line_top(NsPangoLayout *layout, int line_index)
 {
@@ -7276,6 +7452,7 @@ pango_layout_line_top(NsPangoLayout *layout, int line_index)
     return top;
 }
 
+/* True for a zero-sized inline atomic that is not an abspos placeholder. */
 static gboolean
 inline_atomic_needs_layout(const ns_box *ab)
 {
@@ -7283,6 +7460,7 @@ inline_atomic_needs_layout(const ns_box *ab)
     return !(g_abs_ph_set && g_hash_table_contains(g_abs_ph_set, ab));
 }
 
+/* Width basis for an inline atomic: own content for % widths, else nearest width, 32..1600. */
 static double
 inline_atomic_measure_basis(const ns_box *box)
 {
@@ -7308,6 +7486,7 @@ inline_atomic_measure_basis(const ns_box *box)
     return basis;
 }
 
+/* Lays out a not-yet-sized inline atomic, or refreshes edges of replaced atomics. */
 static void
 inline_atomic_prepare(ns_box *ab, const ns_style *parent_style)
 {
@@ -7322,6 +7501,7 @@ inline_atomic_prepare(ns_box *ab, const ns_style *parent_style)
                          &ab->margin, &ab->padding, &ab->border);
 }
 
+/* Intrinsic width of a replaced box: px width, natural/density, box width or 200, capped. */
 static double
 replaced_box_intrinsic_width(const ns_box *box)
 {
@@ -7354,6 +7534,7 @@ grid_value_is_set(const ns_css_value *v)
                   g_ascii_strcasecmp(v->u.keyword, "auto") == 0);
 }
 
+/* Column gap in px from column-gap, falling back to gap; 0 if unset. */
 static double
 grid_gap_px(const ns_style *s)
 {
@@ -7367,6 +7548,7 @@ grid_gap_px(const ns_style *s)
     return 0;
 }
 
+/* Intrinsic width of a column-flow grid from item widths; -1 if items are placed. */
 static double
 grid_column_flow_width(ns_box *box, const ns_style *child_style,
                        gboolean min)
@@ -7431,6 +7613,7 @@ grid_column_flow_width(ns_box *box, const ns_style *child_style,
     return sum + grid_gap_px(box->style) * (n - 1);
 }
 
+/* Max-content width of a grid with explicit column tracks; -1 if unsupported. */
 static double
 grid_natural_width(ns_box *box, const ns_style *child_style)
 {
@@ -7483,6 +7666,7 @@ grid_natural_width(ns_box *box, const ns_style *child_style)
     return sum;
 }
 
+/* Advances col past columns still occupied by rowspanning cells. */
 static guint
 table_cell_column(const int *rs_remain, guint max_cols, guint col)
 {
@@ -7490,6 +7674,7 @@ table_cell_column(const int *rs_remain, guint max_cols, guint col)
     return col;
 }
 
+/* Marks the columns of a rowspanning cell as occupied for the following rows. */
 static void
 table_reserve_rowspan(int *rs_remain, guint max_cols, guint col,
                       const ns_box *cell)
@@ -7507,6 +7692,7 @@ table_row_done(int *rs_remain, guint max_cols)
         if (rs_remain[i] > 0) rs_remain[i]--;
 }
 
+/* Counts table columns honouring colspan and rowspan, capped at NS_TABLE_MAX_COLS. */
 static guint
 table_column_count(const ns_box *box)
 {
@@ -7528,6 +7714,7 @@ table_column_count(const ns_box *box)
     return max_cols;
 }
 
+/* Widens columns to a cell's outer width; spanning cells spread excess proportionally. */
 static void
 table_widen_columns(double *cols, guint max_cols, guint col, int span,
                     double outer)
@@ -7550,12 +7737,14 @@ table_widen_columns(double *cols, guint max_cols, guint col, int span,
                                         : excess / covered;
 }
 
+/* Pass 0 measures single-column cells, pass 1 measures spanning cells. */
 static gboolean
 table_cell_in_pass(const ns_box *cell, int pass)
 {
     return (cell->colspan > 1) == (pass == 1);
 }
 
+/* Definite non-percentage width of prop plus h_extra, or -1. */
 static double
 table_cell_definite_width(const ns_style *s, ns_css_prop prop, double h_extra)
 {
@@ -7567,6 +7756,7 @@ table_cell_definite_width(const ns_style *s, ns_css_prop prop, double h_extra)
     return w >= 0 ? w + h_extra : -1;
 }
 
+/* Clamps a cell's outer width by its definite min-width and max-width. */
 static double
 table_cell_clamp(const ns_box *cell, double h_extra, double w)
 {
@@ -7578,6 +7768,7 @@ table_cell_clamp(const ns_box *cell, double h_extra, double w)
     return w;
 }
 
+/* Min- or max-content table width from cells, col hints, border spacing and captions. */
 static double
 table_intrinsic_width(ns_box *box, const ns_style *inherited, gboolean min)
 {
@@ -7658,6 +7849,7 @@ table_intrinsic_width(ns_box *box, const ns_style *inherited, gboolean min)
     return sum > captions ? sum : captions;
 }
 
+/* Max-content contribution of a box: shaped text, replaced size, px width or its children. */
 static double
 measure_natural_width(ns_box *box, const ns_style *parent_style)
 {
@@ -7772,6 +7964,7 @@ measure_natural_width(ns_box *box, const ns_style *parent_style)
         box, measure_max_content_width(box, parent_style), parent_style, TRUE);
 }
 
+/* Applies min/max/fit-content min-width and max-width to a block or table width. */
 static double
 width_contribution_keyword_limits(ns_box *box, double w,
                                   const ns_style *parent_style,
@@ -7798,6 +7991,7 @@ width_contribution_keyword_limits(ns_box *box, double w,
     return w;
 }
 
+/* Max-content width from children: widest block, summed floats, or flex-row items plus gaps. */
 static double
 measure_max_content_width(ns_box *box, const ns_style *parent_style)
 {
@@ -7855,6 +8049,7 @@ measure_max_content_width(ns_box *box, const ns_style *parent_style)
     return flex_row ? row_sum : max_child;
 }
 
+/* Min-content contribution: wrapped text, replaced size, or clamped definite width. */
 static double
 measure_min_width(ns_box *box, const ns_style *parent_style)
 {
@@ -7959,6 +8154,7 @@ measure_min_width(ns_box *box, const ns_style *parent_style)
         FALSE);
 }
 
+/* Min-content width of a container: table, definite grid tracks, else widest child. */
 static double
 measure_min_content_width(ns_box *box, const ns_style *parent_style)
 {
@@ -8038,6 +8234,7 @@ table_width_from_style(const ns_style *s, double basis, double *out)
     return TRUE;
 }
 
+/* Spreads a fixed width evenly over the spanned columns and marks them fixed. */
 static void
 apply_fixed_table_width(double *col_widths, gboolean *col_fixed,
                         guint max_cols, guint col, int span, double w)
@@ -8061,6 +8258,7 @@ table_first_row(ns_box *box)
     return NULL;
 }
 
+/* Fixed table layout: col and first-row widths, remaining space split among unset columns. */
 static double
 layout_fixed_table_columns(ns_box *box, double cw, guint max_cols,
                            double *col_widths, gboolean *col_fixed)
@@ -8137,6 +8335,7 @@ table_child_outer_height(const ns_box *box)
          + box->border.top + box->border.bottom;
 }
 
+/* Lays out the top or bottom captions at the cursor, advancing it. */
 static void
 layout_table_captions(ns_box *box, gboolean bottom, double inner_x,
                       double cw, const ns_style *child_inherited,
@@ -8152,6 +8351,7 @@ layout_table_captions(ns_box *box, gboolean bottom, double inner_x,
     }
 }
 
+/* Returns border-spacing in px; zero when border-collapse is collapse. */
 static void
 table_border_spacing(const ns_style *s, double *hsp, double *vsp)
 {
@@ -8182,6 +8382,7 @@ typedef struct ns_cell_pos {
     guint   r0, c0, cov, rsp;
 } ns_cell_pos;
 
+/* Approximates border-collapse by zeroing right/bottom borders shared with a neighbour. */
 static void
 table_collapse_borders(ns_box *box, guint max_cols)
 {
@@ -8232,6 +8433,7 @@ table_collapse_borders(ns_box *box, guint max_cols)
     g_free(grid);
 }
 
+/* Resolves auto left/right margins from available space, centring when both are auto. */
 static void
 block_apply_auto_inline_margins(ns_box *box, double available)
 {
@@ -8251,6 +8453,7 @@ block_apply_auto_inline_margins(ns_box *box, double available)
     }
 }
 
+/* Lays out a table: column widths, cells, rowspans, vertical-align, height. */
 static void
 layout_table(ns_box *box, double parent_content_width, const ns_style *inherited_style)
 {
@@ -8769,6 +8972,7 @@ box_is_size_query_container(const ns_box *b)
            g_ascii_strcasecmp(ct->u.keyword, "size") == 0;
 }
 
+/* Sets container-query dims from the nearest query and size-query container ancestors. */
 static void
 cq_set_dims_from_ancestors(const ns_box *box)
 {
@@ -8786,6 +8990,7 @@ cq_set_dims_from_ancestors(const ns_box *box)
 
 static int g_layout_box_depth;
 
+/* Dispatches layout by box kind, with depth limit, container-query dims and BFC float scope. */
 static void
 layout_box(ns_box *box, double parent_content_width, const ns_style *inherited_style)
 {
@@ -8854,6 +9059,7 @@ flex_border_box_to_content(const ns_box *c, double v)
     return v;
 }
 
+/* Resolves a min/max/fit-content keyword width for a flex item; -1 if not a keyword. */
 static double
 flex_item_keyword_width(ns_box *c, const ns_css_value *v, double cw,
                         const ns_style *inherited)
@@ -8866,6 +9072,7 @@ flex_item_keyword_width(ns_box *c, const ns_css_value *v, double cw,
                                    inherited ? inherited : c->style, inner);
 }
 
+/* Definite row-item basis from flex-basis or width (length or keyword); FALSE when auto. */
 static gboolean
 flex_main_basis_explicit(ns_box *c, double cw, const ns_style *inherited,
                          double *out)
@@ -8895,6 +9102,7 @@ flex_main_basis_explicit(ns_box *c, double cw, const ns_style *inherited,
     return FALSE;
 }
 
+/* Cheap natural width estimate (0.65em per char, summed children, gaps, min/max), capped. */
 static double
 estimate_natural_width(const ns_box *b, double cap)
 {
@@ -9050,6 +9258,7 @@ flex_content_basis_from_natural(ns_box *b, const ns_style *inherited)
     return w > 0 ? w : 0;
 }
 
+/* Item's max-width as a content-box main-size limit; -1 when none. */
 static double
 flex_item_max_main(ns_box *c, double cw, const ns_style *inherited)
 {
@@ -9062,6 +9271,7 @@ flex_item_max_main(ns_box *c, double cw, const ns_style *inherited)
     return mx < 0 ? -1 : flex_border_box_to_content(c, mx);
 }
 
+/* True for replaced boxes and form controls other than button-type inputs. */
 static gboolean
 flex_item_is_replaced_like(const ns_box *c)
 {
@@ -9080,6 +9290,7 @@ flex_item_is_replaced_like(const ns_box *c)
            strcmp(n->name, "meter") == 0 || strcmp(n->name, "progress") == 0;
 }
 
+/* Automatic minimum main size: min-width, else min-content capped by width; 0 when clipping. */
 static double
 flex_item_min_main(ns_box *c, double cw, const ns_style *inherited)
 {
@@ -9129,6 +9340,7 @@ flex_clamp_main(double v, double mn, double mx)
     return v < 0 ? 0 : v;
 }
 
+/* Resolves flexible lengths per CSS Flexbox 9.7: grow/shrink with min/max freezing. */
 static void
 flex_resolve_lengths(ns_flex_len *it, guint n, double available)
 {
@@ -9191,6 +9403,7 @@ flex_container_scrolls(const ns_box *box)
            overflow_kw_scrolls(overflow_axis_keyword(box->style, NS_CSS_OVERFLOW_Y));
 }
 
+/* Computes justify-content leading and between spacing; overflow falls back to start. */
 static void
 flex_justify_offsets(const ns_box *box, const char *justify, double free_main,
                      guint count, gboolean reverse,
@@ -9240,6 +9453,7 @@ flex_shrink_of(const ns_box *c)
     return s < 0 ? 0 : s;
 }
 
+/* Translates a box subtree, including grid track edges, fragmentainers and inline atomics. */
 static void
 shift_box_tree(ns_box *b, double dx, double dy)
 {
@@ -9277,6 +9491,7 @@ shift_box_tree(ns_box *b, double dx, double dy)
         }
 }
 
+/* Resolves a gap longhand, else its shorthand, to non-negative px; 0 if unset. */
 static double
 gap_px(const ns_css_value *specific, const ns_css_value *shorthand, double basis)
 {
@@ -9310,6 +9525,7 @@ flex_wraps(const ns_style *s)
            strcmp(w->u.keyword, "wrap-reverse") == 0;
 }
 
+/* Resolves a column flex item's height-like value to its border-box height. */
 static double
 flex_main_height_outer(const ns_box *c, const ns_css_value *v,
                        double cross_size, double container_main_size)
@@ -9323,6 +9539,7 @@ flex_main_height_outer(const ns_box *c, const ns_css_value *v,
     return out;
 }
 
+/* Column item main size from flex-basis or height; 0 when auto or an indefinite %. */
 static double
 flex_basis_main_height(const ns_box *c, double cross_size,
                        double container_main_size, gboolean *out_explicit)
@@ -9347,6 +9564,7 @@ flex_basis_main_height(const ns_box *c, double cross_size,
     return 0;
 }
 
+/* Re-lays out a stretched item with its new height as definite, keeping its position. */
 static void
 flex_relayout_after_cross_resize(ns_box *c, double layout_width,
                                  double main_size, double pre_h,
@@ -9371,6 +9589,7 @@ flex_align_stretches(const char *align)
     return strcmp(align, "stretch") == 0 || strcmp(align, "normal") == 0;
 }
 
+/* True when an item's height is auto or an indefinite percentage, so it may stretch. */
 static gboolean
 flex_item_cross_size_auto(const ns_box *c)
 {
@@ -9379,6 +9598,7 @@ flex_item_cross_size_auto(const ns_box *c)
     return value_is_percent(h) && containing_block_definite_height(c) < 0;
 }
 
+/* True when a row item stretches: stretch/normal align, auto height, no auto cross margins. */
 static gboolean
 flex_row_item_stretches(const ns_box *c, const char *container_align)
 {
@@ -9389,6 +9609,7 @@ flex_row_item_stretches(const ns_box *c, const char *container_align)
            flex_item_cross_size_auto(c);
 }
 
+/* Content height that fills the line's cross size, clamped by min/max-height. */
 static double
 flex_item_stretched_height(const ns_box *c, double line_cross_size,
                            double width_basis)
@@ -9409,6 +9630,7 @@ flex_item_stretched_height(const ns_box *c, double line_cross_size,
     return h;
 }
 
+/* Applies stretch-keyword min/max-height of an item against the line cross size. */
 static void
 flex_item_fit_line_keyword_limits(ns_box *c, double line_cross_size,
                                   double width_basis)
@@ -9434,6 +9656,7 @@ flex_item_fit_line_keyword_limits(ns_box *c, double line_cross_size,
         c->content_height = min_h;
 }
 
+/* Presets a stretching item's definite height to the line size before layout. */
 static gboolean
 flex_preset_cross_size(ns_box *c, double line_cross_size, double width_basis)
 {
@@ -9445,6 +9668,7 @@ flex_preset_cross_size(ns_box *c, double line_cross_size, double width_basis)
     return TRUE;
 }
 
+/* Lays out a single-line row flexbox: flex lengths, auto margins, justify, align, stretch. */
 static void
 layout_flex_row(ns_box *box, double cw,
                 double inner_x, double inner_y,
@@ -9677,6 +9901,7 @@ layout_flex_row(ns_box *box, double cw,
     g_ptr_array_free(items, TRUE);
 }
 
+/* align-content offsets for flex lines (lead, between, per-line); honours wrap-reverse. */
 static void
 flex_align_content_offsets(const ns_box *box, double free_cross, guint n,
                            double *lead, double *between, double *per_line)
@@ -9723,6 +9948,7 @@ flex_align_content_offsets(const ns_box *box, double free_cross, guint n,
     }
 }
 
+/* Multi-line row flexbox: line breaking, per-line flex and alignment, align-content. */
 static void
 layout_flex_row_wrap(ns_box *box, double cw,
                      double inner_x, double inner_y,
@@ -10032,6 +10258,7 @@ flex_item_stretch_main_height(const ns_box *c, double container_main_size)
     return h > 0 ? h : 0;
 }
 
+/* Automatic min height of a column item: min-height, else content capped by height. */
 static double
 flex_item_min_main_height(ns_box *c, double cw, double pct_basis)
 {
@@ -10063,6 +10290,7 @@ flex_item_min_main_height(ns_box *c, double cw, double pct_basis)
     return content > 0 ? content : 0;
 }
 
+/* Column item's max main size from max-height, incl. keywords; -1 if none. */
 static double
 flex_item_max_main_height(ns_box *c, double cw, double pct_basis)
 {
@@ -10089,6 +10317,7 @@ flex_column_item_align(const ns_box *c, const char *align)
     return align;
 }
 
+/* True when a column item's alignment is not stretch/normal, so it shrinks to fit. */
 static gboolean
 flex_column_item_shrinks_to_fit(const ns_box *c, const char *align)
 {
@@ -10096,6 +10325,7 @@ flex_column_item_shrinks_to_fit(const ns_box *c, const char *align)
     return strcmp(eff, "stretch") != 0 && strcmp(eff, "normal") != 0;
 }
 
+/* Stretches a replaced column item to the line width, scaling height when it is auto. */
 static void
 flex_stretch_replaced_width(ns_box *c, double line_w)
 {
@@ -10128,6 +10358,7 @@ flex_stretch_replaced_width(ns_box *c, double line_w)
     c->content_width = w;
 }
 
+/* Lays out a column item at the line width, or shrink-to-fit when fit; resets its height. */
 static void
 flex_column_layout_item(ns_box *c, double line_w, gboolean fit,
                         const ns_style *child_inherited)
@@ -10163,6 +10394,7 @@ flex_item_outer_width(const ns_box *c)
         + c->margin.left + c->margin.right;
 }
 
+/* Lays out a column flexbox: wrapping, flex lengths, cross alignment, overflow. */
 static void
 layout_flex_column(ns_box *box, double cw,
                    double inner_x, double inner_y,
@@ -10455,6 +10687,7 @@ layout_flex_column(ns_box *box, double cw,
     g_ptr_array_free(items, TRUE);
 }
 
+/* Resolves a track's minmax() minimum to px against avail; 0 if none or intrinsic. */
 static double
 track_min_px(const ns_css_track *t, double avail)
 {
@@ -10479,6 +10712,7 @@ track_is_intrinsic(ns_css_track_kind k)
            k == NS_CSS_TRACK_MAX_CONTENT;
 }
 
+/* Sizes fr tracks per CSS Grid "find the size of an fr", freezing tracks at their minimum. */
 static double
 grid_flex_track_sizes(const ns_css_tracks *tr, double space,
                       double available_main, double *sizes)
@@ -10517,6 +10751,7 @@ grid_flex_track_sizes(const ns_css_tracks *tr, double space,
     return used;
 }
 
+/* Resolves grid track sizes: fixed/percent with minmax shrink, content auto tracks, then fr. */
 static void
 resolve_track_sizes_full(const ns_css_tracks *tr, double available_main,
                          const double *content_min, const double *content_max,
@@ -10655,6 +10890,7 @@ resolve_track_sizes_full(const ns_css_tracks *tr, double available_main,
     }
 }
 
+/* Track size used to count auto repeats: the larger of its fixed size and minimum. */
 static double
 grid_track_repeat_px(const ns_css_track *t, double available_main)
 {
@@ -10677,6 +10913,7 @@ grid_line_name_copy(ns_css_tracks *out, const ns_css_line_name *ln, int line)
     dst->line = line;
 }
 
+/* Copies line names, duplicating auto-repeat names per repetition and shifting later ones. */
 static void
 grid_expand_repeat_names(const ns_css_tracks *tr, int repeats,
                          ns_css_tracks *out)
@@ -10697,6 +10934,7 @@ grid_expand_repeat_names(const ns_css_tracks *tr, int repeats,
                             tr->line_names[i].line + shift);
 }
 
+/* Expands repeat(auto-fill/auto-fit) to as many repetitions as fit; reports auto-fit range. */
 static ns_css_tracks
 expand_auto_repeat_ex(const ns_css_tracks *tr, double available_main, double gap,
                       int *fit_start, int *fit_count)
@@ -10780,6 +11018,7 @@ typedef struct grid_lines {
 
 static const grid_lines *g_grid_lines;
 
+/* First line after 'after' with this name, incl. area -start/-end names; 0 if none. */
 static int
 grid_named_line(const char *name, gsize len, int after)
 {
@@ -10829,6 +11068,7 @@ grid_named_line(const char *name, gsize len, int after)
     return 0;
 }
 
+/* Resolves a grid line (integer, negative, or name) to a 1-based line number; 0 if invalid. */
 static int
 grid_resolve_line_from(const char *s, int n_tracks, int after)
 {
@@ -10864,6 +11104,7 @@ grid_parse_span(const char *s)
     return ns_parse_int(s, 1, 1, NS_GRID_ROWS_MAX);
 }
 
+/* Parses a grid-row/grid-column shorthand into 0-based start and span; TRUE if start is set. */
 static int
 grid_pos_span(const ns_css_value *v, int n_tracks,
               int *out_start, int *out_span)
@@ -10905,6 +11146,7 @@ grid_line_num(const ns_css_value *v, int n_tracks, int after)
     return grid_resolve_line_from(v->u.keyword, n_tracks, after);
 }
 
+/* Extracts one axis's start and span from grid-area; TRUE when the start is explicit. */
 static int
 grid_area_axis_pos(const ns_style *st, gboolean row_axis, int n_tracks,
                    int *out_start, int *out_span)
@@ -10952,6 +11194,7 @@ grid_area_axis_pos(const ns_style *st, gboolean row_axis, int n_tracks,
     return got;
 }
 
+/* Resolves an item's placement on one axis from shorthand, area or longhands. */
 static int
 grid_resolve_pos(const ns_style *st, ns_css_prop shorthand,
                  ns_css_prop start_prop, ns_css_prop end_prop,
@@ -11016,6 +11259,7 @@ grid_occupy(GArray *occupied, int row, int col)
     g_array_index(occupied, grid_occupancy_row, row)[col] = TRUE;
 }
 
+/* True when a span of cells is in bounds and unoccupied. */
 static gboolean
 grid_slot_available(const GArray *occupied,
                     int row, int col, int col_span, int row_span,
@@ -11050,6 +11294,7 @@ grid_slot_mark(GArray *occupied,
     }
 }
 
+/* Finds the first free slot for an item in auto-placement order, honouring a fixed row/col. */
 static gboolean
 grid_find_slot(const GArray *occupied,
                int *out_row, int *out_col,
@@ -11080,6 +11325,7 @@ grid_find_slot(const GArray *occupied,
     return FALSE;
 }
 
+/* Advances the auto-placement cursor to the next unoccupied cell, wrapping to new rows. */
 static void
 grid_advance_cursor(const GArray *occupied,
                     int *row, int *col, int n_cols)
@@ -11097,6 +11343,7 @@ grid_advance_cursor(const GArray *occupied,
     }
 }
 
+/* Resolves a fixed or percentage track to px; percentages need a non-negative basis. */
 static double
 grid_track_px(const ns_css_track *t, double basis)
 {
@@ -11108,6 +11355,7 @@ grid_track_px(const ns_css_track *t, double basis)
     return 0;
 }
 
+/* True when both the track's minimum and maximum are definite against basis. */
 static gboolean
 grid_track_is_fixed(const ns_css_track *t, double basis)
 {
@@ -11122,6 +11370,7 @@ grid_track_is_fixed(const ns_css_track *t, double basis)
            (t->min_kind == NS_CSS_TRACK_PERCENT && basis >= 0);
 }
 
+/* Distributes space to affected tracks up to their caps, then beyond (Grid 11.5). */
 static void
 grid_distribute_extra(double *sizes, const double *caps,
                       const gboolean *affected, const gboolean *beyond,
@@ -11184,6 +11433,7 @@ grid_track_fixed_px(const ns_css_track *t, double avail)
     return 0;
 }
 
+/* Min- and max-content outer widths of a grid item, including margins, padding and borders. */
 static void
 grid_item_outer_widths(ns_box *c, const ns_style *inherited, double *min_w,
                        double *natural_w)
@@ -11198,6 +11448,7 @@ grid_item_outer_widths(ns_box *c, const ns_style *inherited, double *min_w,
     *natural_w += extra;
 }
 
+/* Grows spanned tracks' base sizes and limits to fit a spanning item; FALSE if any fr track. */
 static gboolean
 grid_span_accommodate(const ns_css_tracks *cols, int c0, int span,
                       const double *gap_after, double avail,
@@ -11275,6 +11526,7 @@ grid_span_accommodate(const ns_css_tracks *cols, int c0, int span,
     return TRUE;
 }
 
+/* Expands fr rows to fill space, freezing rows whose content exceeds their fr share. */
 static void
 grid_expand_flexible_rows(double *row_height, int n_rows,
                           const ns_css_tracks *rows_tracks,
@@ -11325,6 +11577,7 @@ grid_expand_flexible_rows(double *row_height, int n_rows,
     g_free(fr_factor);
 }
 
+/* Row-axis size for auto-repeat: row basis, else max-height, else min-height. */
 static double
 grid_auto_repeat_height(const ns_box *box, double row_basis, double cw)
 {
@@ -11345,6 +11598,7 @@ grid_auto_repeat_height(const ns_box *box, double row_basis, double cw)
     return 0;
 }
 
+/* Fills tracks [from,to) from the grid-auto-* pattern (default auto) and sets the count. */
 static void
 grid_extend_with_auto_tracks(ns_css_tracks *tracks, int from, int to,
                              const ns_css_value *auto_v)
@@ -11361,6 +11615,7 @@ grid_extend_with_auto_tracks(ns_css_tracks *tracks, int from, int to,
     if (to > from) tracks->n = to;
 }
 
+/* Lays out a grid: repeat expansion, auto-placement, track sizing and alignment. */
 static void
 layout_grid(ns_box *box, double cw,
             double inner_x, double inner_y,
@@ -12228,6 +12483,7 @@ box_is_block_level_replaced(const ns_box *c)
     return ns_display_is_block_level(ns_css_display_of(c->style));
 }
 
+/* Collapses two adjoining margins: largest positive plus most negative (CSS2 8.3.1). */
 static double
 collapsed_margin(double a, double b)
 {
@@ -12236,6 +12492,7 @@ collapsed_margin(double a, double b)
     return positive + negative;
 }
 
+/* True for an empty uncleared block without height, vertical padding or border. */
 static gboolean
 empty_block_collapses_through(const ns_box *box, int clear)
 {
@@ -12245,6 +12502,7 @@ empty_block_collapses_through(const ns_box *box, int clear)
            box->border.top <= 0 && box->border.bottom <= 0;
 }
 
+/* Default width of a text-like input: size attr (default 20) times 0.75em; else 0. */
 static double
 text_input_intrinsic_width(const ns_box *box)
 {
@@ -12268,6 +12526,7 @@ text_input_intrinsic_width(const ns_box *box)
     return size * font_size * 0.75;
 }
 
+/* Width for min-content, max-content, fit-content or stretch against avail; -1 otherwise. */
 static double
 intrinsic_keyword_width(ns_box *box, const char *kw, const ns_style *mi,
                         double avail)
@@ -12309,6 +12568,7 @@ height_keyword_stretches(const ns_css_value *v)
             strcmp(v->u.keyword, "-moz-available") == 0);
 }
 
+/* Collapses a child's top margin with the previous bottom, or into the parent's. */
 static double
 block_child_gap(ns_box *parent, double parent_specified_top,
                 gboolean at_top, double child_top, double prev_bottom)
@@ -12319,6 +12579,7 @@ block_child_gap(ns_box *parent, double parent_specified_top,
     return parent->margin.top - parent_specified_top;
 }
 
+/* Legacy center/right block alignment from -webkit-* or center/align ancestors. */
 static const char *
 legacy_block_align(const ns_box *c, const ns_style *inherited)
 {
@@ -12342,6 +12603,7 @@ legacy_block_align(const ns_box *c, const ns_style *inherited)
     return NULL;
 }
 
+/* Shifts a narrower in-flow block child for legacy center/right alignment (align, center). */
 static void
 legacy_align_block_child(ns_box *c, double avail_x, double avail_w,
                          const ns_style *inherited)
@@ -12397,6 +12659,7 @@ box_prepend_child(ns_box *parent, ns_box *child)
     if (!parent->last_child) parent->last_child = child;
 }
 
+/* Inline offset of a rendered legend from auto margins or justify-self, honouring direction. */
 static double
 legend_inline_offset(const ns_box *fieldset, const ns_box *legend,
                      double free_w)
@@ -12425,6 +12688,7 @@ legend_inline_offset(const ns_box *fieldset, const ns_box *legend,
     return at_end ? free_w : 0;
 }
 
+/* Lays out a legend straddling the fieldset's top border; returns the extra content offset. */
 static double
 layout_rendered_legend(ns_box *fieldset, ns_box *legend, double cw,
                        double inner_x, const ns_style *inherited)
@@ -12470,6 +12734,7 @@ layout_rendered_legend(ns_box *fieldset, ns_box *legend, double cw,
     return MAX(extra, 0);
 }
 
+/* Sets children's containing-block height from the fieldset height minus legend and extras. */
 static void
 fieldset_set_content_block_size(ns_box *box, double width_basis,
                                 double sizing_extras, double legend_extra)
@@ -12484,6 +12749,7 @@ fieldset_set_content_block_size(ns_box *box, double width_basis,
         c->cb_height_override = h;
 }
 
+/* Computes the fieldset border inset and the border gap around its legend; FALSE if none. */
 gboolean
 ns_box_fieldset_legend_gap(const ns_box *fieldset, double *border_inset,
                            double *gap_x0, double *gap_x1,
@@ -12510,6 +12776,7 @@ ns_box_fieldset_legend_gap(const ns_box *fieldset, double *border_inset,
     return TRUE;
 }
 
+/* True when a block's height depends on content (no usable height or min-height). */
 static gboolean
 block_height_is_auto(const ns_box *box, double width_basis)
 {
@@ -12525,6 +12792,7 @@ block_height_is_auto(const ns_box *box, double width_basis)
     return TRUE;
 }
 
+/* align-content shift (center/end) of a block container's content; 0 for safe overflow. */
 static double
 block_align_content_shift(const ns_box *box, double free_space)
 {
@@ -12548,6 +12816,7 @@ block_align_content_shift(const ns_box *box, double free_space)
     return 0;
 }
 
+/* Lays out a block: width, flex/grid, floats, margin collapsing, multicol, height. */
 static void
 layout_block(ns_box *box, double parent_content_width, const ns_style *inherited_style)
 {
@@ -13275,6 +13544,7 @@ record_frame_viewports_walk(const ns_box *b)
         record_frame_viewports_walk(c);
 }
 
+/* Rebuilds the iframe/frame -> laid-out content size table from the box tree. */
 static void
 record_frame_viewports(const ns_box *root)
 {
@@ -13286,6 +13556,7 @@ record_frame_viewports(const ns_box *root)
     record_frame_viewports_walk(root);
 }
 
+/* Returns a frame element's content size from the last layout; FALSE if unknown. */
 gboolean
 ns_layout_frame_viewport(const ns_node *frame, double *w, double *h)
 {
@@ -13297,6 +13568,7 @@ ns_layout_frame_viewport(const ns_node *frame, double *w, double *h)
     return TRUE;
 }
 
+/* Approximate character width in px of the style's font, from Pango font metrics. */
 static double
 control_char_cell_px(const ns_style *s)
 {
@@ -13334,6 +13606,7 @@ node_is_windowed_text_input(const ns_node *n)
         g_ascii_strcasecmp(type, "password") == 0;
 }
 
+/* Codepoint length of an input's used value, else of its placeholder. */
 static glong
 text_input_display_cps(const ns_node *n)
 {
@@ -13350,6 +13623,7 @@ control_width_is_definite(const ns_style *s)
                                        NS_CSS_MAX_WIDTH, fs, 0) > 0;
 }
 
+/* Records text inputs whose fitted column count should grow or shrink; TRUE if any. */
 static gboolean
 collect_text_input_columns(const ns_box *b, GHashTable *cols)
 {
@@ -13405,6 +13679,7 @@ input_columns_equal(GHashTable *a, GHashTable *b)
     return TRUE;
 }
 
+/* Builds and lays out the box tree; re-lays out once if text input column fits change. */
 ns_box *
 ns_layout_build(const ns_node *doc, GHashTable *styles, double viewport_width,
                 const ns_node *focused_input, gsize focused_caret_byte,
@@ -13476,6 +13751,7 @@ translate_subtree(ns_box *box, double dx, double dy)
     shift_box_tree(box, dx, dy);
 }
 
+/* Containing-block height for percentage top/bottom of a relative box; -1 if indefinite. */
 static double
 relative_pct_cb_height(const ns_box *box)
 {
@@ -13502,6 +13778,7 @@ relative_pct_cb_height(const ns_box *box)
     return -1;
 }
 
+/* Computes position:relative offsets, left over right and top over bottom; TRUE if non-zero. */
 static gboolean
 relative_offset(const ns_box *box, double parent_w, double parent_h,
                 double *out_dx, double *out_dy)
@@ -13544,6 +13821,7 @@ relative_offset(const ns_box *box, double parent_w, double parent_h,
 static void apply_position_offsets(ns_box *box, double parent_w,
                                    double parent_h);
 
+/* Applies relative offsets to children and inline atomics, recording atomic offsets. */
 static void
 apply_child_position_offsets(ns_box *box)
 {
@@ -13574,6 +13852,7 @@ apply_position_offsets(ns_box *box, double parent_w, double parent_h)
     apply_child_position_offsets(box);
 }
 
+/* Maps each DOM node to its first box in the tree, including inline atomics. */
 static void
 abs_box_map_build(GHashTable *map, ns_box *root)
 {
@@ -13602,6 +13881,7 @@ node_is_ancestor_of(const ns_node *a, const ns_node *n)
 
 static GHashTable *g_node_order;
 
+/* Builds the global node -> preorder rank table for fast document-order comparisons. */
 static void
 node_order_build(const ns_node *root)
 {
@@ -13618,6 +13898,7 @@ node_order_build(const ns_node *root)
     }
 }
 
+/* True if a precedes b in document order, using the rank table when available. */
 static gboolean
 node_precedes(const ns_node *a, const ns_node *b)
 {
@@ -13657,6 +13938,7 @@ box_outer_bottom(const ns_box *b)
            b->margin.bottom;
 }
 
+/* Static-position y of an abspos element: max bottom of preceding in-flow boxes. */
 static void
 static_abs_y_walk(const ns_box *b, const ns_node *target, double *out)
 {
@@ -13679,6 +13961,7 @@ static_abs_y_walk(const ns_box *b, const ns_node *target, double *out)
         static_abs_y_walk(c, target, out);
 }
 
+/* Static-position x from the nearest in-flow ancestor's content edge inside the CB. */
 static double
 static_abs_x_from_ancestors(const ns_box *cb, const ns_node *target,
                             GHashTable *box_map, double fallback,
@@ -13731,6 +14014,7 @@ abs_static_calc_rank_cmp(gconstpointer a, gconstpointer b)
     return 0;
 }
 
+/* Resolves static y for a rank-sorted batch of abspos entries in one preorder walk. */
 static void
 static_abs_y_batch_walk(const ns_box *b, GArray *calcs, guint *next,
                         double *cur_max)
@@ -13777,6 +14061,7 @@ static const ns_node *find_abs_containing_block_dom(const ns_node *n,
 static gboolean style_creates_abs_cb(const ns_style *s);
 static gboolean style_creates_fixed_cb(const ns_style *s);
 
+/* Containing-block element of an abspos entry; a positioned host contains its pseudos. */
 static const ns_node *
 abs_entry_cb_dom(const ns_abs_entry *e, GHashTable *styles)
 {
@@ -13787,6 +14072,7 @@ abs_entry_cb_dom(const ns_abs_entry *e, GHashTable *styles)
     return find_abs_containing_block_dom(e->dom, styles);
 }
 
+/* Containing block of a fixed entry: nearest transformed ancestor, else NULL (viewport). */
 static const ns_node *
 fixed_entry_cb_dom(const ns_abs_entry *e, GHashTable *styles)
 {
@@ -13812,6 +14098,7 @@ abs_entry_style(const ns_abs_entry *e, GHashTable *styles)
     return e->pseudo ? e->pseudo : g_hash_table_lookup(styles, e->dom);
 }
 
+/* Main-axis static offset of an abspos flex child per justify-content and direction. */
 static double
 flex_static_main_offset(const char *justify, double free_space,
                         gboolean row, gboolean main_reverse, gboolean rtl)
@@ -13836,6 +14123,7 @@ flex_static_main_offset(const char *justify, double free_space,
     return flipped ? free_space - main : main;
 }
 
+/* Cross-axis static offset of an abspos flex child per its alignment and wrap/direction. */
 static double
 flex_static_cross_offset(const char *align, double free_space,
                          gboolean row, gboolean wrap_reverse, gboolean rtl,
@@ -13872,6 +14160,7 @@ abs_flex_parent_box(const ns_node *dom, GHashTable *box_map)
     return p ? g_hash_table_lookup(box_map, p) : NULL;
 }
 
+/* Static position of an abspos flex child, placed as if it were the sole flex item. */
 static gboolean
 flex_static_position(ns_box *abox, const ns_box *fc, double *out_x,
                      double *out_y)
@@ -13919,6 +14208,7 @@ flex_static_position(ns_box *abox, const ns_box *fc, double *out_x,
     return TRUE;
 }
 
+/* True when both insets on an axis are auto, so the static position applies. */
 static gboolean
 abs_entry_uses_static_axis(const ns_abs_entry *e, GHashTable *styles,
                            ns_css_prop start, ns_css_prop end)
@@ -13935,6 +14225,7 @@ abs_calc_array_free(gpointer a)
     g_array_free(a, TRUE);
 }
 
+/* Batch-computes static y for abspos entries with auto top/bottom, per containing block. */
 static void
 static_abs_y_precompute(ns_box *root, GHashTable *box_map, GHashTable *styles,
                         double *out_y, gboolean *out_resolved)
@@ -13987,6 +14278,7 @@ static_abs_y_precompute(ns_box *root, GHashTable *box_map, GHashTable *styles,
     g_hash_table_destroy(by_cb);
 }
 
+/* True when position is non-static or a transform makes it an abspos containing block. */
 static gboolean
 style_creates_abs_cb(const ns_style *s)
 {
@@ -14001,6 +14293,7 @@ style_creates_abs_cb(const ns_style *s)
     return style_creates_fixed_cb(s);
 }
 
+/* True when a transform, translate/rotate/scale or perspective sets a fixed-pos CB. */
 static gboolean
 style_creates_fixed_cb(const ns_style *s)
 {
@@ -14018,6 +14311,7 @@ style_creates_fixed_cb(const ns_style *s)
     return FALSE;
 }
 
+/* Nearest ancestor that is an abspos containing block, or NULL for the initial one. */
 static const ns_node *
 find_abs_containing_block_dom(const ns_node *n, GHashTable *styles)
 {
@@ -14029,6 +14323,7 @@ find_abs_containing_block_dom(const ns_node *n, GHashTable *styles)
     return NULL;
 }
 
+/* Resolves a grid line for abspos placement: 0 for auto/span, sentinels when out of range. */
 static int
 grid_abs_line(const char *tok, int explicit_tracks)
 {
@@ -14054,6 +14349,7 @@ grid_abs_line(const char *tok, int explicit_tracks)
     return named;
 }
 
+/* Resolves an abspos grid child's start/end lines on one axis; 0 means the padding edge. */
 static void
 grid_abs_axis_lines(const ns_style *st, gboolean row_axis, int explicit_tracks,
                     int *out_start, int *out_end)
@@ -14111,6 +14407,7 @@ grid_abs_axis_lines(const ns_style *st, gboolean row_axis, int explicit_tracks,
     g_free(end_tok);
 }
 
+/* Computes an abspos grid child's containing block from its lines and track edges. */
 static gboolean
 grid_abs_containing_block(const ns_box *cb, const ns_style *st,
                           double *x, double *y, double *w, double *h)
@@ -14180,6 +14477,7 @@ static void
 position_absolute_box_in(ns_box *abox, double cb_inner_x, double cb_inner_y,
                          double cb_w, double cb_h);
 
+/* Appends the bracketed line names for one grid line to the serialization. */
 static void
 grid_append_line_names(GString *s, const ns_css_tracks *tk, int line)
 {
@@ -14194,6 +14492,7 @@ grid_append_line_names(GString *s, const ns_css_tracks *tk, int line)
     if (open) g_string_append_c(s, ']');
 }
 
+/* Serializes used grid track sizes with line names; NULL for subgrids. Caller frees. */
 char *
 ns_layout_grid_resolved_tracks(const ns_box *box, gboolean columns)
 {
@@ -14249,6 +14548,7 @@ ns_layout_grid_resolved_tracks(const ns_box *box, gboolean columns)
     return g_string_free(s, FALSE);
 }
 
+/* Offset within free space for an alignment keyword; flip swaps start and end. */
 static double
 grid_static_align_offset(const char *align, double free_space, gboolean flip)
 {
@@ -14265,6 +14565,7 @@ grid_static_align_offset(const char *align, double free_space, gboolean flip)
     return flip ? free_space : 0;
 }
 
+/* Places an abspos grid child at its static position per justify-self/align-self. */
 static void
 grid_static_position(ns_box *abox, const ns_box *cb,
                      double area_x, double area_y, double area_w, double area_h,
@@ -14292,6 +14593,7 @@ grid_static_position(ns_box *abox, const ns_box *cb,
     }
 }
 
+/* Positions an abspos box against its CB's padding box, or the viewport for the ICB. */
 static void
 position_absolute_box(ns_box *abox, ns_box *cb, gboolean cb_is_icb)
 {
@@ -14305,6 +14607,7 @@ position_absolute_box(ns_box *abox, ns_box *cb, gboolean cb_is_icb)
     position_absolute_box_in(abox, cb_inner_x, cb_inner_y, cb_w, cb_h);
 }
 
+/* Positions an abspos box from insets and auto margins; auto insets keep static position. */
 static void
 position_absolute_box_in(ns_box *abox, double cb_inner_x, double cb_inner_y,
                          double cb_w, double cb_h)
@@ -14404,6 +14707,7 @@ box_has_transform_style(const ns_box *b)
            s->values[NS_CSS_SCALE] || s->values[NS_CSS_PERSPECTIVE];
 }
 
+/* True when the box's border box covers the whole viewport. */
 static gboolean
 box_covers_viewport(const ns_box *b)
 {
@@ -14418,6 +14722,7 @@ box_covers_viewport(const ns_box *b)
            y + h >= ns_css_viewport_h() - 0.5;
 }
 
+/* True if no ancestor transforms or clips (unless viewport-sized) to host a fixed box. */
 static gboolean
 box_can_host_fixed(const ns_box *anc)
 {
@@ -14428,6 +14733,7 @@ box_can_host_fixed(const ns_box *anc)
     return TRUE;
 }
 
+/* True when a 4x4 matrix has no perspective terms, so it maps the xy plane affinely. */
 static gboolean
 mat4_maps_xy_plane_affinely(const ns_mat4 *m)
 {
@@ -14436,6 +14742,7 @@ mat4_maps_xy_plane_affinely(const ns_mat4 *m)
            fabs(m->m[15] - 1.0) < epsilon;
 }
 
+/* Maps a hit point through the inverse of the box's 2D transform; FALSE if singular. */
 static gboolean
 box_hit_untransform_point(const ns_box *b, double *x, double *y)
 {
@@ -14477,6 +14784,7 @@ box_hit_untransform_point(const ns_box *b, double *x, double *y)
     return TRUE;
 }
 
+/* Resolves an abspos min/max-height, including intrinsic and stretch keywords; -1 if none. */
 static double
 abs_height_limit(const ns_box *abox, const ns_css_value *v, double width_basis,
                  double cb_h, double inset_h, double sizing_extras)
@@ -14490,6 +14798,7 @@ abs_height_limit(const ns_box *abox, const ns_css_value *v, double width_basis,
     return limit;
 }
 
+/* Clamps an abspos box's content height by its min/max-height, border-box aware. */
 static double
 abs_height_within_limits(const ns_box *abox, double h, double width_basis,
                          double cb_h, double inset_h)
@@ -14510,6 +14819,7 @@ abs_height_within_limits(const ns_box *abox, double h, double width_basis,
     return h;
 }
 
+/* Builds, sizes and positions all pending abspos/fixed boxes after flow layout. */
 static void
 process_absolute_boxes(ns_box *root, GHashTable *styles, double viewport_width)
 {
@@ -14801,6 +15111,7 @@ process_absolute_boxes(ns_box *root, GHashTable *styles, double viewport_width)
     g_clear_pointer(&g_node_order, g_hash_table_destroy);
 }
 
+/* True when transform, animation, transition or fixed/sticky make paint bounds unbounded. */
 static gboolean
 box_paint_unbounded(const ns_box *b)
 {
@@ -14819,6 +15130,7 @@ box_paint_unbounded(const ns_box *b)
     return FALSE;
 }
 
+/* Computes each box's vertical paint extent over its descendants and inline atomics. */
 static void
 compute_paint_bounds(ns_box *b)
 {
@@ -14864,6 +15176,7 @@ restyle_inset_set(const ns_css_value *v)
            (v->kind == NS_CSS_V_LENGTH || v->kind == NS_CSS_V_CALC);
 }
 
+/* Shift from an inset change on one axis when only one definite side changed; else FALSE. */
 static gboolean
 restyle_inset_shift(const ns_style *os, const ns_style *ns, ns_css_prop start,
                     ns_css_prop end, double basis, double *delta)
@@ -14887,6 +15200,7 @@ restyle_inset_shift(const ns_style *os, const ns_style *ns, ns_css_prop start,
     return FALSE;
 }
 
+/* Translation of a restyled box caused by inset changes alone; FALSE if relayout is needed. */
 static gboolean
 restyle_move(const ns_box *b, const ns_style *os, const ns_style *ns,
              double *dx, double *dy)
@@ -14908,6 +15222,7 @@ layout_num_differs(double a, double b)
     return fabs(a - b) > 0.01;
 }
 
+/* Appends a /tag.class path from the root down to b, for diff reports. */
 static void
 layout_diff_path(GString *out, const ns_box *b)
 {
@@ -14924,6 +15239,7 @@ layout_diff_path(GString *out, const ns_box *b)
     g_ptr_array_free(chain, TRUE);
 }
 
+/* Compares two box trees field by field, describing the first difference in out. */
 static gboolean
 layout_diff_walk(const ns_box *a, const ns_box *b, GString *out, int depth)
 {
@@ -14978,6 +15294,7 @@ layout_diff_walk(const ns_box *a, const ns_box *b, GString *out, int depth)
     return TRUE;
 }
 
+/* Describes the first difference between two layouts, or NULL when equal; caller frees. */
 char *
 ns_layout_diff(const ns_box *a, const ns_box *b)
 {
@@ -14997,6 +15314,7 @@ struct ns_layout_restyle_plan {
     GPtrArray   *changed;
 };
 
+/* Collects boxes to patch for a style swap; FALSE when a change needs full relayout. */
 static gboolean
 restyle_scan(ns_box *b, ns_layout_restyle_plan *plan, int depth)
 {
@@ -15037,6 +15355,7 @@ restyle_scan(ns_box *b, ns_layout_restyle_plan *plan, int depth)
     return TRUE;
 }
 
+/* Plans an in-place restyle from an old->new style map; NULL when relayout is required. */
 ns_layout_restyle_plan *
 ns_layout_restyle_plan_new(ns_box *root, GHashTable *styles,
                            GHashTable *old_to_new, GHashTable *moved)
@@ -15071,6 +15390,7 @@ ns_layout_restyle_plan_free(ns_layout_restyle_plan *plan)
     g_free(plan);
 }
 
+/* Applies a restyle plan: swaps styles, shifts moved boxes, recomputes paint bounds. */
 void
 ns_layout_restyle_apply(ns_layout_restyle_plan *plan)
 {
@@ -15107,6 +15427,7 @@ ns_layout_restyle_apply(ns_layout_restyle_plan *plan)
     if (bounds) compute_paint_bounds(plan->root);
 }
 
+/* One layout pass: build boxes, flow, relative offsets, abspos, paint bounds; profiled. */
 static ns_box *
 ns_layout_build_(const ns_node *doc, GHashTable *styles, double viewport_width)
 {
@@ -15185,6 +15506,7 @@ ns_box_kind_name(ns_box_kind k)
     return "?";
 }
 
+/* Collects image boxes and boxes with background, marker or border images. */
 static void
 collect_images_walk(const ns_box *b, GPtrArray *out)
 {
@@ -15226,6 +15548,7 @@ ns_layout_collect_images(const ns_box *root, GPtrArray *out_boxes)
     collect_images_walk(root, out_boxes);
 }
 
+/* Counts non-overlapping needle matches, ASCII case-insensitive unless case_sensitive. */
 static guint
 count_matches_in_text(const char *text, const char *needle,
                       gboolean case_sensitive)
@@ -15248,6 +15571,7 @@ count_matches_in_text(const char *text, const char *needle,
     return hits;
 }
 
+/* Counts find-in-page matches across all inline boxes in the tree. */
 guint
 ns_box_count_matches(const ns_box *root, const char *needle,
                      gboolean case_sensitive)
@@ -15261,6 +15585,7 @@ ns_box_count_matches(const ns_box *root, const char *needle,
     return sum;
 }
 
+/* First inline box in tree order below y_threshold that contains a match. */
 const ns_box *
 ns_box_first_match_below(const ns_box *root, const char *needle,
                          double y_threshold, gboolean case_sensitive)
@@ -15278,6 +15603,7 @@ ns_box_first_match_below(const ns_box *root, const char *needle,
     return NULL;
 }
 
+/* Lowest inline box above y_threshold that contains a match. */
 const ns_box *
 ns_box_first_match_above(const ns_box *root, const char *needle,
                          double y_threshold, gboolean case_sensitive)
@@ -15317,6 +15643,7 @@ match_ordinal_walk(const ns_box *root, const char *needle,
     return FALSE;
 }
 
+/* 1-based ordinal of target's first match among all matches in tree order; 0 if none. */
 guint
 ns_box_match_ordinal(const ns_box *root, const char *needle,
                      const ns_box *target, gboolean case_sensitive)
@@ -15334,6 +15661,7 @@ ns_box_hit_form_dom(const ns_box *root, double x, double y)
     return ns_form_hit_walk(root, x, y, NULL);
 }
 
+/* Innermost scrollable box under the point, honouring clipping and scroll offsets. */
 ns_box *
 ns_box_hit_scrollable(ns_box *root, double x, double y)
 {
@@ -15386,6 +15714,7 @@ snap_length(const ns_style *s, ns_css_prop p, double basis)
     return isfinite(px) ? px : 0;
 }
 
+/* True if candidate is a better snap: prefer ahead of the scroll direction, then nearest. */
 static gboolean
 snap_better(const snap_axis *axis, double candidate, double current)
 {
@@ -15401,6 +15730,7 @@ snap_better(const snap_axis *axis, double candidate, double current)
     return fabs(candidate - current) < fabs(axis->best - current);
 }
 
+/* Clamps a snap candidate to [0,max] and keeps it if it beats the current best. */
 static void
 snap_consider(snap_axis *axis, double candidate, double current, double max)
 {
@@ -15412,6 +15742,7 @@ snap_consider(snap_axis *axis, double candidate, double current, double max)
     }
 }
 
+/* Gathers snap positions from scroll-snap-align descendants, skipping nested scrollers. */
 static void
 snap_collect(ns_box *b, const snap_port *port, snap_axis *ax, snap_axis *ay,
              gboolean want_x, gboolean want_y)
@@ -15458,6 +15789,7 @@ snap_collect(ns_box *b, const snap_port *port, snap_axis *ax, snap_axis *ay,
     }
 }
 
+/* Picks snap targets per scroll-snap-type; proximity snaps only within half the port. */
 static gboolean
 snap_solve(ns_box *root, const char *type, const snap_port *port,
            double *out_x, double *out_y)
@@ -15490,6 +15822,7 @@ snap_solve(ns_box *root, const char *type, const snap_port *port,
     return snapped;
 }
 
+/* Snaps a scroller's offset per scroll-snap-type, honouring scroll-padding and direction. */
 void
 ns_box_scroll_snap_from(ns_box *scroller, double prev_x, double prev_y)
 {
@@ -15525,6 +15858,7 @@ ns_box_scroll_snap_from(ns_box *scroller, double prev_x, double prev_y)
     }
 }
 
+/* Computes snapped viewport scroll offsets into x and y; TRUE if a snap applied. */
 gboolean
 ns_box_scroll_snap_viewport(ns_box *root, const ns_style *s,
                             double viewport_w, double viewport_h,
@@ -15559,6 +15893,7 @@ ns_box_scroll_snap(ns_box *scroller)
                                 scroller->scroll_y);
 }
 
+/* Innermost scrollable box under the point; also returns the point in its local space. */
 ns_box *
 ns_box_hit_scrollbar(ns_box *root, double x, double y, double *lx, double *ly)
 {
@@ -15614,6 +15949,7 @@ ns_box_set_hit_viewport(double scroll_x, double scroll_y)
     g_hit_vp_y = isfinite(scroll_y) ? scroll_y : 0;
 }
 
+/* True for position:fixed boxes with no ancestor establishing a fixed containing block. */
 gboolean
 ns_box_is_fixed(const ns_box *b)
 {
@@ -15625,6 +15961,7 @@ ns_box_is_fixed(const ns_box *b)
     return TRUE;
 }
 
+/* Resolves a sticky inset; *set is FALSE when auto, not a length, or non-finite. */
 static void
 sticky_inset(const ns_css_value *v, double basis, gboolean *set, double *out)
 {
@@ -15636,6 +15973,7 @@ sticky_inset(const ns_css_value *v, double basis, gboolean *set, double *out)
     *set = isfinite(*out);
 }
 
+/* Sticky-position shift within a scrollport, limited by the parent's content box. */
 static void
 ns_box_sticky_offset_in(const ns_box *b, double sp_x0, double sp_y0,
                         double sp_x1, double sp_y1,
@@ -15714,6 +16052,7 @@ ns_box_sticky_offset_in(const ns_box *b, double sp_x0, double sp_y0,
     if (!isfinite(*out_dy)) *out_dy = 0;
 }
 
+/* Nearest scrolling ancestor's scrolled scrollport rectangle; FALSE if none. */
 static gboolean
 box_scrollport_for(const ns_box *b, double *x0, double *y0,
                    double *x1, double *y1)
@@ -15729,6 +16068,7 @@ box_scrollport_for(const ns_box *b, double *x0, double *y0,
     return FALSE;
 }
 
+/* Sticky offset against the nearest scroll container, else the given viewport rect. */
 void
 ns_box_sticky_offset(const ns_box *b, double vp_x0, double vp_y0,
                      double vp_x1, double vp_y1, double *dx, double *dy)
@@ -15738,6 +16078,7 @@ ns_box_sticky_offset(const ns_box *b, double vp_x0, double vp_y0,
     ns_box_sticky_offset_in(b, x0, y0, x1, y1, dx, dy);
 }
 
+/* Hit-test offset: viewport scroll for fixed boxes, sticky shift for sticky ones. */
 void
 ns_box_hit_offset(const ns_box *b, double *dx, double *dy)
 {
@@ -15767,6 +16108,7 @@ hit_enter_box(const ns_box *b, double *x, double *y)
     *y -= dy;
 }
 
+/* Maps a point into a box's painted space; FALSE if outside its paint bounds. */
 static gboolean
 hit_enter_painted(const ns_box *b, double *x, double *y)
 {
@@ -15776,6 +16118,7 @@ hit_enter_painted(const ns_box *b, double *x, double *y)
              (*y < b->paint_top - 1.0 || *y > b->paint_bottom + 1.0));
 }
 
+/* True for positioned boxes with z-index >= 0, hit-tested after in-flow content. */
 static gboolean
 box_defers_hit_layer(const ns_box *b, int *out_z)
 {
@@ -15800,6 +16143,7 @@ box_has_hit_transform(const ns_box *b)
                  s->values[NS_CSS_ROTATE] || s->values[NS_CSS_SCALE]);
 }
 
+/* True for an SVG box painting no background or border, so hits pass through it. */
 static gboolean
 box_svg_yields_hit(const ns_box *b)
 {
@@ -15819,6 +16163,7 @@ box_svg_yields_hit(const ns_box *b)
            b->border.bottom <= 0 && b->border.left <= 0;
 }
 
+/* True when a box forms a stacking context for hit testing. */
 static gboolean
 box_hit_layer_is_stacking_context(const ns_box *b)
 {
@@ -15833,6 +16178,7 @@ box_hit_layer_is_stacking_context(const ns_box *b)
     return box_has_hit_transform(b) || box_clips_children(b);
 }
 
+/* Orders deferred hit layers by z-index, then by tree order. */
 static int
 hit_deferred_cmp(const void *a, const void *b)
 {
@@ -15843,6 +16189,7 @@ hit_deferred_cmp(const void *a, const void *b)
 
 static const ns_box *box_hit_test_tree(const ns_box *root, double x, double y);
 
+/* Hit-tests deferred positioned layers and returns the topmost hit in z order. */
 static const ns_box *
 hit_flush_deferred(GArray *list)
 {
@@ -15866,6 +16213,7 @@ hit_flush_deferred(GArray *list)
     return NULL;
 }
 
+/* Hit-tests a subtree in paint order, deferring positioned layers to their stacking scope. */
 static const ns_box *
 box_hit_test_tree(const ns_box *root, double x, double y)
 {
@@ -15951,6 +16299,7 @@ self_test: ;
     return NULL;
 }
 
+/* Runs box_hit_test_tree from root with fresh deferral state, restoring it after. */
 static const ns_box *
 box_hit_test_root(const ns_box *root, double x, double y)
 {
@@ -15967,6 +16316,7 @@ box_hit_test_root(const ns_box *root, double x, double y)
     return m;
 }
 
+/* Depth-first search for the first box whose DOM node is node. */
 static const ns_box *
 box_for_dom_node(const ns_box *root, const ns_node *node)
 {
@@ -15979,6 +16329,7 @@ box_for_dom_node(const ns_box *root, const ns_node *node)
     return NULL;
 }
 
+/* Limits hit testing to an active modal dialog's box unless the hit already lands in it. */
 static const ns_box *
 hit_root_for_point(const ns_box *root, double x, double y)
 {
@@ -16025,6 +16376,7 @@ box_hit_stack_add(GArray *hits, const ns_box *box)
     g_array_append_val(hits, entry);
 }
 
+/* Collects every box under the point that would self-hit, with stacking keys. */
 static void
 box_hit_stack_walk(const ns_box *root, double x, double y, GArray *hits)
 {
@@ -16067,6 +16419,7 @@ box_hit_stack_walk(const ns_box *root, double x, double y, GArray *hits)
         }
 }
 
+/* Appends the DOM nodes under the point to hits, topmost first. */
 static void
 box_hit_stack_collect(const ns_box *root, double x, double y, GPtrArray *hits)
 {
@@ -16081,6 +16434,7 @@ box_hit_stack_collect(const ns_box *root, double x, double y, GPtrArray *hits)
     g_array_free(entries, TRUE);
 }
 
+/* All DOM nodes under the point, topmost first (elementsFromPoint); caller frees. */
 GPtrArray *
 ns_box_hit_dom_stack(const ns_box *root, double x, double y)
 {
@@ -16091,6 +16445,7 @@ ns_box_hit_dom_stack(const ns_box *root, double x, double y)
     return hits;
 }
 
+/* Finds the link range under the point by mapping it to a text byte in inline boxes. */
 static const ns_link_range *
 ns_box_hit_link_range(const ns_box *root, double x, double y)
 {
@@ -16150,6 +16505,7 @@ ns_box_hit_link_range(const ns_box *root, double x, double y)
     return best;
 }
 
+/* Href under the point, preferring the link element's live href attribute. */
 const char *
 ns_box_hit_link(const ns_box *root, double x, double y)
 {
@@ -16159,6 +16515,7 @@ ns_box_hit_link(const ns_box *root, double x, double y)
     return live && *live ? live : r->href;
 }
 
+/* Innermost inline element under the point, found via its text byte range. */
 static const ns_node *
 ns_box_hit_inline_dom(const ns_box *root, double x, double y)
 {
@@ -16227,6 +16584,7 @@ ns_box_hit_inline_dom(const ns_box *root, double x, double y)
     return best;
 }
 
+/* True when candidate is current or one of its descendants. */
 static gboolean
 hit_node_refines(const ns_node *candidate, const ns_node *current)
 {
@@ -16236,6 +16594,7 @@ hit_node_refines(const ns_node *candidate, const ns_node *current)
     return FALSE;
 }
 
+/* Finds a map element by id or name, not descending into shadow roots. */
 static const ns_node *
 image_map_find(const ns_node *n, const char *name, int depth)
 {
@@ -16255,6 +16614,7 @@ image_map_find(const ns_node *n, const char *name, int depth)
     return NULL;
 }
 
+/* Resolves an img's usemap "#name" to its map element within the same tree scope. */
 static const ns_node *
 image_map_for(const ns_node *img)
 {
@@ -16274,6 +16634,7 @@ image_map_is_delimiter(char c)
            c == '\f' || c == '\r';
 }
 
+/* Parses the leading number of an area coords token; 0 if invalid. */
 static double
 image_map_number(const char *s, const char *end)
 {
@@ -16304,6 +16665,7 @@ image_map_number(const char *s, const char *end)
     return isfinite(v) ? sign * v : 0;
 }
 
+/* Parses an area coords attribute into an array of numbers; caller frees. */
 static GArray *
 image_map_coords(const char *coords)
 {
@@ -16323,6 +16685,7 @@ image_map_coords(const char *coords)
     return out;
 }
 
+/* Even-odd point-in-polygon test; points on an edge count as inside. */
 static gboolean
 image_map_polygon_contains(const double *c, guint n, double x, double y)
 {
@@ -16342,6 +16705,7 @@ image_map_polygon_contains(const double *c, guint n, double x, double y)
     return inside;
 }
 
+/* Tests a point against an area's shape: circle, default, poly or rect. */
 static gboolean
 image_map_area_contains(const ns_node *area, double x, double y,
                         double width, double height)
@@ -16370,6 +16734,7 @@ image_map_area_contains(const ns_node *area, double x, double y,
     return hit;
 }
 
+/* Returns the first area descendant of the map that contains the point. */
 static const ns_node *
 image_map_area_in(const ns_node *n, double x, double y, double width,
                   double height, int depth)
@@ -16386,6 +16751,7 @@ image_map_area_in(const ns_node *n, double x, double y, double width,
     return NULL;
 }
 
+/* Returns the image map area under a local point on an img box, or NULL. */
 static const ns_node *
 image_map_hit(const ns_box *b, double local_x, double local_y)
 {
@@ -16399,6 +16765,7 @@ image_map_hit(const ns_box *b, double local_x, double local_y)
                              0);
 }
 
+/* Deepest DOM node under the point, refined by inline elements, controls and image maps. */
 const ns_node *
 ns_box_hit_dom(const ns_box *root, double x, double y)
 {
@@ -16421,6 +16788,7 @@ ns_box_hit_dom(const ns_box *root, double x, double y)
     return target;
 }
 
+/* Unions extents of target's inline ranges, adjusting for scroll and atomics. */
 static void
 box_inline_union_for_dom(const ns_box *root, const ns_node *target,
                          double dx, double dy,
@@ -16470,6 +16838,7 @@ box_inline_union_for_dom(const ns_box *root, const ns_node *target,
         }
 }
 
+/* Bounding rect of an inline element's text fragments; FALSE if none. */
 gboolean
 ns_box_inline_rect_for_dom(const ns_box *root, const ns_node *target,
                            double *x, double *y, double *w, double *h)

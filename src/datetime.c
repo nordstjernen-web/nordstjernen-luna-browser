@@ -1,10 +1,12 @@
-/* Nordstjernen Web Browser — civil-date math and HTML date/time string parsing.
+/* Nordstjernen Web Browser — proleptic Gregorian date math and HTML date/time string parsing.
+ * Hinnant's days-from-civil algorithms, ISO 8601 week numbering, YYYY-MM-DD and HH:MM[:SS.fff].
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "datetime.h"
 
+/* Modulo whose result has the sign of the divisor. */
 long
 ns_dt_floormod(long a, long b)
 {
@@ -13,6 +15,7 @@ ns_dt_floormod(long a, long b)
     return r;
 }
 
+/* Returns days since 1970-01-01 for a proleptic Gregorian date (Hinnant's algorithm). */
 long
 ns_dt_days_from_civil(int y, int m, int d)
 {
@@ -24,6 +27,7 @@ ns_dt_days_from_civil(int y, int m, int d)
     return era * 146097L + (long)doe - 719468L;
 }
 
+/* Converts days since 1970-01-01 to a proleptic Gregorian date (Hinnant's algorithm). */
 void
 ns_dt_civil_from_days(long z, int *y, int *m, int *d)
 {
@@ -41,6 +45,7 @@ ns_dt_civil_from_days(long z, int *y, int *m, int *d)
     *d = (int)dd;
 }
 
+/* Returns the month's length with Gregorian leap years; 0 for an invalid month. */
 int
 ns_dt_days_in_month(int y, int m)
 {
@@ -53,6 +58,7 @@ ns_dt_days_in_month(int y, int m)
     return dim[m - 1];
 }
 
+/* Returns 52 or 53, the number of ISO 8601 weeks in year y. */
 int
 ns_dt_iso_weeks_in_year(int y)
 {
@@ -62,6 +68,7 @@ ns_dt_iso_weeks_in_year(int y)
     return (p == 4 || p1 == 3) ? 53 : 52;
 }
 
+/* Returns the day number of the Monday starting ISO week 1 of year y. */
 long
 ns_dt_iso_week1_monday(int y)
 {
@@ -70,6 +77,7 @@ ns_dt_iso_week1_monday(int y)
     return jan4 - m0;
 }
 
+/* Reads min..max decimal digits into out; returns the next char or NULL if too few. */
 const char *
 ns_dt_rd_digits(const char *p, int min, int max, int *out)
 {
@@ -84,6 +92,7 @@ ns_dt_rd_digits(const char *p, int min, int max, int *out)
     return p;
 }
 
+/* Parses and validates YYYY-MM-DD (4+ digit year) per HTML date strings. */
 const char *
 ns_dt_rd_date(const char *p, int *y, int *m, int *d)
 {
@@ -96,6 +105,7 @@ ns_dt_rd_date(const char *p, int *y, int *m, int *d)
     return p;
 }
 
+/* Parses HH:MM[:SS[.fff]] per HTML time strings into milliseconds past midnight. */
 const char *
 ns_dt_rd_time(const char *p, int *ms)
 {

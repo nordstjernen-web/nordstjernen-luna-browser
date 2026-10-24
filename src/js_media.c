@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — HTMLMediaElement: the load, play and pause state machine over the audio mixer and decoded video.
+/* Nordstjernen Web Browser — HTMLMediaElement: load, play and pause state machine for audio/video.
+ * Drives the audio mixer and decoded or MSE video, A/V sync, media events and play promises.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -121,6 +122,7 @@ media_promise_pair_free(gpointer data)
     g_free(pair);
 }
 
+/* Returns the element's media player state, creating it with HTML defaults on first use. */
 static ns_media_player *
 media_player_for(ns_js *js, ns_node *el)
 {
@@ -148,6 +150,7 @@ media_player_for(ns_js *js, ns_node *el)
 
 static void media_consider_element(ns_js *js, ns_node *el);
 
+/* Player for a JS this value, first running autoplay/load consideration if connected. */
 static ns_media_player *
 media_player_this(JSContext *ctx, JSValueConst this_val)
 {
@@ -159,6 +162,7 @@ media_player_this(JSContext *ctx, JSValueConst this_val)
     return media_player_for(js, el);
 }
 
+/* Lazily creates the realm's audio mixer context. */
 static NsAudioContext *
 media_audio_context(ns_js *js)
 {
@@ -168,6 +172,7 @@ media_audio_context(ns_js *js)
     return js->audio_context;
 }
 
+/* Effective muted state: script-set value if any, else the muted content attribute. */
 static gboolean
 media_muted(const ns_media_player *p)
 {
@@ -187,6 +192,7 @@ media_output_volume(const ns_media_player *p)
     return media_muted(p) ? 0.0 : p->volume;
 }
 
+/* Holds or drops a JS wrapper reference so a playing element is not collected. */
 static void
 media_pin(ns_media_player *p, gboolean pinned)
 {
@@ -202,6 +208,7 @@ media_pin(ns_media_player *p, gboolean pinned)
 
 static gboolean media_tasks_flush(gpointer data);
 
+/* Queues a media element task (event name) on the realm's media task list. */
 static void
 media_queue_task(ns_media_player *p, const char *type)
 {
@@ -215,6 +222,7 @@ media_queue_task(ns_media_player *p, const char *type)
         js->media_task_source = ns_engine_idle_add(media_tasks_flush, js);
 }
 
+/* Creates an Error object with DOMException prototype, name and message. */
 static JSValue
 media_dom_error(JSContext *ctx, const char *name, const char *message)
 {
@@ -235,6 +243,7 @@ media_dom_error(JSContext *ctx, const char *name, const char *message)
     return err;
 }
 
+/* Frees resolve/reject function pairs held for pending play() promises. */
 static void
 media_free_promises(JSContext *ctx, GPtrArray *promises)
 {
@@ -247,6 +256,7 @@ media_free_promises(JSContext *ctx, GPtrArray *promises)
     g_ptr_array_free(promises, TRUE);
 }
 
+/* Resolves, or rejects with a DOMException, a list of pending play() promises. */
 static void
 media_settle_promises(JSContext *ctx, GPtrArray *promises,
                       const char *error_name, const char *message)
@@ -273,6 +283,7 @@ media_task_free(ns_js *js, ns_media_task *task)
     g_free(task);
 }
 
+/* Runs one media task: settles promises, pauses a detached element, or fires an event. */
 static void
 media_task_run(ns_js *js, ns_media_task *task)
 {
@@ -292,6 +303,7 @@ media_task_run(ns_js *js, ns_media_task *task)
     ns_js_dispatch_event(js, task->el, task->type, NULL);
 }
 
+/* Idle callback running all queued media tasks, then microtasks; defers while pumping. */
 static gboolean
 media_tasks_flush(gpointer data)
 {
@@ -316,6 +328,7 @@ media_tasks_flush(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Moves pending play() promises into a task that will resolve or reject them. */
 static void
 media_queue_settle(ns_media_player *p, const char *error_name,
                    const char *message)
@@ -336,6 +349,7 @@ media_reject_play(ns_media_player *p, const char *name, const char *message)
     media_queue_settle(p, name, message);
 }
 
+/* Queues the playing event and resolves pending play() promises. */
 static void
 media_notify_playing(ns_media_player *p)
 {
@@ -343,6 +357,7 @@ media_notify_playing(ns_media_player *p)
     media_queue_settle(p, NULL, NULL);
 }
 
+/* Selects and resolves the media source URL, applying fetch policy; caller frees. */
 static char *
 ns_media_resolve_src(JSContext *ctx, ns_node *node)
 {
@@ -366,6 +381,7 @@ ns_media_resolve_src(JSContext *ctx, ns_node *node)
     return abs;
 }
 
+/* The video's decoded animation image from the image cache, if loaded. */
 static ns_image *
 media_video_frames(ns_media_player *p)
 {
@@ -375,6 +391,7 @@ media_video_frames(ns_media_player *p)
     return ns_image_is_animation(img) ? img : NULL;
 }
 
+/* True if the video source failed or loaded as a non-animated image. */
 static gboolean
 media_video_failed(ns_media_player *p)
 {
@@ -385,6 +402,7 @@ media_video_failed(ns_media_player *p)
                    (img->loaded && !ns_image_is_animation(img)));
 }
 
+/* Tears down audio, video, MSE, progressive and decoder state for a player. */
 static void
 media_close_backend(ns_media_player *p)
 {
@@ -403,6 +421,7 @@ media_close_backend(ns_media_player *p)
     p->mse_waiting = FALSE;
 }
 
+/* Attaches an MSE source and registers a video stream for it in the image cache. */
 static void
 media_mse_attach(ns_media_player *p, ns_mse_source *source)
 {
@@ -414,6 +433,7 @@ media_mse_attach(ns_media_player *p, ns_mse_source *source)
                                      ns_video_stream_new_mse(source));
 }
 
+/* Starts progressive (MSE-backed) video download unless a non-MSE stream exists. */
 static gboolean
 media_start_progressive(ns_media_player *p)
 {
@@ -428,6 +448,7 @@ media_start_progressive(ns_media_player *p)
     return TRUE;
 }
 
+/* Enters NETWORK_NO_SOURCE with an error, fires error and rejects play promises. */
 static void
 media_fail_source(ns_media_player *p, int code, const char *message)
 {
@@ -442,6 +463,7 @@ media_fail_source(ns_media_player *p, int code, const char *message)
                       "Failed to load because no supported source was found.");
 }
 
+/* Opens an audio-only source (URL or blob) in the mixer with volume and loop set. */
 static void
 media_start_fetch(ns_media_player *p)
 {
@@ -468,6 +490,7 @@ media_start_fetch(ns_media_player *p)
     media_poll_ensure(js);
 }
 
+/* True if config disables autoplay and there is no transient user activation. */
 static gboolean
 media_autoplay_blocked(const ns_media_player *p)
 {
@@ -476,6 +499,7 @@ media_autoplay_blocked(const ns_media_player *p)
            !ns_js_has_transient_activation(p->js);
 }
 
+/* Autoplay policy: muted, video-only, or after user activation, unless blocked. */
 static gboolean
 media_autoplay_allowed(const ns_media_player *p)
 {
@@ -484,6 +508,7 @@ media_autoplay_allowed(const ns_media_player *p)
            p->js->user_ever_activated;
 }
 
+/* Opens the video's embedded audio track in the mixer, if it has one. */
 static void
 media_open_video_audio(ns_media_player *p, ns_image *frames)
 {
@@ -498,6 +523,7 @@ media_open_video_audio(ns_media_player *p, ns_image *frames)
     p->fetching = TRUE;
 }
 
+/* Closes the video's audio stream in the mixer. */
 static void
 media_close_video_audio(ns_media_player *p)
 {
@@ -507,6 +533,7 @@ media_close_video_audio(ns_media_player *p)
     p->fetching = FALSE;
 }
 
+/* True when the video's audio stream is ready; closes it if it failed. */
 static gboolean
 media_video_audio_ready(ns_media_player *p, NsAudioStatus *status)
 {
@@ -520,6 +547,7 @@ media_video_audio_ready(ns_media_player *p, NsAudioStatus *status)
     return status->state == NS_AUDIO_PLAYER_READY;
 }
 
+/* Media element load algorithm: aborts play, resets state and selects a source. */
 static void
 media_load(ns_media_player *p)
 {
@@ -580,12 +608,14 @@ media_load(ns_media_player *p)
     }
 }
 
+/* True once the document has finished loading (playback is held until then). */
 static gboolean
 media_page_loaded(const ns_media_player *p)
 {
     return p->js->ready_state >= 2;
 }
 
+/* Starts audio/video output, syncing audio to the video position. */
 static void
 media_backend_play(ns_media_player *p)
 {
@@ -618,6 +648,7 @@ media_backend_play(ns_media_player *p)
         ns_audio_context_play(p->js->audio_context, p->token);
 }
 
+/* Pauses video frames and the audio stream. */
 static void
 media_backend_pause(ns_media_player *p)
 {
@@ -633,6 +664,7 @@ media_backend_pause(ns_media_player *p)
         ns_audio_context_pause(p->js->audio_context, p->token);
 }
 
+/* Seeks video frames and audio (restarting MSE audio feed) to t seconds. */
 static void
 media_backend_seek(ns_media_player *p, double t)
 {
@@ -655,6 +687,7 @@ media_backend_seek(ns_media_player *p, double t)
         ns_audio_context_seek(p->js->audio_context, p->token, t);
 }
 
+/* Current playback position from the video clock or audio status. */
 static double
 media_current_time(ns_media_player *p)
 {
@@ -672,6 +705,7 @@ media_current_time(ns_media_player *p)
     return p->position;
 }
 
+/* Internal play steps: restart if ended, fire play/waiting/playing and start output. */
 static void
 media_internal_play(ns_media_player *p)
 {
@@ -698,6 +732,7 @@ media_internal_play(ns_media_player *p)
     media_controls_dirty(p);
 }
 
+/* Internal pause steps: stop output, fire timeupdate/pause, reject play promises. */
 static void
 media_internal_pause(ns_media_player *p, gboolean fire_events)
 {
@@ -717,6 +752,7 @@ media_internal_pause(ns_media_player *p, gboolean fire_events)
                       "pause().");
 }
 
+/* Metadata/data available: fires the readiness events and starts autoplay if allowed. */
 static void
 media_became_ready(ns_media_player *p, double duration)
 {
@@ -753,6 +789,7 @@ media_became_ready(ns_media_player *p, double duration)
     }
 }
 
+/* Playback ended: fires timeupdate, pause (if playing) and ended. */
 static void
 media_reached_end(ns_media_player *p)
 {
@@ -770,6 +807,7 @@ media_reached_end(ns_media_player *p)
     media_queue_task(p, "ended");
 }
 
+/* Resets the MSE audio decoder and stream to start feeding at the frame near t. */
 static void
 media_mse_restart_audio(ns_media_player *p, double t)
 {
@@ -789,6 +827,7 @@ media_mse_restart_audio(ns_media_player *p, double t)
     p->mse_audio_next = start;
 }
 
+/* Creates a decoder and mixer stream for the MSE audio track. */
 static void
 media_mse_open_audio(ns_media_player *p)
 {
@@ -816,6 +855,7 @@ media_mse_open_audio(ns_media_player *p)
         ns_audio_context_play(context, p->token);
 }
 
+/* Decodes MSE audio frames up to a lookahead past position and pushes PCM. */
 static void
 media_mse_feed_audio(ns_media_player *p, double position)
 {
@@ -853,6 +893,7 @@ media_mse_feed_audio(ns_media_player *p, double position)
         p->mse_audio_next >= last->pts + last->duration - 1e-6);
 }
 
+/* Pauses or resumes video and audio while MSE data is insufficient. */
 static void
 media_mse_stall(ns_media_player *p, gboolean stall)
 {
@@ -867,6 +908,7 @@ media_mse_stall(ns_media_player *p, gboolean stall)
     ns_js_request_repaint(p->js);
 }
 
+/* Updates readyState for MSE playback, firing transition events and autoplay. */
 static void
 media_mse_set_ready_state(ns_media_player *p, int state)
 {
@@ -893,6 +935,7 @@ media_mse_set_ready_state(ns_media_player *p, int state)
     }
 }
 
+/* Polls an MSE-backed player: duration, metadata, audio feed, readyState and stalls. */
 static void
 media_mse_poll(ns_media_player *p)
 {
@@ -956,6 +999,7 @@ media_mse_poll(ns_media_player *p)
     }
 }
 
+/* Advances a progressive download; on completion swaps in a full video stream. */
 static gboolean
 media_progressive_poll(ns_media_player *p)
 {
@@ -978,6 +1022,7 @@ media_progressive_poll(ns_media_player *p)
     return FALSE;
 }
 
+/* Keeps video frames in sync with the audio clock by seeking, holding or slewing. */
 static void
 media_video_follow_audio(ns_media_player *p, ns_image *frames, gint64 now)
 {
@@ -1017,6 +1062,7 @@ media_video_follow_audio(ns_media_player *p, ns_image *frames, gint64 now)
     }
 }
 
+/* Polls one player for readiness, end and timeupdate; returns TRUE while still active. */
 static gboolean
 media_poll_player(ns_media_player *p, gint64 now)
 {
@@ -1105,6 +1151,7 @@ media_poll_player(ns_media_player *p, gint64 now)
     return TRUE;
 }
 
+/* Periodic timer polling all players; removes itself when none are active. */
 static gboolean
 media_poll(gpointer data)
 {
@@ -1125,6 +1172,7 @@ media_poll(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Starts the media poll timer if it is not already running. */
 static void
 media_poll_ensure(ns_js *js)
 {
@@ -1133,6 +1181,7 @@ media_poll_ensure(ns_js *js)
             ns_engine_timeout_add(NS_MEDIA_POLL_MS, media_poll, js);
 }
 
+/* Releases a player's backend, pin, pending promises and strings. */
 static void
 media_player_free(ns_media_player *p)
 {
@@ -1144,6 +1193,7 @@ media_player_free(ns_media_player *p)
     g_free(p);
 }
 
+/* Clears element pointers in queued and in-flight media tasks for a freed node. */
 static void
 media_forget_tasks(ns_js *js, const ns_node *el)
 {
@@ -1158,6 +1208,7 @@ media_forget_tasks(ns_js *js, const ns_node *el)
     }
 }
 
+/* Drops a media player when its DOM node is being freed. */
 void
 ns_media_node_released(ns_js *js, ns_node *n)
 {
@@ -1168,6 +1219,7 @@ ns_media_node_released(ns_js *js, ns_node *n)
     media_player_free(p);
 }
 
+/* Tears down all media players, tasks, timers, MSE state and the audio context. */
 void
 ns_media_teardown(ns_js *js)
 {
@@ -1202,6 +1254,7 @@ ns_media_teardown(ns_js *js)
     }
 }
 
+/* Pauses all players without events and disables autoplay (e.g. on page hide). */
 void
 ns_js_suspend_media(ns_js *js)
 {
@@ -1216,6 +1269,7 @@ ns_js_suspend_media(ns_js *js)
     }
 }
 
+/* True if node is in the realm's current document. */
 static gboolean
 media_connected(ns_js *js, const ns_node *node)
 {
@@ -1224,6 +1278,7 @@ media_connected(ns_js *js, const ns_node *node)
     return FALSE;
 }
 
+/* Starts the load algorithm for an unloaded media element that has a source. */
 static void
 media_consider_element(ns_js *js, ns_node *el)
 {
@@ -1237,6 +1292,7 @@ media_consider_element(ns_js *js, ns_node *el)
     media_load(media_player_for(js, el));
 }
 
+/* Recursively considers every media element under root for loading. */
 static void
 media_walk_connected(ns_js *js, ns_node *root, int depth)
 {
@@ -1246,6 +1302,7 @@ media_walk_connected(ns_js *js, ns_node *root, int depth)
         media_walk_connected(js, c, depth + 1);
 }
 
+/* Loads media elements in a newly connected subtree. */
 void
 ns_media_subtree_connected(ns_js *js, ns_node *root)
 {
@@ -1253,6 +1310,7 @@ ns_media_subtree_connected(ns_js *js, ns_node *root)
     media_walk_connected(js, root, 0);
 }
 
+/* Initial media scan of a document, adopting it as the current document if unset. */
 void
 ns_media_scan(ns_js *js, ns_node *doc, const char *base_url)
 {
@@ -1264,6 +1322,7 @@ ns_media_scan(ns_js *js, ns_node *doc, const char *base_url)
     if (js->current_doc == doc) media_walk_connected(js, doc, 0);
 }
 
+/* Queues a pause check for playing media elements inside a removed subtree. */
 void
 ns_media_subtree_disconnected(ns_js *js, ns_node *root)
 {
@@ -1281,6 +1340,7 @@ ns_media_subtree_disconnected(ns_js *js, ns_node *root)
     }
 }
 
+/* Reacts to src (reload), loop and muted attribute changes on a media element. */
 void
 ns_media_attr_changed(ns_js *js, ns_node *el, const char *name)
 {
@@ -1307,6 +1367,7 @@ ns_media_attr_changed(ns_js *js, ns_node *el, const char *name)
     }
 }
 
+/* Reopens audio players whose blob: source URL got new data. */
 void
 ns_media_blob_updated(ns_js *js, const char *url)
 {
@@ -1326,6 +1387,7 @@ ns_media_blob_updated(ns_js *js, const char *url)
     }
 }
 
+/* HTMLMediaElement.play(): returns a promise, rejecting when unsupported or blocked. */
 JSValue
 ns_media_play(JSContext *ctx, JSValueConst this_val,
               int argc, JSValueConst *argv)
@@ -1354,6 +1416,7 @@ ns_media_play(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* HTMLMediaElement.pause(), loading first if the network state is empty. */
 JSValue
 ns_media_pause(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -1379,6 +1442,7 @@ ns_media_load(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Seeks to t clamped to duration, firing seeking, timeupdate and seeked. */
 static void
 media_seek_to(ns_media_player *p, double t)
 {
@@ -1394,6 +1458,7 @@ media_seek_to(ns_media_player *p, double t)
     media_controls_dirty(p);
 }
 
+/* Sets the muted IDL state, updates output volume and fires volumechange. */
 static void
 media_apply_muted(ns_media_player *p, gboolean muted)
 {
@@ -1412,6 +1477,7 @@ ns_media_get_current_time(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, p ? media_current_time(p) : 0.0);
 }
 
+/* currentTime setter; before metadata it only records the start position. */
 JSValue
 ns_media_set_current_time(JSContext *ctx, JSValueConst this_val,
                           JSValueConst val)
@@ -1479,6 +1545,7 @@ ns_media_get_networkState(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, p ? p->network_state : NETWORK_EMPTY);
 }
 
+/* MediaError object for the element's error, or null when none. */
 JSValue
 ns_media_get_error(JSContext *ctx, JSValueConst this_val)
 {
@@ -1501,6 +1568,7 @@ ns_media_get_volume(JSContext *ctx, JSValueConst this_val)
     return JS_NewFloat64(ctx, p ? p->volume : 1.0);
 }
 
+/* volume setter; IndexSizeError outside [0, 1], fires volumechange on change. */
 JSValue
 ns_media_set_volume(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -1526,6 +1594,7 @@ ns_media_get_muted(JSContext *ctx, JSValueConst this_val)
     return JS_NewBool(ctx, p && media_muted(p));
 }
 
+/* muted setter; unmuting an autoplaying element without activation pauses it. */
 JSValue
 ns_media_set_muted(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
@@ -1540,6 +1609,7 @@ ns_media_set_muted(JSContext *ctx, JSValueConst this_val, JSValueConst val)
     return JS_UNDEFINED;
 }
 
+/* seekable TimeRanges from MSE, else 0 to duration. */
 JSValue
 ns_media_get_seekable_ranges(JSContext *ctx, JSValueConst this_val)
 {
@@ -1555,6 +1625,7 @@ ns_media_get_seekable_ranges(JSContext *ctx, JSValueConst this_val)
     return ns_media_time_ranges_for(ctx, end);
 }
 
+/* buffered TimeRanges from MSE, else 0 to duration once metadata is known. */
 JSValue
 ns_media_get_buffered_ranges(JSContext *ctx, JSValueConst this_val)
 {
@@ -1571,6 +1642,7 @@ ns_media_get_buffered_ranges(JSContext *ctx, JSValueConst this_val)
     return ns_media_time_ranges_for(ctx, end);
 }
 
+/* played TimeRanges approximated as 0 to the current time. */
 JSValue
 ns_media_get_played_ranges(JSContext *ctx, JSValueConst this_val)
 {
@@ -1585,6 +1657,7 @@ media_mse_video_track(ns_media_player *p)
     return ns_mse_buffer_track(ns_mse_source_track_buffer(p->mse, NS_MSE_TRACK_VIDEO));
 }
 
+/* videoWidth from decoded frames, falling back to the MSE track. */
 JSValue
 ns_media_get_video_width(JSContext *ctx, JSValueConst this_val)
 {
@@ -1596,6 +1669,7 @@ ns_media_get_video_width(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, width);
 }
 
+/* videoHeight from decoded frames, falling back to the MSE track. */
 JSValue
 ns_media_get_video_height(JSContext *ctx, JSValueConst this_val)
 {
@@ -1614,6 +1688,7 @@ ns_media_position(JSContext *ctx, JSValueConst this_val)
     return p ? media_current_time(p) : 0.0;
 }
 
+/* Presented and dropped video frame counts; FALSE if not available. */
 gboolean
 ns_media_frame_counts(JSContext *ctx, JSValueConst this_val,
                       guint *presented, guint *dropped)
@@ -1625,6 +1700,7 @@ ns_media_frame_counts(JSContext *ctx, JSValueConst this_val,
            ns_video_stream_frame_counts(frames->video, presented, dropped);
 }
 
+/* Requests a repaint of the element when it shows native controls. */
 static void
 media_controls_dirty(ns_media_player *p)
 {
@@ -1632,6 +1708,7 @@ media_controls_dirty(ns_media_player *p)
         ns_js_request_repaint_node(p->js, p->el);
 }
 
+/* Computes the native controls bar geometry (play, seek, time, mute) for a box. */
 gboolean
 ns_media_controls_layout(const ns_node *el, double x, double y,
                          double w, double h, ns_media_controls_rect *out)
@@ -1656,6 +1733,7 @@ ns_media_controls_layout(const ns_node *el, double x, double y,
     return TRUE;
 }
 
+/* Hit-tests a point against the controls layout, returning the control under it. */
 ns_media_control
 ns_media_controls_hit(const ns_media_controls_rect *r, double px, double py)
 {
@@ -1669,6 +1747,7 @@ ns_media_controls_hit(const ns_media_controls_rect *r, double px, double py)
     return NS_MEDIA_CONTROL_NONE;
 }
 
+/* Snapshots the state needed to paint the native controls for an element. */
 void
 ns_media_controls_get(ns_js *js, const ns_node *el,
                       ns_media_controls_state *out)
@@ -1686,6 +1765,7 @@ ns_media_controls_get(ns_js *js, const ns_node *el,
     out->duration = p->duration;
 }
 
+/* Handles a click on a native control: toggle play, seek to fraction, or mute. */
 void
 ns_media_controls_activate(ns_js *js, const ns_node *el,
                            ns_media_control control, double fraction)
