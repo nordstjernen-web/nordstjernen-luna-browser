@@ -12,17 +12,18 @@ Nordstjernen Web Browser was previously named Nordstjernen Luna, and before
 that Northstar; the executable is still `northstar`.
 
 **See [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) also, which is
-the most complete, fully featured web browser project we are making. Nordstjernen has builds for Windows, Linux and macOS.**
+the most complete, fully featured web browser project we are making. Nordstjernen Sol has ready-made builds for Windows, macOS, Linux and Android.**
 
 Nordstjernen Web Browser is licensed under the GNU General Public License, version 3 or
 later.
 
 ## Multiple browser variants
-* This repo, [Nordstjernen Web Browser](https://github.com/nordstjernen-web/northstar-web-browser), is a minimalist, simple and good web browser. This is more about research about browser tech.
-* [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) is the Nordstjernen web browser, the most complete, fully featured web browser.
-  
-We are doing web browser innovation, research and development, and part of this is 
-making multiple web browser variants to test and compare 
+* This repo, [Nordstjernen Web Browser](https://github.com/nordstjernen-web/northstar-web-browser), is a minimalist, simple and good web browser: one process, one page per window, GPL only. It is more about research into browser technology.
+* [Nordstjernen Sol](https://github.com/nordstjernen-web/nordstjernen-sol-browser) is the Nordstjernen web browser, the most complete, fully featured web browser, with tabs in sandboxed renderer processes and builds for desktop and Android.
+* [Southstar](https://github.com/nordstjernen-web/southstar-browser) is Nordstjernen Sol rewritten in Rust, with the Boa JavaScript engine.
+
+We are doing web browser innovation, research and development, and part of this is
+making multiple web browser variants to test and compare.
 
 ![Best viewed in Nordstjernen Web Browser](docs/best-viewed-in-northstar.gif)
 
@@ -206,12 +207,11 @@ a pin is moved.
 
 `meson install` puts `open-internet-browser` beside `northstar` in the
 binary directory, a symbolic link to it, so `open-internet-browser
-https://example.com` starts Nordstjernen Web Browser. Nordstjernen Sol and
-Southstar install the same name, so the command opens whichever of the
-browsers is installed. The `.deb` and `.rpm` packages register it with
-`update-alternatives` instead of shipping the link, so the browsers
-install side by side and `sudo update-alternatives --config
-open-internet-browser` chooses the one it runs. On Windows the installer
+https://example.com` starts Nordstjernen Web Browser. Nordstjernen Sol
+and Southstar install commands of their own (`open-browser-nordstjernen`
+and `internet-browser-southstar`), so the three browsers install side by
+side. The `.deb` and `.rpm` packages register `open-internet-browser`
+with `update-alternatives` instead of shipping the link. On Windows the installer
 registers `open-internet-browser` as an App Paths alias (the Run dialog
 and `start open-internet-browser` find it) and the MSIX package declares
 it as an app execution alias.
