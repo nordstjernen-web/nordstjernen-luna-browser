@@ -54,6 +54,12 @@ Significant changes in each release:
   break corrupted the file, so the next session lost every entry of
   the origin. Keys and values are now stored percent-escaped; existing
   files still load.
+* CSS animations run at the display's frame rate again. The window
+  capped page animations at 60 frames a second by dropping any frame
+  that came less than exactly 1/60 s after the last one, but a 60 Hz
+  display's frame times jitter around that value, so about every other
+  frame was dropped and an animation ran at around 40 frames a second.
+  The cap now allows a quarter frame of slack.
 
 1.0.16:
 =======
