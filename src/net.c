@@ -63,6 +63,13 @@ static GMutex      g_cookie_partitions_lock;
 static char *g_private_root;
 static char *g_hsts_curl_path;
 static char *g_altsvc_path;
+
+/* One known HSTS host: when its policy ends and whether it covers subdomains. */
+typedef struct ns_hsts_entry {
+    gint64   expires;
+    gboolean subdomains;
+} ns_hsts_entry;
+
 static GHashTable *g_hsts_cache;
 static gint64      g_hsts_cache_mtime_us;
 static GMutex      g_hsts_lock;
@@ -430,13 +437,27 @@ ns_net_hsts_curl_path(void)
     return g_hsts_curl_path;
 }
 
-/* Reloads the HSTS host cache from curl's file; leading dot means includeSubDomains. */
+/* Parses curl's "YYYYMMDD HH:MM:SS" HSTS expiry (UTC) to Unix time; anything
+ * else, such as "unlimited", never expires. */
+static gint64
+ns_hsts_parse_expiry(const char *stamp)
+{
+    while (*stamp == ' ' || *stamp == '"') stamp++;
+    int y, mo, d, h, mi, sec;
+    if (sscanf(stamp, "%4d%2d%2d %2d:%2d:%2d", &y, &mo, &d, &h, &mi, &sec) != 6)
+        return G_MAXINT64;
+    g_autoptr(GDateTime) when = g_date_time_new_utc(y, mo, d, h, mi, sec);
+    return when ? g_date_time_to_unix(when) : G_MAXINT64;
+}
+
+/* Reloads the HSTS host cache from curl's file, skipping expired entries;
+ * leading dot means includeSubDomains. */
 static void
 ns_hsts_cache_reload_locked(const char *path)
 {
     if (!g_hsts_cache)
         g_hsts_cache = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                             g_free, NULL);
+                                             g_free, g_free);
     else
         g_hash_table_remove_all(g_hsts_cache);
 
@@ -450,6 +471,7 @@ ns_hsts_cache_reload_locked(const char *path)
         return;
     }
 
+    gint64 now = g_get_real_time() / G_USEC_PER_SEC;
     char **lines = g_strsplit(content, "\n", -1);
     for (int i = 0; lines[i]; i++) {
         char *line = g_strstrip(lines[i]);
@@ -460,9 +482,12 @@ ns_hsts_cache_reload_locked(const char *path)
         gboolean subs = (*line == '.');
         const char *host = subs ? line + 1 : line;
         if (!*host) continue;
-        g_hash_table_replace(g_hsts_cache,
-                             g_ascii_strdown(host, -1),
-                             GINT_TO_POINTER(subs ? 2 : 1));
+        gint64 expires = ns_hsts_parse_expiry(sp + 1);
+        if (expires <= now) continue;
+        ns_hsts_entry *e = g_new(ns_hsts_entry, 1);
+        e->expires = expires;
+        e->subdomains = subs;
+        g_hash_table_replace(g_hsts_cache, g_ascii_strdown(host, -1), e);
     }
     g_strfreev(lines);
     g_free(content);
@@ -476,17 +501,18 @@ file_mtime_us(const char *path)
     return (gint64)st.st_mtime * G_USEC_PER_SEC;
 }
 
-/* TRUE if the host or a parent with includeSubDomains is in the HSTS cache. */
+/* TRUE if the host or a parent with includeSubDomains has an unexpired HSTS entry. */
 static gboolean
 ns_hsts_lookup_locked(const char *lower_host)
 {
-    gpointer v = g_hash_table_lookup(g_hsts_cache, lower_host);
-    if (v) return TRUE;
+    gint64 now = g_get_real_time() / G_USEC_PER_SEC;
+    const ns_hsts_entry *e = g_hash_table_lookup(g_hsts_cache, lower_host);
+    if (e && e->expires > now) return TRUE;
     const char *dot = lower_host;
     while ((dot = strchr(dot, '.')) != NULL) {
         const char *parent = dot + 1;
-        v = g_hash_table_lookup(g_hsts_cache, parent);
-        if (v && GPOINTER_TO_INT(v) == 2) return TRUE;
+        e = g_hash_table_lookup(g_hsts_cache, parent);
+        if (e && e->subdomains && e->expires > now) return TRUE;
         dot = parent;
     }
     return FALSE;
