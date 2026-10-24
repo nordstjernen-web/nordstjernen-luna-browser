@@ -1,10 +1,12 @@
 /* Nordstjernen Web Browser — opens the browser's SQLite databases hardened against hostile files.
+ * Defensive mode, no extension loading or trusted schema, and a busy timeout.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "sqlite_db.h"
 
+/* Enables defensive mode and disables extension loading, trusted schema and DQS. */
 void
 ns_sqlite_harden(sqlite3 *db)
 {
@@ -23,6 +25,7 @@ ns_sqlite_harden(sqlite3 *db)
 #endif
 }
 
+/* Opens and hardens a database with a 2.5s busy timeout; NULL with a warning on failure. */
 sqlite3 *
 ns_sqlite_open(const char *tag, const char *path, int flags)
 {
@@ -39,6 +42,7 @@ ns_sqlite_open(const char *tag, const char *path, int flags)
     return db;
 }
 
+/* Executes SQL, logging failures under tag; returns TRUE on success. */
 gboolean
 ns_sqlite_exec(sqlite3 *db, const char *tag, const char *sql)
 {

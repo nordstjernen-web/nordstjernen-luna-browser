@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — WebAssembly JS API implemented over the vendored WAMR interpreter.
+/* Nordstjernen Web Browser — installs the WebAssembly JS namespace into a QuickJS global.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

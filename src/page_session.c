@@ -1,5 +1,5 @@
-/* Nordstjernen Web Browser — one page host session: the open page, its back/forward cache
-   and the last rendered frame.
+/* Nordstjernen Web Browser — one page host session: open page, back/forward cache, last frame.
+ * Damage-tracked repaint, scroll reuse, input routing and dumps; used by headless and procview.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -58,6 +58,7 @@ typedef struct {
     ns_page_session *session;
 } session_wake_source;
 
+/* Returns TRUE when the page needs a frame and no wake is posted or render in progress. */
 static gboolean
 session_wake_due(ns_page_session *s)
 {
@@ -65,6 +66,7 @@ session_wake_due(ns_page_session *s)
            ns_browser_needs_frame(s->cur);
 }
 
+/* GSource prepare: fires when a frame is due, else times out at the page's next wake time. */
 static gboolean
 session_wake_prepare(GSource *source, gint *timeout)
 {
@@ -87,6 +89,7 @@ session_wake_check(GSource *source)
     return session_wake_due(((session_wake_source *)source)->session);
 }
 
+/* Posts the wake callback once per frame request until the next render. */
 static gboolean
 session_wake_dispatch(GSource *source, GSourceFunc callback,
                       gpointer user_data)
@@ -107,6 +110,7 @@ static GSourceFuncs session_wake_funcs = {
     .dispatch = session_wake_dispatch,
 };
 
+/* Sets the frame-wake callback, attaching the wake GSource to the engine context once. */
 void
 ns_page_session_set_wake(ns_page_session *s, ns_page_session_wake_cb cb,
                          gpointer user_data)
@@ -130,6 +134,7 @@ ns_page_session_set_frame_time(ns_page_session *s, gint64 frame_time_us)
         ns_browser_set_frame_time(s->cur, frame_time_us);
 }
 
+/* Parks an eligible page in the back/forward cache, evicting the oldest; else closes it. */
 static void
 session_bfcache_park_or_close(ns_page_session *s, ns_browser *b)
 {
@@ -149,6 +154,7 @@ session_bfcache_park_or_close(ns_page_session *s, ns_browser *b)
     s->bf[s->bf_n++] = b;
 }
 
+/* Removes and returns the newest bfcache page whose URL equals url, or NULL. */
 static ns_browser *
 session_bfcache_take(ns_page_session *s, const char *url)
 {
@@ -169,6 +175,7 @@ session_bfcache_take(ns_page_session *s, const char *url)
     return NULL;
 }
 
+/* Saves a pending form POST body from the page, keyed by the navigation href. */
 static void
 session_stash_post(ns_page_session *s, const char *href)
 {
@@ -210,6 +217,7 @@ clamp(int v, int lo, int hi)
     return v;
 }
 
+/* Frees an empty string and returns NULL; otherwise returns s unchanged. */
 static char *
 empty_to_null(char *s)
 {
@@ -220,6 +228,7 @@ empty_to_null(char *s)
     return s;
 }
 
+/* Replaces CR and LF characters with spaces in place. */
 static void
 scrub_line_breaks(char *s)
 {
@@ -238,6 +247,7 @@ engine_init_once(void)
     }
 }
 
+/* Creates a session with a framebuffer for max size plus damage edge rows. */
 ns_page_session *
 ns_page_session_new(int max_width, int max_height)
 {
@@ -260,6 +270,7 @@ ns_page_session_new(int max_width, int max_height)
     return s;
 }
 
+/* Destroys the wake source, closes current and cached pages and frees buffers. */
 void
 ns_page_session_free(ns_page_session *s)
 {
@@ -286,6 +297,7 @@ ns_page_session_free(ns_page_session *s)
     free(s);
 }
 
+/* Fills page info (size, title, URL, pending nav, TLS state, IP) from the current page. */
 static void
 fill_page_info(ns_page_session *s, const char *fallback_url,
                ns_page_info *out)
@@ -319,6 +331,7 @@ ns_page_info_clear(ns_page_info *info)
     memset(info, 0, sizeof *info);
 }
 
+/* Navigates: restores from bfcache on history, replays a stashed POST, else opens url. */
 int
 ns_page_session_open(ns_page_session *s, const char *url, int width,
                      int height, int settle_ms, int history,
@@ -369,6 +382,7 @@ ns_page_session_open(ns_page_session *s, const char *url, int width,
     return s->cur ? 0 : -1;
 }
 
+/* Resizes the current page's viewport and reports the new page size. */
 int
 ns_page_session_set_viewport(ns_page_session *s, int width, int height,
                              ns_page_info *out)
@@ -426,6 +440,7 @@ ns_page_session_set_video_layers(ns_page_session *s, gboolean enabled)
     if (s) s->video_layers_enabled = enabled;
 }
 
+/* Merges painted video layers into the session's set and copies live ones to the frame. */
 static void
 session_merge_video_layers(ns_page_session *s, GArray *painted, gboolean full,
                            double ox, double oy, ns_page_frame *out)
@@ -468,6 +483,7 @@ session_merge_video_layers(ns_page_session *s, GArray *painted, gboolean full,
     }
 }
 
+/* Reads NS_DAMAGE once: 0 disables partial repaint, "verify" checks it, default enables it. */
 static int
 session_damage_mode(void)
 {
@@ -480,6 +496,7 @@ session_damage_mode(void)
     return mode;
 }
 
+/* Adds a CSS-pixel rect, scaled outward to device pixels and clipped, to a region. */
 static void
 region_add_css_rect(cairo_region_t *region, double x, double y, double w,
                     double h, double scale, int vw, int vh)
@@ -496,12 +513,14 @@ region_add_css_rect(cairo_region_t *region, double x, double y, double w,
     cairo_region_union_rectangle(region, &r);
 }
 
+/* Returns the start of the visible area inside an edge-padded framebuffer. */
 static unsigned char *
 session_view(unsigned char *padded, int vw)
 {
     return padded + (size_t)NS_DAMAGE_EDGE_PX * (size_t)vw * 4u;
 }
 
+/* Shifts the visible framebuffer by (dx, dy) pixels in place for scrolling. */
 static void
 session_blit(ns_page_session *s, int dx, int dy, int vw, int vh)
 {
@@ -519,6 +538,7 @@ session_blit(ns_page_session *s, int dx, int dy, int vw, int vh)
     }
 }
 
+/* Reuses pixels on integer-pixel scrolls, adding exposed strips and fixed bands to damage. */
 static gboolean
 session_scroll_blit(ns_page_session *s, long sx, long sy, int vw, int vh,
                     double scale, cairo_region_t *region)
@@ -552,6 +572,7 @@ session_scroll_blit(ns_page_session *s, long sx, long sy, int vw, int vh,
     return TRUE;
 }
 
+/* Builds the device-pixel repaint region; NULL means a full repaint is needed. */
 static cairo_region_t *
 session_damage_region(ns_page_session *s, GArray *damage, long sx, long sy,
                       int vw, int vh, double scale)
@@ -586,6 +607,7 @@ session_damage_region(ns_page_session *s, GArray *damage, long sx, long sy,
     return region;
 }
 
+/* Lazily allocates a padded framebuffer-sized scratch buffer. */
 static unsigned char *
 session_scratch(ns_page_session *s, unsigned char **buf)
 {
@@ -595,6 +617,7 @@ session_scratch(ns_page_session *s, unsigned char **buf)
     return *buf;
 }
 
+/* Renders a band, grown by the damage edge margin, into a scratch buffer. */
 static int
 session_paint_band(ns_page_session *s, unsigned char *scratch, int x0, int x1,
                    int y0, int y1, long sx, long sy, int vw, int vh,
@@ -610,6 +633,7 @@ session_paint_band(ns_page_session *s, unsigned char *scratch, int x0, int x1,
                                           vw * 4, band, 1);
 }
 
+/* NS_DAMAGE=verify: compares with a full repaint, logs differences and fixes the frame. */
 static void
 session_verify_region(ns_page_session *s, long sx, long sy, int vw, int vh,
                       double scale)
@@ -653,6 +677,7 @@ rect_row_cmp(const void *pa, const void *pb)
     return a->y < b->y ? -1 : a->y > b->y;
 }
 
+/* Paints a row group once into scratch and copies just its damage rects into the frame. */
 static int
 session_paint_rows(ns_page_session *s, const cairo_rectangle_int_t *rects,
                    int n, int y0, int y1, long sx, long sy, int vw, int vh,
@@ -679,6 +704,7 @@ session_paint_rows(ns_page_session *s, const cairo_rectangle_int_t *rects,
     return 0;
 }
 
+/* Repaints a damage region in row groups of nearby rects, verifying when enabled. */
 static int
 session_paint_region(ns_page_session *s, cairo_region_t *region, long sx,
                      long sy, int vw, int vh, double scale)
@@ -709,6 +735,7 @@ session_paint_region(ns_page_session *s, cairo_region_t *region, long sx,
     return rc;
 }
 
+/* Copies region rectangles into the frame as x, y, w, h integer quadruples. */
 static void
 session_frame_damage(ns_page_frame *out, cairo_region_t *region)
 {
@@ -727,6 +754,7 @@ session_frame_damage(ns_page_frame *out, cairo_region_t *region)
     out->n_damage = n;
 }
 
+/* Ticks the page, applies scroll requests and snapping, and paints a full or damaged frame. */
 int
 ns_page_session_render(ns_page_session *s, int width, int height,
                        int scroll_x, int scroll_y, double scale,
@@ -880,6 +908,7 @@ ns_page_session_render(ns_page_session *s, int width, int height,
     return 0;
 }
 
+/* Returns the link URL at a point and optionally the CSS cursor; caller frees. */
 char *
 ns_page_session_link_at(ns_page_session *s, int x, int y, char **out_cursor)
 {
@@ -892,6 +921,7 @@ ns_page_session_link_at(ns_page_session *s, int x, int y, char **out_cursor)
     return empty_to_null(ns_browser_link_at(s->cur, x, y));
 }
 
+/* Updates hover state at a point; returns 1 if a repaint is needed, plus link and cursor. */
 int
 ns_page_session_hover(ns_page_session *s, int x, int y, char **out_href,
                       char **out_cursor)
@@ -913,6 +943,7 @@ ns_page_session_hover(ns_page_session *s, int x, int y, char **out_href,
     return changed > 0 ? 1 : 0;
 }
 
+/* Sends a pointer press; returns any navigation href, stashing a form POST body. */
 char *
 ns_page_session_click(ns_page_session *s, int x, int y, int mods)
 {
@@ -924,6 +955,7 @@ ns_page_session_click(ns_page_session *s, int x, int y, int mods)
     return empty_to_null(href);
 }
 
+/* Sends a pointer release; returns any navigation href and whether the page changed. */
 char *
 ns_page_session_release(ns_page_session *s, int *out_changed)
 {
@@ -949,6 +981,7 @@ ns_page_session_select(ns_page_session *s, int kind, int x, int y)
     return empty_to_null(ns_browser_select(s->cur, kind, x, y));
 }
 
+/* Sends a key event; returns any navigation href and whether it was prevented. */
 char *
 ns_page_session_key(ns_page_session *s, int kind, const char *key,
                     const char *code, int keycode, int mods,
@@ -988,6 +1021,7 @@ ns_page_session_scroll(ns_page_session *s, int x, int y, int dx, int dy)
     return consumed ? 1 : 0;
 }
 
+/* Routes scrollbar press (0), drag (1) or release (2); returns 1 if a scrollbar was hit. */
 int
 ns_page_session_scrollbar(ns_page_session *s, int kind, int x, int y)
 {
@@ -1016,6 +1050,7 @@ ns_page_session_drop_files(ns_page_session *s, int x, int y,
     return changed > 0 ? 1 : 0;
 }
 
+/* Runs find-in-page and reports match total, current index and scroll target. */
 int
 ns_page_session_find(ns_page_session *s, const char *query,
                      int case_sensitive, int direction, int from_y,
@@ -1044,6 +1079,7 @@ ns_page_session_clipboard(ns_page_session *s)
     return ns_browser_take_pending_clipboard(s->cur);
 }
 
+/* Returns the media URL at a point and whether it is video or a stream; caller frees. */
 char *
 ns_page_session_media_at(ns_page_session *s, int x, int y, int *out_is_video,
                          int *out_stream)
@@ -1078,6 +1114,7 @@ ns_page_session_eval(ns_page_session *s, const char *src)
     return ns_browser_eval(s->cur, src ? src : "");
 }
 
+/* Returns a text dump by kind: network, dom, layout, text or performance; caller frees. */
 char *
 ns_page_session_dump(ns_page_session *s, const char *kind)
 {

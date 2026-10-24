@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — SVG rendering onto Cairo, sharing the CSS cascade with HTML.
+ * Paths, shapes, text, gradients, markers, clip-path and masks; also rasterizes SVG image bytes.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -95,6 +96,7 @@ svg_skip_sep(const char **pp)
     *pp = p;
 }
 
+/* Parses the next finite number after whitespace/comma separators, advancing *pp. */
 static gboolean
 svg_num(const char **pp, double *out)
 {
@@ -110,6 +112,7 @@ svg_num(const char **pp, double *out)
     return TRUE;
 }
 
+/* Parses a single-character 0/1 arc flag, advancing *pp. */
 static gboolean
 svg_flag(const char **pp, gboolean *out)
 {
@@ -120,6 +123,7 @@ svg_flag(const char **pp, gboolean *out)
     return FALSE;
 }
 
+/* Converts an SVG length with unit (px, pt, mm, %, em...) to user units, else fallback. */
 static double
 svg_length_str(const char *s, double pct_basis, double font_size, double fallback)
 {
@@ -151,6 +155,7 @@ svg_attr_length(const ns_node *n, const char *name, double pct_basis,
     return s ? svg_length_str(s, pct_basis, font_size, fallback) : fallback;
 }
 
+/* Percentage basis for non-axis lengths per SVG: sqrt(w^2 + h^2) / sqrt(2). */
 static double
 svg_diag_basis(double w, double h)
 {
@@ -163,6 +168,7 @@ svg_paint_clear(svg_paint *p)
     g_clear_pointer(&p->ref, g_free);
 }
 
+/* Extracts the percent-decoded id from url(#id); sets *rest past ")". Caller frees. */
 static char *
 svg_url_id(const char *s, const char **rest)
 {
@@ -191,6 +197,7 @@ svg_url_id(const char *s, const char **rest)
     return dec;
 }
 
+/* Parses an SVG paint: none, currentColor, color or url(#id) with optional fallback. */
 static gboolean
 svg_parse_paint(const char *text, const svg_state *st, svg_paint *out)
 {
@@ -249,6 +256,7 @@ svg_parse_paint(const char *text, const svg_state *st, svg_paint *out)
     return FALSE;
 }
 
+/* Initializes presentation state to SVG initial values (black fill, no stroke, 16px). */
 static void
 svg_state_init(svg_state *st)
 {
@@ -269,6 +277,7 @@ svg_state_init(svg_state *st)
     st->font_weight = 400;
 }
 
+/* Deep-copies state so the child owns its paint refs, font family and dash array. */
 static void
 svg_state_copy(svg_state *dst, const svg_state *src)
 {
@@ -292,6 +301,7 @@ svg_state_clear(svg_state *st)
     if (st->dashes) { g_array_free(st->dashes, TRUE); st->dashes = NULL; }
 }
 
+/* Parses stroke-dasharray; ignores negatives or all-zero, repeats odd-length lists. */
 static void
 svg_set_dashes(svg_state *st, const char *text)
 {
@@ -347,6 +357,7 @@ svg_anchor_of(const char *s)
     return 0;
 }
 
+/* Finds the last declaration of prop in the inline style attribute; uses ctx buffer. */
 static const char *
 svg_style_decl(svg_ctx *ctx, const ns_node *n, const char *prop)
 {
@@ -383,6 +394,7 @@ svg_style_decl(svg_ctx *ctx, const ns_node *n, const char *prop)
     return buf;
 }
 
+/* Property value from inline style, then attribute, with var() resolved from computed style. */
 static const char *
 svg_prop(svg_ctx *ctx, const ns_node *n, const char *name)
 {
@@ -405,6 +417,7 @@ svg_prop(svg_ctx *ctx, const ns_node *n, const char *name)
     return ctx->prop_buf;
 }
 
+/* Applies a cascaded CSS fill/stroke value (color or paint keyword) to a paint. */
 static void
 svg_apply_css_paint(svg_state *st, const ns_style *s, ns_css_prop prop,
                     svg_paint *out)
@@ -423,6 +436,7 @@ svg_apply_css_paint(svg_state *st, const ns_style *s, ns_css_prop prop,
     }
 }
 
+/* Numeric value of a cascaded CSS length, resolving percentages against basis. */
 static double
 svg_css_number(const ns_style *s, ns_css_prop prop, double basis,
                double fallback)
@@ -437,6 +451,7 @@ svg_css_number(const ns_style *s, ns_css_prop prop, double basis,
     return ns_css_length_or(v, fallback);
 }
 
+/* Applies an element's presentation attributes, then its cascaded CSS, onto inherited state. */
 static void
 svg_state_apply_node(svg_ctx *ctx, svg_state *st, const ns_node *n)
 {
@@ -566,6 +581,7 @@ svg_state_apply_node(svg_ctx *ctx, svg_state *st, const ns_node *n)
     }
 }
 
+/* Parses an SVG transform list (matrix/translate/scale/rotate/skew) into one matrix. */
 static gboolean
 svg_parse_transform(const char *s, cairo_matrix_t *out)
 {
@@ -618,6 +634,7 @@ svg_parse_transform(const char *s, cairo_matrix_t *out)
     return any;
 }
 
+/* Applies a transform attribute to the cairo context; FALSE if the matrix is singular. */
 static gboolean
 svg_apply_transform_attr(svg_ctx *ctx, const ns_node *n, const char *attr)
 {
@@ -631,6 +648,7 @@ svg_apply_transform_attr(svg_ctx *ctx, const ns_node *n, const char *attr)
     return TRUE;
 }
 
+/* Appends an SVG elliptical arc (endpoint parameterization, F.6) as cubic Bezier segments. */
 static void
 svg_arc_to(cairo_t *cr, double x1, double y1, double rx, double ry,
            double phi_deg, gboolean large_arc, gboolean sweep,
@@ -694,6 +712,7 @@ svg_arc_to(cairo_t *cr, double x1, double y1, double rx, double ry,
     }
 }
 
+/* Builds a cairo path from SVG path data; stops at the first malformed segment. */
 static void
 svg_path_data(cairo_t *cr, const char *d)
 {
@@ -824,6 +843,7 @@ svg_path_data(cairo_t *cr, const char *d)
     }
 }
 
+/* Geometry property from CSS (e.g. cx, width) else attribute; flags "auto". */
 static double
 svg_geom(svg_ctx *ctx, const ns_node *n, const char *attr, ns_css_prop prop,
          double basis, double fs, double fallback, gboolean *out_auto)
@@ -850,6 +870,7 @@ svg_geom(svg_ctx *ctx, const ns_node *n, const char *attr, ns_css_prop prop,
     return svg_length_str(a, basis, fs, fallback);
 }
 
+/* Appends the path of a basic shape or path element; FALSE if it renders nothing. */
 static gboolean
 svg_shape_path(svg_ctx *ctx, const ns_node *n, const svg_state *st)
 {
@@ -965,6 +986,7 @@ svg_shape_path(svg_ctx *ctx, const ns_node *n, const svg_state *st)
     return FALSE;
 }
 
+/* Recursively maps id attributes to elements, first occurrence winning. */
 static void
 svg_index_ids(svg_ctx *ctx, const ns_node *n, int depth)
 {
@@ -978,6 +1000,7 @@ svg_index_ids(svg_ctx *ctx, const ns_node *n, int depth)
     }
 }
 
+/* Looks up an element by id within the SVG, building the id index lazily. */
 static const ns_node *
 svg_by_id(svg_ctx *ctx, const char *id)
 {
@@ -1000,6 +1023,7 @@ svg_href(const ns_node *n)
     return h;
 }
 
+/* Resolves a local "#id" href/xlink:href to its element; NULL for external refs. */
 static const ns_node *
 svg_href_target(svg_ctx *ctx, const ns_node *n)
 {
@@ -1010,6 +1034,7 @@ svg_href_target(svg_ctx *ctx, const ns_node *n)
     return svg_by_id(ctx, h + 1);
 }
 
+/* Attribute value following the href template chain (gradients/patterns), bounded depth. */
 static const char *
 svg_inherited_attr(svg_ctx *ctx, const ns_node *n, const char *name)
 {
@@ -1022,6 +1047,7 @@ svg_inherited_attr(svg_ctx *ctx, const ns_node *n, const char *name)
     return NULL;
 }
 
+/* Finds the gradient in the href chain that actually holds the stop elements. */
 static const ns_node *
 svg_stops_owner(svg_ctx *ctx, const ns_node *n)
 {
@@ -1036,6 +1062,7 @@ svg_stops_owner(svg_ctx *ctx, const ns_node *n)
     return NULL;
 }
 
+/* Adds gradient stops with monotonic clamped offsets and stop-color/opacity times alpha. */
 static void
 svg_add_stops(svg_ctx *ctx, cairo_pattern_t *pat, const ns_node *owner,
               const svg_state *st, double alpha)
@@ -1090,6 +1117,7 @@ svg_extend_of(const char *s)
     return CAIRO_EXTEND_PAD;
 }
 
+/* Builds a linear/radial gradient pattern honoring href inheritance, units and transform. */
 static cairo_pattern_t *
 svg_gradient_pattern(svg_ctx *ctx, const ns_node *g, const svg_state *st,
                      double alpha, double bx, double by, double bw, double bh)
@@ -1166,6 +1194,7 @@ svg_gradient_pattern(svg_ctx *ctx, const ns_node *g, const svg_state *st,
     return pat;
 }
 
+/* Sets the cairo source for a paint (color, gradient or fallback); FALSE if nothing to draw. */
 static gboolean
 svg_set_paint(svg_ctx *ctx, const svg_paint *paint, const svg_state *st,
               double opacity)
@@ -1202,6 +1231,7 @@ svg_set_paint(svg_ctx *ctx, const svg_paint *paint, const svg_state *st,
     return FALSE;
 }
 
+/* Applies stroke width, cap, join, miter limit and dash pattern to the cairo context. */
 static void
 svg_apply_stroke_params(svg_ctx *ctx, const svg_state *st)
 {
@@ -1217,6 +1247,7 @@ svg_apply_stroke_params(svg_ctx *ctx, const svg_state *st)
         cairo_set_dash(cr, NULL, 0, 0.0);
 }
 
+/* Fills and strokes the current path in paint-order, honoring non-scaling-stroke. */
 static void
 svg_paint_current_path(svg_ctx *ctx, const svg_state *st)
 {
@@ -1248,6 +1279,7 @@ svg_paint_current_path(svg_ctx *ctx, const svg_state *st)
     cairo_new_path(cr);
 }
 
+/* Appends the shapes of a clipPath's children (and use targets) to the current path. */
 static void
 svg_clip_path_children(svg_ctx *ctx, const ns_node *clip, const svg_state *st)
 {
@@ -1273,6 +1305,7 @@ svg_clip_path_children(svg_ctx *ctx, const ns_node *clip, const svg_state *st)
     }
 }
 
+/* Renders an element's mask into a luminance A8 surface in device space; NULL if none. */
 static cairo_surface_t *
 svg_mask_surface(svg_ctx *ctx, const ns_node *n, const svg_state *st)
 {
@@ -1354,6 +1387,7 @@ svg_mask_surface(svg_ctx *ctx, const ns_node *n, const svg_state *st)
     return a8;
 }
 
+/* Intersects the cairo clip with the element's clip-path reference, if any. */
 static void
 svg_apply_clip(svg_ctx *ctx, const ns_node *n, const svg_state *st)
 {
@@ -1385,6 +1419,7 @@ svg_apply_clip(svg_ctx *ctx, const ns_node *n, const svg_state *st)
     ctx->depth--;
 }
 
+/* Computes the viewBox to viewport matrix per preserveAspectRatio (align, meet/slice). */
 static void
 svg_viewbox_matrix(const ns_node *n, double vw, double vh, cairo_matrix_t *out)
 {
@@ -1429,6 +1464,7 @@ svg_viewbox_matrix(const ns_node *n, double vw, double vh, cairo_matrix_t *out)
     cairo_matrix_translate(out, -x, -y);
 }
 
+/* Draws text/tspan content with collapsed whitespace at x/y+dx/dy, honoring text-anchor. */
 static void
 svg_render_text(svg_ctx *ctx, const ns_node *n, const svg_state *st)
 {
@@ -1500,6 +1536,7 @@ svg_vertex_add(GArray *out, double x, double y)
     g_array_append_val(out, v);
 }
 
+/* Records the outgoing direction on the last vertex if it has none yet. */
 static void
 svg_vertex_link(GArray *out, double fromx, double fromy, double tox, double toy)
 {
@@ -1511,6 +1548,7 @@ svg_vertex_link(GArray *out, double fromx, double fromy, double tox, double toy)
     if (!prev->has_out) { prev->out_angle = a; prev->has_out = TRUE; }
 }
 
+/* Collects path vertices with in/out tangent angles for marker placement. */
 static GArray *
 svg_path_vertices(cairo_t *cr)
 {
@@ -1574,6 +1612,7 @@ svg_path_vertices(cairo_t *cr)
     return out;
 }
 
+/* Resolves a marker-start/mid/end (or marker shorthand) url to a marker element. */
 static const ns_node *
 svg_marker_ref(svg_ctx *ctx, const ns_node *n, const char *prop)
 {
@@ -1588,6 +1627,7 @@ svg_marker_ref(svg_ctx *ctx, const ns_node *n, const char *prop)
     return m;
 }
 
+/* Renders a marker at a vertex: orient rotation, markerUnits scale, refX/Y, viewBox, clip. */
 static void
 svg_draw_marker(svg_ctx *ctx, const ns_node *marker, const svg_state *st,
                 double x, double y, double angle)
@@ -1658,6 +1698,7 @@ svg_draw_marker(svg_ctx *ctx, const ns_node *marker, const svg_state *st,
     cairo_restore(cr);
 }
 
+/* Places start/mid/end markers on the current path using bisected tangent angles. */
 static void
 svg_render_markers(svg_ctx *ctx, const ns_node *n, const svg_state *st)
 {
@@ -1706,6 +1747,7 @@ svg_render_children(svg_ctx *ctx, const ns_node *n, const svg_state *st)
     }
 }
 
+/* TRUE if display:none via cascaded style or presentation attribute. */
 static gboolean
 svg_is_hidden(svg_ctx *ctx, const ns_node *n)
 {
@@ -1719,6 +1761,7 @@ svg_is_hidden(svg_ctx *ctx, const ns_node *n)
     return d && g_ascii_strcasecmp(d, "none") == 0;
 }
 
+/* Renders one element subject to depth, tree-depth and total node budget limits. */
 static void
 svg_render_node(svg_ctx *ctx, const ns_node *n, const svg_state *parent)
 {
@@ -1731,6 +1774,7 @@ svg_render_node(svg_ctx *ctx, const ns_node *n, const svg_state *parent)
     ctx->tree_depth--;
 }
 
+/* Renders an element with transform, opacity group, mask and clip; dispatches by tag. */
 static void
 svg_render_element(svg_ctx *ctx, const ns_node *n, const svg_state *parent)
 {
@@ -1895,6 +1939,7 @@ ns_svg_node_is_root(const ns_node *n)
            strcmp(n->name, "svg") == 0;
 }
 
+/* Computes intrinsic width/height/ratio from absolute width, height and viewBox. */
 void
 ns_svg_intrinsic_size(const ns_node *svg, ns_svg_size *out)
 {
@@ -1935,6 +1980,7 @@ ns_svg_intrinsic_size(const ns_node *svg, ns_svg_size *out)
     }
 }
 
+/* Renders an inline or standalone SVG root into a width x height viewport on cr. */
 void
 ns_svg_render_node(cairo_t *cr, const ns_node *svg, double width, double height,
                    GHashTable *styles, const struct ns_style *inherited)
@@ -1995,6 +2041,7 @@ ns_svg_render_node(cairo_t *cr, const ns_node *svg, double width, double height,
     if (ctx.ids) g_hash_table_destroy(ctx.ids);
 }
 
+/* Sniffs the first 1 KiB for an "<svg" tag. */
 gboolean
 ns_svg_bytes_look_like_svg(const guchar *data, gsize len)
 {
@@ -2008,6 +2055,7 @@ ns_svg_bytes_look_like_svg(const guchar *data, gsize len)
     return FALSE;
 }
 
+/* Depth-first search for the first svg element in a parsed document. */
 static const ns_node *
 svg_find_root(const ns_node *n, int depth)
 {
@@ -2026,6 +2074,7 @@ ns_svg_document_root(const ns_node *doc)
     return svg_find_root(doc, 0);
 }
 
+/* Rasterizes SVG bytes to a texture at intrinsic size (default 300x150), pixel-capped. */
 ns_texture *
 ns_svg_decode_bytes(const guchar *data, gsize len, int *out_w, int *out_h)
 {

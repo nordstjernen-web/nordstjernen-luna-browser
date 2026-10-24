@@ -1,4 +1,5 @@
-/* win_launcher.c - Windows bundle launcher and extraction guard.
+/* Nordstjernen Web Browser — Windows bundle launcher that runs the browser exe from app\.
+ * Reports an unextracted ZIP or missing DLLs; forwards args, console and exit code.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -50,6 +51,7 @@ ns_has_prefix(const wchar_t *s, const wchar_t *prefix)
     return wcsncmp(s, prefix, n) == 0;
 }
 
+/* Returns TRUE if any argument selects a console mode such as headless, dump or eval. */
 static bool
 ns_args_need_console(int argc, wchar_t **argv)
 {
@@ -70,6 +72,7 @@ ns_args_need_console(int argc, wchar_t **argv)
     return false;
 }
 
+/* Returns TRUE if a C runtime fd has a valid OS handle. */
 static bool
 ns_fd_is_bound(int fd)
 {
@@ -77,6 +80,7 @@ ns_fd_is_bound(int fd)
     return h != NULL && h != INVALID_HANDLE_VALUE;
 }
 
+/* Attaches to the parent console and rebinds unbound stdio to it, unbuffered. */
 static void
 ns_attach_parent_console(void)
 {
@@ -92,6 +96,7 @@ ns_attach_parent_console(void)
     setvbuf(stderr, NULL, _IONBF, 0);
 }
 
+/* Returns this executable's full path, growing the buffer as needed; caller frees. */
 static wchar_t *
 ns_module_path(void)
 {
@@ -114,6 +119,7 @@ ns_module_path(void)
     }
 }
 
+/* Returns the directory part of a path, keeping drive and root separators; caller frees. */
 static wchar_t *
 ns_dirname(const wchar_t *path)
 {
@@ -140,6 +146,7 @@ ns_dirname(const wchar_t *path)
     return dir;
 }
 
+/* Joins dir and name with a backslash if needed; caller frees. */
 static wchar_t *
 ns_join_path(const wchar_t *dir, const wchar_t *name)
 {
@@ -154,6 +161,7 @@ ns_join_path(const wchar_t *dir, const wchar_t *name)
     return path;
 }
 
+/* Returns TRUE if path exists and is not a directory. */
 static bool
 ns_file_exists(const wchar_t *path)
 {
@@ -162,6 +170,7 @@ ns_file_exists(const wchar_t *path)
            (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+/* Grows a wide-char buffer for extra chars plus NUL; false on overflow or OOM. */
 static bool
 ns_wbuf_reserve(ns_wbuf *b, size_t extra)
 {
@@ -198,6 +207,7 @@ ns_wbuf_append_many(ns_wbuf *b, wchar_t ch, size_t count)
     return true;
 }
 
+/* Appends arg quoted per the MSVC CommandLineToArgvW backslash rules. */
 static bool
 ns_wbuf_append_quoted(ns_wbuf *b, const wchar_t *arg)
 {
@@ -226,6 +236,7 @@ ns_wbuf_append_quoted(ns_wbuf *b, const wchar_t *arg)
     return ns_wbuf_append_char(b, L'"');
 }
 
+/* Builds the quoted command line for the bundled browser exe with our arguments. */
 static wchar_t *
 ns_build_command_line(const wchar_t *browser_path, int argc, wchar_t **argv)
 {
@@ -251,6 +262,7 @@ ns_console_line(const wchar_t *text)
     fflush(stderr);
 }
 
+/* Tells the user to extract the ZIP first, on the console and in a message box if GUI. */
 static void
 ns_report_extract_needed(bool console)
 {
@@ -264,6 +276,7 @@ ns_report_extract_needed(bool console)
                     MB_SETFOREGROUND);
 }
 
+/* Reports a Windows error code from starting the browser, by message box if GUI. */
 static void
 ns_report_start_error(bool console, DWORD error)
 {
@@ -278,6 +291,7 @@ ns_report_start_error(bool console, DWORD error)
                     MB_SETFOREGROUND);
 }
 
+/* Reports missing bundled runtime files, by message box if GUI. */
 static void
 ns_report_runtime_error(bool console)
 {
@@ -291,6 +305,7 @@ ns_report_runtime_error(bool console)
                     MB_SETFOREGROUND);
 }
 
+/* Launcher entry: runs app\ browser exe with our args, flags missing DLLs, returns its code. */
 int WINAPI
 WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         LPSTR lpCmdLine, int nCmdShow)

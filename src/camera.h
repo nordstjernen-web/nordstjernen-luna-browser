@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — webcam enumeration (V4L2) and per-site camera permission.
+/* Nordstjernen Web Browser — webcam enumeration and per-origin camera permission API.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — decoded-image texture abstraction.
+ * Refcounted BGRA pixel buffer with user data, used for decoded images and video frames.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -17,6 +18,7 @@ struct ns_texture {
     GDestroyNotify user_data_destroy;
 };
 
+/* Creates a texture holding a copy of height*stride bytes of BGRA pixels; NULL if short. */
 ns_texture *
 ns_texture_new(int width, int height, ns_texture_format format,
                GBytes *bytes, gsize stride)
@@ -47,6 +49,7 @@ ns_texture_ref(ns_texture *texture)
     return texture;
 }
 
+/* Returns the texture's pixel data and stride without copying. */
 const guchar *
 ns_texture_peek(ns_texture *texture, gsize *stride)
 {
@@ -54,6 +57,7 @@ ns_texture_peek(ns_texture *texture, gsize *stride)
     return texture ? texture->bgra : NULL;
 }
 
+/* Drops a reference; at zero runs the user-data destroy and frees the pixels. */
 void
 ns_texture_unref(ns_texture *texture)
 {
@@ -86,6 +90,7 @@ ns_texture_get_height(ns_texture *texture)
     return texture ? texture->height : 0;
 }
 
+/* Copies the texture's rows into dst with the given stride, clipped to the narrower row. */
 void
 ns_texture_download(ns_texture *texture, guchar *dst, gsize dst_stride)
 {
@@ -104,6 +109,7 @@ ns_texture_get_user_data(ns_texture *texture)
     return texture ? texture->user_data : NULL;
 }
 
+/* Attaches user data, destroying any previous different data; destroys data if no texture. */
 void
 ns_texture_set_user_data(ns_texture *texture, void *data,
                          GDestroyNotify destroy)

@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — per-process thread dump to stderr, incl. a SIGQUIT trigger.
+/* Nordstjernen Web Browser — SIGQUIT-triggered dump of this process's threads to stderr.
+ * Reads state, CPU time and names from /proc/<pid>/task; a helper thread does the writing.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -29,6 +30,7 @@ typedef struct {
 } ns_thread_buf;
 
 __attribute__((format(printf, 2, 3)))
+/* printf-style append to a growable malloc'd buffer; silently drops on allocation failure. */
 static void
 ns_thread_buf_addf(ns_thread_buf *b, const char *fmt, ...)
 {
@@ -58,6 +60,7 @@ ns_thread_buf_addf(ns_thread_buf *b, const char *fmt, ...)
     b->len += (size_t)need;
 }
 
+/* Formats per-thread state, CPU seconds and name from /proc/<pid>/task; caller frees. */
 static char *
 ns_thread_dump_text(int pid, const char *label)
 {
@@ -135,6 +138,7 @@ ns_thread_dump_to_stderr(int pid, const char *label)
 static int   g_sig_pipe[2] = { -1, -1 };
 static char *g_sig_label;
 
+/* Async-signal-safe SIGQUIT handler that wakes the dump thread through a pipe. */
 static void
 ns_thread_dump_signal_handler(int sig)
 {
@@ -149,6 +153,7 @@ ns_thread_dump_signal_handler(int sig)
     errno = saved;
 }
 
+/* Thread that writes a thread dump to stderr each time the signal pipe is poked. */
 static void *
 ns_thread_dump_dispatch(void *arg)
 {
@@ -169,6 +174,7 @@ ns_thread_dump_dispatch(void *arg)
 }
 #endif
 
+/* Installs a SIGQUIT handler that dumps this process's threads to stderr (POSIX only). */
 void
 ns_thread_dump_install_signal(const char *label)
 {

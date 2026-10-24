@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — memory-safe PNG/APNG/GIF/BMP/JPEG/WebP decode via Wuffs.
+ * Sniffs by magic bytes, decodes stills and GIF/APNG frames, and applies WebP ALPH alpha itself.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -25,6 +26,7 @@ typedef enum {
     NS_WUFFS_WEBP,
 } ns_wuffs_format;
 
+/* Sniffs PNG, GIF, BMP, JPEG or WebP from magic bytes. */
 static ns_wuffs_format
 ns_wuffs_detect(const guchar *data, gsize len)
 {
@@ -60,12 +62,14 @@ typedef struct ns_webp_chunks {
     char          body_tag[4];
 } ns_webp_chunks;
 
+/* TRUE if the WebP uses the extended (VP8X) container. */
 static gboolean
 ns_webp_is_extended(const guchar *data, gsize len)
 {
     return len >= 21 && memcmp(data + 12, "VP8X", 4) == 0;
 }
 
+/* Finds the ALPH and VP8/VP8L image chunks in an extended WebP, incl. the first ANMF frame. */
 static gboolean
 ns_webp_find_chunks(const guchar *data, gsize len, ns_webp_chunks *out)
 {
@@ -119,6 +123,7 @@ ns_webp_find_chunks(const guchar *data, gsize len, ns_webp_chunks *out)
     return FALSE;
 }
 
+/* Wraps a VP8/VP8L payload in a minimal simple-format RIFF WebP; caller frees. */
 static guint8 *
 ns_webp_bare_container(const char tag[4], const guchar *payload, gsize payload_len,
                        gsize *out_len)
@@ -146,6 +151,7 @@ ns_webp_bare_container(const char tag[4], const guchar *payload, gsize payload_l
     return out;
 }
 
+/* TRUE if a PNG has an acTL chunk before its first IDAT (APNG). */
 gboolean
 ns_image_png_is_animated(const guchar *data, gsize len)
 {
@@ -166,6 +172,7 @@ ns_image_png_is_animated(const guchar *data, gsize len)
     return FALSE;
 }
 
+/* Allocates the Wuffs image decoder matching the sniffed format; caller frees. */
 static wuffs_base__image_decoder *
 ns_wuffs_pick_decoder(const guchar *data, gsize len)
 {
@@ -205,6 +212,7 @@ ns_wuffs_canvas_close(ns_wuffs_canvas *c)
     memset(c, 0, sizeof *c);
 }
 
+/* Sets up a decoder, size-checked pixel buffer and work buffer for an image. */
 static gboolean
 ns_wuffs_canvas_open(ns_wuffs_canvas *c, const guchar *data, gsize len,
                      uint32_t pixel_format)
@@ -259,6 +267,7 @@ fail:
     return FALSE;
 }
 
+/* Decodes the first frame to BGRA (premultiplied or not); caller frees the pixels. */
 static guint8 *
 ns_wuffs_decode_still_to_bgra(const guchar *data, gsize len, gboolean premultiply,
                               int *out_w, int *out_h,
@@ -295,6 +304,7 @@ ns_wuffs_decode_still_to_bgra(const guchar *data, gsize len, gboolean premultipl
     return pix;
 }
 
+/* Reverses the WebP ALPH horizontal, vertical or gradient prediction filter in place. */
 static void
 ns_webp_alpha_unfilter(guint8 *plane, int w, int h, int method)
 {
@@ -324,6 +334,7 @@ ns_webp_alpha_unfilter(guint8 *plane, int w, int h, int method)
     }
 }
 
+/* Decodes a WebP ALPH chunk (raw or VP8L-compressed) into a w*h alpha plane. */
 static guint8 *
 ns_webp_alpha_plane(const guchar *alph, gsize alph_len, int w, int h)
 {
@@ -379,6 +390,7 @@ ns_webp_alpha_plane(const guchar *alph, gsize alph_len, int w, int h)
     return plane;
 }
 
+/* Applies an alpha plane to opaque BGRA pixels, premultiplying the color channels. */
 static void
 ns_webp_apply_alpha(guint8 *pix, gsize stride, int w, int h, const guint8 *plane)
 {
@@ -396,6 +408,7 @@ ns_webp_apply_alpha(guint8 *pix, gsize stride, int w, int h, const guint8 *plane
     }
 }
 
+/* Decodes a still image to premultiplied BGRA, handling extended lossy WebP with alpha. */
 guint8 *
 ns_image_wuffs_decode_to_bgra(const guchar *data, gsize len,
                               int *out_w, int *out_h,
@@ -436,6 +449,7 @@ ns_image_wuffs_decode_to_bgra(const guchar *data, gsize len,
     return pix;
 }
 
+/* Decodes a still image into a premultiplied BGRA texture. */
 ns_texture *
 ns_image_decode_wuffs(const guchar *data, gsize len, int *out_w, int *out_h)
 {
@@ -457,6 +471,7 @@ ns_image_decode_wuffs(const guchar *data, gsize len, int *out_w, int *out_h)
     return tex;
 }
 
+/* Decodes GIF/APNG frames with disposal handling into full-canvas BGRA frames (capped). */
 GArray *
 ns_image_decode_wuffs_anim_to_pixels(const guchar *data, gsize len,
                                      int *out_w, int *out_h)

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — the thread the page engine runs on, with its own main context.
+ * Started on first post with an 8 MiB stack; runs queued jobs in order outside nested iterations.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -25,6 +26,7 @@ typedef struct {
 static GMainContext *g_ctx;
 static GAsyncQueue  *g_jobs;
 
+/* True when jobs are queued and the loop is not inside a nested main iteration. */
 static gboolean
 jobs_ready(void)
 {
@@ -46,6 +48,7 @@ jobs_check(GSource *source)
     return jobs_ready();
 }
 
+/* GSource dispatch that runs every queued engine job in order. */
 static gboolean
 jobs_dispatch(GSource *source, GSourceFunc callback, gpointer user_data)
 {
@@ -76,6 +79,7 @@ engine_set_os_thread_name(void)
 #endif
 }
 
+/* Engine thread body: W^X setup, thread naming, job source and main loop on its context. */
 static gpointer
 engine_main(gpointer data)
 {
@@ -95,6 +99,7 @@ engine_main(gpointer data)
     return NULL;
 }
 
+/* Starts the detached engine thread with an 8 MiB stack, falling back to GThread. */
 static void
 engine_spawn(void)
 {
@@ -111,6 +116,7 @@ engine_spawn(void)
     g_thread_unref(g_thread_new("ns-engine", engine_main, NULL));
 }
 
+/* Creates the engine context and job queue and spawns the thread exactly once. */
 static void
 engine_start(void)
 {
@@ -123,6 +129,7 @@ engine_start(void)
     }
 }
 
+/* Queues fn(data) to run on the engine thread, starting it on first use. */
 void
 ns_engine_thread_post(NsEngineJob fn, gpointer data)
 {

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — Media Queries Level 4 parser, evaluator and serializer.
+ * Three-valued evaluation against device and viewport state, cached and recorded as dependencies.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -35,6 +36,7 @@ ns_css_set_device_size(double w, double h)
     if (h > 0) g_mq_device.height = h;
 }
 
+/* Replaces the media device description, sanitizing values, and drops the stylesheet cache. */
 void
 ns_css_set_media_device(const ns_css_media_device *device)
 {
@@ -56,6 +58,7 @@ ns_css_get_media_device(ns_css_media_device *device)
     if (device) *device = g_mq_device;
 }
 
+/* Pushes a viewport size override for evaluating queries (e.g. iframes); 16 levels max. */
 void
 ns_css_media_viewport_push(double w, double h)
 {
@@ -71,6 +74,7 @@ ns_css_media_viewport_pop(void)
     if (g_mq_stack_len > 0) g_mq_stack_len--;
 }
 
+/* Viewport width for media queries: innermost pushed override, else the CSS viewport. */
 static double
 mq_vw(void)
 {
@@ -78,6 +82,7 @@ mq_vw(void)
     return ns_css_viewport_w();
 }
 
+/* Viewport height for media queries: innermost pushed override, else the CSS viewport. */
 static double
 mq_vh(void)
 {
@@ -105,6 +110,7 @@ mq_not(mq_tri v)
     return MQ_DUNNO;
 }
 
+/* Three-valued (Kleene) AND used by Media Queries 4 evaluation. */
 static mq_tri
 mq_and(mq_tri a, mq_tri b)
 {
@@ -113,6 +119,7 @@ mq_and(mq_tri a, mq_tri b)
     return MQ_DUNNO;
 }
 
+/* Three-valued (Kleene) OR used by Media Queries 4 evaluation. */
 static mq_tri
 mq_or(mq_tri a, mq_tri b)
 {
@@ -277,6 +284,7 @@ mq_ident_char(char c)
     return g_ascii_isalnum(c) || c == '-' || c == '_';
 }
 
+/* Reads an identifier into buf lowercased; NULL if none or too long. */
 static const char *
 mq_read_ident(const char *p, const char *end, char *buf, gsize buflen)
 {
@@ -290,6 +298,7 @@ mq_read_ident(const char *p, const char *end, char *buf, gsize buflen)
     return p;
 }
 
+/* TRUE if keyword kw starts at p followed by whitespace, '(' or end. */
 static gboolean
 mq_kw_at(const char *p, const char *end, const char *kw)
 {
@@ -300,6 +309,7 @@ mq_kw_at(const char *p, const char *end, const char *kw)
     return after == end || ns_is_ascii_ws(*after) || *after == '(';
 }
 
+/* Finds the ')' matching an already-consumed '(', or end if unbalanced. */
 static const char *
 mq_close_paren(const char *p, const char *end)
 {
@@ -312,6 +322,7 @@ mq_close_paren(const char *p, const char *end)
     return end;
 }
 
+/* Checks a general-enclosed body is a valid <any-value>: balanced brackets, no ';' or '!'. */
 static gboolean
 mq_any_value_ok(const char *p, const char *end)
 {
@@ -330,6 +341,7 @@ mq_any_value_ok(const char *p, const char *end)
     return TRUE;
 }
 
+/* Converts a media query length to px (font units assume 16px); NaN if unit unknown. */
 static double
 mq_length_unit_px(double v, const char *unit)
 {
@@ -353,6 +365,7 @@ mq_length_unit_px(double v, const char *unit)
     return NAN;
 }
 
+/* Converts a resolution value in dppx/x/dpi/dpcm to dppx; NaN if unknown. */
 static double
 mq_resolution_unit_dppx(double v, const char *unit)
 {
@@ -375,6 +388,7 @@ mq_parse_number(const char *s, const char *end, double *out,
     return TRUE;
 }
 
+/* Parses a media feature value by type: keyword, integer, ratio, resolution or length. */
 static gboolean
 mq_value_parse(const char *s, const char *e, mq_feature_type type,
                const mq_feature_def *f, mq_value *out)
@@ -491,6 +505,7 @@ mq_value_parse(const char *s, const char *e, mq_feature_type type,
     return TRUE;
 }
 
+/* Finds the first top-level range operator (<, <=, >, >=, =) and its length. */
 static const char *
 mq_find_op(const char *p, const char *end, mq_op *op, int *oplen)
 {
@@ -517,6 +532,7 @@ mq_find_op(const char *p, const char *end, mq_op *op, int *oplen)
     return NULL;
 }
 
+/* TRUE if the text is a range-capable feature name (not discrete, not grid). */
 static gboolean
 mq_side_is_feature(const char *s, const char *e, const mq_feature_def **out)
 {
@@ -533,6 +549,7 @@ mq_side_is_feature(const char *s, const char *e, const mq_feature_def **out)
     return TRUE;
 }
 
+/* Parses a media feature: plain, min-/max-, -webkit-device-pixel-ratio, range, boolean. */
 static mq_node *
 mq_parse_feature(const char *s, const char *e)
 {
@@ -659,6 +676,7 @@ mq_parse_feature(const char *s, const char *e)
 static mq_node *mq_parse_condition(const char **pp, const char *end,
                                    gboolean allow_or, int depth);
 
+/* Parses <media-in-parens>: nested condition, feature, or <general-enclosed>. */
 static mq_node *
 mq_parse_in_parens(const char **pp, const char *end, int depth)
 {
@@ -703,6 +721,7 @@ mq_parse_in_parens(const char **pp, const char *end, int depth)
     return NULL;
 }
 
+/* Parses a media condition (not / and-chain / or-chain); or disallowed after a media type. */
 static mq_node *
 mq_parse_condition(const char **pp, const char *end, gboolean allow_or,
                    int depth)
@@ -754,6 +773,7 @@ mq_parse_condition(const char **pp, const char *end, gboolean allow_or,
     return n;
 }
 
+/* TRUE for identifiers that cannot be media types (not, only, and, or, layer). */
 static gboolean
 mq_type_reserved(const char *ident)
 {
@@ -762,6 +782,7 @@ mq_type_reserved(const char *ident)
            strcmp(ident, "layer") == 0;
 }
 
+/* Parses one <media-query>, as a bare condition or [not|only] type [and condition]. */
 static void
 mq_parse_query(const char *s, const char *e, mq_query *out)
 {
@@ -812,6 +833,7 @@ mq_parse_query(const char *s, const char *e, mq_query *out)
     out->valid = TRUE;
 }
 
+/* Current keyword value of a discrete media feature for this device; NULL if unsupported. */
 static const char *
 mq_discrete_current(const mq_feature_def *f)
 {
@@ -851,6 +873,7 @@ mq_discrete_current(const mq_feature_def *f)
     return NULL;
 }
 
+/* Current numeric value (as num/denom) of a range media feature; FALSE if unknown. */
 static gboolean
 mq_feature_current(const mq_feature_def *f, double *num, double *denom)
 {
@@ -885,6 +908,7 @@ mq_feature_current(const mq_feature_def *f, double *num, double *denom)
     return TRUE;
 }
 
+/* Compares ratios a/ad op b/bd by cross-multiplication. */
 static mq_tri
 mq_compare(double a, double ad, mq_op op, double b, double bd)
 {
@@ -900,6 +924,7 @@ mq_compare(double a, double ad, mq_op op, double b, double bd)
     return MQ_DUNNO;
 }
 
+/* Evaluates a media feature in boolean, plain or range form against the current device. */
 static mq_tri
 mq_eval_feature(const mq_node *n)
 {
@@ -945,6 +970,7 @@ mq_eval_feature(const mq_node *n)
     return mq_compare(cur, curd, n->op1, n->v1.num, n->v1.denom);
 }
 
+/* Evaluates a condition tree with three-valued logic; general-enclosed is unknown. */
 static mq_tri
 mq_eval_node(const mq_node *n, int depth)
 {
@@ -978,6 +1004,7 @@ mq_eval_node(const mq_node *n, int depth)
 
 static gboolean g_mq_print;
 
+/* Switches between screen and print media, dropping cached stylesheets on change. */
 void
 ns_css_set_print_media(gboolean printing)
 {
@@ -986,6 +1013,7 @@ ns_css_set_print_media(gboolean printing)
     ns_css_stylesheet_cache_drop();
 }
 
+/* Matches a media type against all and the current screen/print mode. */
 static mq_tri
 mq_eval_type(const char *type)
 {
@@ -996,6 +1024,7 @@ mq_eval_type(const char *type)
     return MQ_NO;
 }
 
+/* Evaluates one parsed query; invalid queries are "not all" and never match. */
 static mq_tri
 mq_eval_query(const mq_query *q)
 {
@@ -1006,6 +1035,7 @@ mq_eval_query(const mq_query *q)
     return r;
 }
 
+/* Splits a media query list at the next top-level comma. */
 static const char *
 mq_split_next(const char *p, const char *end, const char **seg_end)
 {
@@ -1027,6 +1057,7 @@ mq_split_next(const char *p, const char *end, const char **seg_end)
     return end;
 }
 
+/* Replaces CSS comments outside strings with a space; caller frees. */
 static char *
 mq_strip_comments(const char *query)
 {
@@ -1055,6 +1086,7 @@ mq_strip_comments(const char *query)
     return g_string_free(out, FALSE);
 }
 
+/* TRUE if any query in the list matches; an empty list matches. */
 static gboolean
 mq_query_list_matches(const char *query)
 {
@@ -1108,6 +1140,7 @@ mq_record_free(gpointer data)
 
 static GHashTable *g_mq_cache;
 
+/* Snapshots everything media query results depend on (viewport, device, print, prefs). */
 static void
 mq_env_current(mq_env *env)
 {
@@ -1130,6 +1163,7 @@ mq_query_matches_parsed(const char *query)
     return matches;
 }
 
+/* Evaluates a query list via a cache keyed by query text and environment snapshot. */
 static gboolean
 mq_query_matches_unrecorded(const char *query)
 {
@@ -1153,6 +1187,7 @@ mq_query_matches_unrecorded(const char *query)
     return matches;
 }
 
+/* Evaluates a media query list, logging the result to the active recorder if any. */
 gboolean
 ns_css_media_query_matches(const char *query)
 {
@@ -1166,6 +1201,7 @@ ns_css_media_query_matches(const char *query)
     return matches;
 }
 
+/* Creates a media dependency record whose first entry holds the cached environment. */
 GPtrArray *
 ns_css_media_record_new(void)
 {
@@ -1176,6 +1212,7 @@ ns_css_media_record_new(void)
     return record;
 }
 
+/* Installs a recorder for media query results; returns the previous one. */
 GPtrArray *
 ns_css_media_record_swap(GPtrArray *recorder)
 {
@@ -1184,6 +1221,7 @@ ns_css_media_record_swap(GPtrArray *recorder)
     return previous;
 }
 
+/* Records a dependency on the current viewport size in the active recorder. */
 void
 ns_css_media_record_viewport_use(void)
 {
@@ -1194,6 +1232,7 @@ ns_css_media_record_viewport_use(void)
     g_ptr_array_add(g_mq_recorder, r);
 }
 
+/* TRUE if every recorded query/viewport result still holds in the current environment. */
 gboolean
 ns_css_media_record_holds(const GPtrArray *record)
 {
@@ -1226,6 +1265,7 @@ ns_css_media_record_holds(const GPtrArray *record)
     return TRUE;
 }
 
+/* Serializes a media feature value, keeping the author's unit and calc() wrapper. */
 static void
 mq_serialize_value(GString *out, const mq_value *v, mq_feature_type type)
 {
@@ -1268,6 +1308,7 @@ mq_op_str(mq_op op)
     return "=";
 }
 
+/* Serializes a media condition tree in canonical form. */
 static void
 mq_serialize_node(GString *out, const mq_node *n, int depth)
 {
@@ -1329,6 +1370,7 @@ mq_serialize_node(GString *out, const mq_node *n, int depth)
     }
 }
 
+/* Serializes one media query; invalid ones become "not all". */
 static void
 mq_serialize_query(GString *out, const mq_query *q)
 {
@@ -1351,6 +1393,7 @@ mq_serialize_query(GString *out, const mq_query *q)
     mq_serialize_node(out, q->cond, 0);
 }
 
+/* Serializes a media query list per CSSOM; caller frees. */
 char *
 ns_css_media_list_serialize(const char *query)
 {

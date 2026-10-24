@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — CSS parser, selectors, cascade.
+/* Nordstjernen Web Browser — CSS engine: parsing, selector matching, cascade and computed values.
+ * Also var()/@property, calc, colors, @media/@container/@layer, CSSOM serialization, restyle.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -27,6 +28,7 @@ static __thread double g_root_line_px;
 
 static GHashTable *g_defined_elements;
 
+/* Records a custom element tag (lowercased) as defined so :defined can match it. */
 void
 ns_css_register_defined_element(const char *tag)
 {
@@ -50,6 +52,7 @@ ns_css_registered_property_serial(void)
     return g_js_registered_serial;
 }
 
+/* Validates a custom property name: "--" prefix, non-empty rest, no ASCII whitespace. */
 static gboolean
 css_custom_property_name(const char *name)
 {
@@ -60,6 +63,7 @@ css_custom_property_name(const char *name)
     return TRUE;
 }
 
+/* Implements CSS.registerProperty(): validates name, syntax and initial value, then stores. */
 ns_css_register_status
 ns_css_register_property(const char *name, const char *syntax_text,
                          gboolean inherits, const char *initial_value,
@@ -93,6 +97,7 @@ ns_css_register_property(const char *name, const char *syntax_text,
     return NS_CSS_REGISTER_OK;
 }
 
+/* Drops all JS-registered properties and bumps the registration serial. */
 void
 ns_css_clear_registered_properties(void)
 {
@@ -156,6 +161,7 @@ ns_css_set_frame_viewport_cb(void (*cb)(const ns_node *frame,
     g_frame_viewport_cb = cb;
 }
 
+/* Adds v to the vw/vh/vmin/vmax bucket for a viewport unit; s/l/d variants share buckets. */
 static void
 viewport_unit_coeff(ns_css_unit unit, double v, double *vw, double *vh,
                     double *vmin, double *vmax)
@@ -206,6 +212,7 @@ viewport_coeff_px(double vw, double vh, double vmin, double vmax,
             vmax * MAX(width, height)) / 100.0;
 }
 
+/* Resolves a viewport-relative length to px against the current global viewport size. */
 static double
 viewport_resolve(double v, ns_css_unit unit)
 {
@@ -581,6 +588,7 @@ ns_css_prop_logical_group(int prop)
         ? kProperty[prop].logical_group : 0;
 }
 
+/* Maps a logical property to the physical property whose value syntax it shares. */
 static int
 ns_css_prop_syntax(int prop)
 {
@@ -589,6 +597,7 @@ ns_css_prop_syntax(int prop)
         ? prop : (int)kProperty[prop].syntax;
 }
 
+/* Maps writing-mode keywords to 0 horizontal, 1 vertical-rl (incl. tb), 2 vertical-lr. */
 static int
 writing_mode_code(const char *keyword)
 {
@@ -611,6 +620,7 @@ ns_css_writing_mode(const ns_style *s)
     return writing_mode_code(v->u.keyword);
 }
 
+/* Returns 1 for upright, 2 for sideways/sideways-right, 0 for mixed or unset. */
 int
 ns_css_text_orientation(const ns_style *s)
 {
@@ -634,6 +644,7 @@ is_ident(char c)
     return is_ident_start(c) || (c >= '0' && c <= '9');
 }
 
+/* Replaces NUL, surrogate and out-of-range escape code points with U+FFFD per CSS Syntax. */
 static gunichar
 css_unescape_cp(gunichar cp)
 {
@@ -642,6 +653,7 @@ css_unescape_cp(gunichar cp)
     return cp;
 }
 
+/* Consumes up to 6 hex digits plus one optional whitespace and appends the code point. */
 static void
 css_append_hex_escape(GString *out, const char **pp, const char *end)
 {
@@ -662,6 +674,7 @@ css_append_hex_escape(GString *out, const char **pp, const char *end)
     *pp = p;
 }
 
+/* Appends the char at *pp to out, decoding a backslash escape if present; advances *pp. */
 void
 ns_css_append_unescaped(GString *out, const char **pp)
 {
@@ -691,6 +704,7 @@ ns_css_append_unescaped(GString *out, const char **pp)
     *pp = p;
 }
 
+/* Reads an identifier at *pp with escapes decoded; returns a new string and advances *pp. */
 static char *
 read_css_ident(const char **pp, const char *end)
 {
@@ -725,6 +739,7 @@ read_css_ident(const char **pp, const char *end)
     return g_string_free(out, FALSE);
 }
 
+/* Reads a quoted string decoding escapes and line continuations; stops at a raw newline. */
 static char *
 read_css_string(const char **pp, const char *end)
 {
@@ -814,6 +829,7 @@ css_wide_keyword_is(const char *kw)
            strcmp(kw, "revert-rule") == 0;
 }
 
+/* Parses trimmed text as a CSS-wide keyword (inherit, initial, unset, revert...); else NULL. */
 static ns_css_value *
 parse_css_wide_keyword(const char *text)
 {
@@ -840,6 +856,7 @@ css_text_is_wide_keyword(const char *text)
     return wide;
 }
 
+/* Shares a value by bumping its refcount; returns the same pointer, not a copy. */
 ns_css_value *
 ns_css_value_dup(const ns_css_value *v)
 {
@@ -848,6 +865,7 @@ ns_css_value_dup(const ns_css_value *v)
     return (ns_css_value *)v;
 }
 
+/* Drops one reference; at zero frees the value and every layer in its next_layer chain. */
 void
 ns_css_value_free(ns_css_value *v)
 {
@@ -879,6 +897,7 @@ ns_css_value_layer_count(const ns_css_value *head)
     return n;
 }
 
+/* Returns layer index modulo the layer count, cycling like repeated CSS list values. */
 const ns_css_value *
 ns_css_value_layer(const ns_css_value *head, int index)
 {
@@ -890,6 +909,7 @@ ns_css_value_layer(const ns_css_value *head, int index)
     return l;
 }
 
+/* Returns a px/number length or a calc's px part; any other value yields fallback. */
 double
 ns_css_length_or(const ns_css_value *v, double fallback)
 {
@@ -913,6 +933,7 @@ ns_css_calc_is_math_fn(const ns_css_value *v)
 static double css_round_step(int strategy, double a, double b);
 static double css_mod_rem(gboolean is_mod, double a, double b);
 
+/* Evaluates a calc math function (round, mod, rem, abs, clamp, min, max) to px. */
 double
 ns_css_calc_math_fn_px(const ns_css_value *v, double basis)
 {
@@ -952,6 +973,7 @@ ns_css_calc_math_fn_px(const ns_css_value *v, double basis)
     return out;
 }
 
+/* Resolves a length or calc to non-negative px; font units use fixed approximations. */
 double
 ns_css_dimension_px(const ns_css_value *v, double font_size, double basis)
 {
@@ -1033,6 +1055,7 @@ ns_css_dimension_px(const ns_css_value *v, double font_size, double basis)
     }
 }
 
+/* Resolves a size property to px clamped by its min/max properties; zero bounds are ignored. */
 double
 ns_css_clamped_dimension_px(const ns_style *s, ns_css_prop value_prop,
                             ns_css_prop min_prop, ns_css_prop max_prop,
@@ -1047,6 +1070,7 @@ ns_css_clamped_dimension_px(const ns_style *s, ns_css_prop value_prop,
     return out;
 }
 
+/* Resolves a multicol length to px (em/rem as 16px); returns fallback for other units. */
 static double
 column_len_px(const ns_css_value *v, double basis, double fallback)
 {
@@ -1068,6 +1092,7 @@ column_len_px(const ns_css_value *v, double basis, double fallback)
     }
 }
 
+/* Computes multicol column count from column-count or column-width; gap defaults 16px. */
 int
 ns_css_used_column_count(const ns_style *s, double avail_w, double *out_gap)
 {
@@ -1106,6 +1131,7 @@ ns_css_keyword_is(const ns_css_value *v, const char *kw)
            v->u.keyword && strcmp(v->u.keyword, kw) == 0;
 }
 
+/* Trims, unquotes and unescapes one font-family entry, collapsing internal whitespace. */
 static char *
 font_family_token_clean(const char *start, gsize len)
 {
@@ -1143,6 +1169,7 @@ font_family_token_clean(const char *start, gsize len)
     return ret;
 }
 
+/* Maps generic family keywords (system-ui, ui-*, serif...) to backend names; else NULL. */
 static char *
 font_family_map_generic(const char *token)
 {
@@ -1173,6 +1200,7 @@ font_family_map_generic(const char *token)
     return ret;
 }
 
+/* Maps common proprietary sans families (Arial, Helvetica, Roboto, SF Pro) to sans-serif. */
 static char *
 font_family_substitute(const char *token)
 {
@@ -1194,6 +1222,7 @@ static gboolean (*g_font_available_cb)(const char *family);
 static guint64 (*g_font_generation_cb)(void);
 static guint g_font_oracle_serial;
 
+/* Installs the font-availability oracle and invalidates the family resolution memo. */
 void
 ns_css_set_font_available_cb(gboolean (*cb)(const char *family))
 {
@@ -1220,6 +1249,7 @@ ns_css_set_font_metrics_cb(
     g_font_metrics_cb = cb;
 }
 
+/* Returns the ex/ch/cap/ic size in px from the font-metrics callback, else fixed ratios. */
 static double
 font_relative_unit_px(ns_css_unit unit, double font_px,
                       const char *family, int weight, gboolean italic)
@@ -1241,6 +1271,7 @@ font_relative_unit_px(ns_css_unit unit, double font_px,
     }
 }
 
+/* Rewrites ex/ch/cap/ic values as em using fixed ratios (0.5, 0.5, 0.7, 1). */
 static void
 legacy_em_normalize(double *val, ns_css_unit *unit)
 {
@@ -1253,6 +1284,7 @@ legacy_em_normalize(double *val, ns_css_unit *unit)
     }
 }
 
+/* Picks the first usable family (generic, available or substitute); else sans-serif. */
 static char *
 font_family_resolve(const char *css_family)
 {
@@ -1315,6 +1347,7 @@ font_family_resolve(const char *css_family)
     return fallback ? fallback : g_strdup("sans-serif");
 }
 
+/* Computes bolder/lighter from the parent weight per the CSS Fonts relative-weight table. */
 static int
 font_weight_relative(int parent, gboolean bolder)
 {
@@ -1324,6 +1357,7 @@ font_weight_relative(int parent, gboolean bolder)
     return parent < 550 ? 100 : parent < 750 ? 400 : 700;
 }
 
+/* Per-thread memoized font_family_resolve, flushed on font generation change; caller frees. */
 char *
 ns_css_font_family_for_pango(const char *css_family)
 {
@@ -1347,6 +1381,7 @@ ns_css_font_family_for_pango(const char *css_family)
     return resolved;
 }
 
+/* Converts a font-weight keyword or number to 1..1000; bolder/lighter use fallback. */
 int
 ns_css_font_weight_number(const ns_css_value *v, int fallback)
 {
@@ -1363,6 +1398,7 @@ ns_css_font_weight_number(const ns_css_value *v, int fallback)
     return fallback;
 }
 
+/* Looks up a CSS named or system color case-insensitively; FALSE if unknown. */
 static gboolean
 named_color(const char *name, guint8 *r, guint8 *g, guint8 *b)
 {
@@ -1680,6 +1716,7 @@ static const struct {
     { "hwb",               NS_CSS_COLOR_HWB },
 };
 
+/* Matches a color space name of len bytes; predefined_only restricts to color() spaces. */
 static gboolean
 color_space_by_name(const char *name, gsize len, gboolean predefined_only,
                     ns_css_color_space *out)
@@ -1696,6 +1733,7 @@ color_space_by_name(const char *name, gsize len, gboolean predefined_only,
     return FALSE;
 }
 
+/* Returns the serialization name of a color space; plain xyz serializes as xyz-d65. */
 static const char *
 color_space_name(ns_css_color_space space)
 {
@@ -1706,6 +1744,7 @@ color_space_name(ns_css_color_space space)
     return "srgb";
 }
 
+/* Returns the hue channel index for polar spaces (HSL/HWB 0, LCH/OKLCH 2), else -1. */
 static int
 color_space_hue_index(ns_css_color_space space)
 {
@@ -1733,6 +1772,7 @@ typedef enum {
     NS_COLOR_CAT_OPPONENT_B,
 } ns_color_category;
 
+/* Assigns analogous-component categories per channel for carrying missing components. */
 static void
 color_space_categories(ns_css_color_space space, ns_color_category cat[3])
 {
@@ -1774,6 +1814,7 @@ color_space_is_srgb_family(ns_css_color_space space)
            space == NS_CSS_COLOR_HSL || space == NS_CSS_COLOR_HWB;
 }
 
+/* Wraps a hue into [0, 360) degrees; non-finite hues become 0. */
 static double
 color_hue_normalize(double h)
 {
@@ -1793,6 +1834,7 @@ mat3_apply(const double m[9], const double v[3], double out[3])
     for (int i = 0; i < 3; i++) out[i] = r[i];
 }
 
+/* Applies the inverse of a 3x3 matrix (via adjugate/determinant) to a vector. */
 static void
 mat3_apply_inverse(const double m[9], const double v[3], double out[3])
 {
@@ -1875,6 +1917,7 @@ static const double ns_oklab_to_lms[9] = {
     1.0, -0.0894841775298119, -1.2914855480194092,
 };
 
+/* sRGB transfer-function decode, mirrored for negative (extended-range) components. */
 static double
 srgb_to_linear(double c)
 {
@@ -1935,6 +1978,7 @@ rec2020_from_linear(double c)
     return c < 0 ? -v : v;
 }
 
+/* Converts HSL (deg, %, %) to sRGB 0..1 using the CSS Color 4 sample algorithm. */
 static void
 hsl_to_srgb(const double hsl[3], double rgb[3])
 {
@@ -1948,6 +1992,7 @@ hsl_to_srgb(const double hsl[3], double rgb[3])
     }
 }
 
+/* Returns the hue in degrees of an sRGB color, or NaN when achromatic. */
 static double
 srgb_hue(const double rgb[3])
 {
@@ -1963,6 +2008,7 @@ srgb_hue(const double rgb[3])
     return h >= 360.0 ? h - 360.0 : h;
 }
 
+/* Converts sRGB to HSL (deg, %, %); a negative saturation flips the hue by 180 degrees. */
 static void
 srgb_to_hsl(const double rgb[3], double hsl[3])
 {
@@ -1982,6 +2028,7 @@ srgb_to_hsl(const double rgb[3], double hsl[3])
     hsl[2] = l * 100.0;
 }
 
+/* Converts HWB to sRGB; whiteness + blackness >= 1 yields the normalized gray. */
 static void
 hwb_to_srgb(const double hwb[3], double rgb[3])
 {
@@ -2008,6 +2055,7 @@ static const double ns_d50_white[3] = {
     0.3457 / 0.3585, 1.0, (1.0 - 0.3457 - 0.3585) / 0.3585,
 };
 
+/* Converts CIE Lab to D50-relative XYZ per the CSS Color 4 sample code. */
 static void
 lab_to_xyz_d50(const double lab[3], double xyz[3])
 {
@@ -2024,6 +2072,7 @@ lab_to_xyz_d50(const double lab[3], double xyz[3])
     xyz[2] = z * ns_d50_white[2];
 }
 
+/* Converts D50-relative XYZ to CIE Lab per the CSS Color 4 sample code. */
 static void
 xyz_d50_to_lab(const double xyz[3], double lab[3])
 {
@@ -2039,6 +2088,7 @@ xyz_d50_to_lab(const double xyz[3], double lab[3])
     lab[2] = 200.0 * (f[1] - f[2]);
 }
 
+/* Converts LCH-style polar coordinates to Lab-style rectangular; non-finite chroma is 0. */
 static void
 polar_to_rect(const double lch[3], double lab[3])
 {
@@ -2057,6 +2107,7 @@ rect_to_polar(const double lab[3], double lch[3])
     lch[2] = color_hue_normalize(atan2(lab[2], lab[1]) * 180.0 / G_PI);
 }
 
+/* Converts OKLab to D65 XYZ through the cubed LMS intermediate. */
 static void
 oklab_to_xyz(const double oklab[3], double xyz[3])
 {
@@ -2078,6 +2129,7 @@ xyz_to_oklab(const double xyz[3], double oklab[3])
 static void
 color_space_to_srgb(ns_css_color_space space, const double c[3], double rgb[3]);
 
+/* Converts coordinates in any supported color space to D65 XYZ. */
 static void
 color_space_to_xyz(ns_css_color_space space, const double c[3], double xyz[3])
 {
@@ -2141,6 +2193,7 @@ color_space_to_xyz(ns_css_color_space space, const double c[3], double xyz[3])
     }
 }
 
+/* Converts D65 XYZ to coordinates in the given color space. */
 static void
 color_space_from_xyz(ns_css_color_space space, const double xyz[3], double c[3])
 {
@@ -2207,6 +2260,7 @@ color_space_from_xyz(ns_css_color_space space, const double xyz[3], double c[3])
     }
 }
 
+/* Converts color coordinates to sRGB, directly for sRGB/HSL/HWB and otherwise via XYZ. */
 static void
 color_space_to_srgb(ns_css_color_space space, const double c[3], double rgb[3])
 {
@@ -2229,6 +2283,7 @@ color_space_to_srgb(ns_css_color_space space, const double c[3], double rgb[3])
     }
 }
 
+/* Converts sRGB to the given space, directly for sRGB/HSL/HWB and otherwise via XYZ. */
 static void
 color_space_from_srgb(ns_css_color_space space, const double rgb[3], double c[3])
 {
@@ -2251,6 +2306,7 @@ color_space_from_srgb(ns_css_color_space space, const double rgb[3], double c[3]
     }
 }
 
+/* Snaps near-zero saturation/chroma to zero and normalizes HWB grays before conversion. */
 static void
 color_make_achromatic(ns_css_color_space space, double c[3])
 {
@@ -2277,6 +2333,7 @@ color_make_achromatic(ns_css_color_space space, double c[3])
     }
 }
 
+/* Reports whether the hue is powerless (achromatic) in a polar space; zeroes tiny chroma. */
 static gboolean
 color_hue_powerless(ns_css_color_space space, double c[3])
 {
@@ -2300,6 +2357,7 @@ color_hue_powerless(ns_css_color_space space, double c[3])
     }
 }
 
+/* Computes extra missing-component bits implied when converting between polar/rect spaces. */
 static guint8
 color_missing_sets(ns_css_color_space from, guint8 none,
                    ns_css_color_space to)
@@ -2327,6 +2385,7 @@ color_missing_sets(ns_css_color_space from, guint8 none,
     return 0;
 }
 
+/* Converts a color to target space, carrying forward missing components per CSS Color 4 §12. */
 static void
 color_convert(const ns_color *in, ns_css_color_space target, ns_color *out)
 {
@@ -2375,6 +2434,7 @@ color_convert(const ns_color *in, ns_css_color_space target, ns_color *out)
         if (!isfinite(out->c[i]) || (out->none & (1 << i))) out->c[i] = 0.0;
 }
 
+/* Maps a 0..1 component to a rounded, clamped byte; NaN becomes 0, +inf 255. */
 static guint8
 color_unit_byte(double v)
 {
@@ -2384,6 +2444,7 @@ color_unit_byte(double v)
     return (guint8)CLAMP(scaled, 0.0, 255.0);
 }
 
+/* Converts a color to 8-bit sRGB RGBA, treating missing components as zero. */
 static void
 color_to_bytes(const ns_color *col, guint8 rgba[4])
 {
@@ -2396,6 +2457,7 @@ color_to_bytes(const ns_color *col, guint8 rgba[4])
         ? 0 : color_unit_byte(col->alpha);
 }
 
+/* Converts v to degrees per the deg/turn/grad/rad unit at *endp, consuming the unit. */
 static double
 css_angle_value_degrees(double v, char **endp)
 {
@@ -2425,6 +2487,7 @@ color_skip_ws(const char *p, const char *end)
     return p;
 }
 
+/* Returns the end of a CSS number token (sign, digits, fraction, exponent), or p if none. */
 static const char *
 color_number_end(const char *p, const char *end)
 {
@@ -2451,6 +2514,7 @@ color_number_end(const char *p, const char *end)
     return q;
 }
 
+/* Evaluates a calc()-style color channel to a number, angle or percentage. */
 static gboolean
 color_math_arg(const char *start, const char *end, ns_color_arg *out)
 {
@@ -2482,6 +2546,7 @@ color_math_arg(const char *start, const char *end, ns_color_arg *out)
     return FALSE;
 }
 
+/* Reads one color channel: number, percentage, angle, math function or none; advances *pp. */
 static gboolean
 color_read_arg(const char **pp, const char *end, ns_color_arg *out)
 {
@@ -2536,6 +2601,7 @@ color_read_arg(const char **pp, const char *end, ns_color_arg *out)
     return FALSE;
 }
 
+/* Parses color function channels in legacy comma or modern space/slash syntax. */
 static gboolean
 color_args_parse(const char *p, const char *end, ns_color_args *out)
 {
@@ -2575,6 +2641,7 @@ color_args_parse(const char *p, const char *end, ns_color_args *out)
     return TRUE;
 }
 
+/* Returns a channel's value with percentages scaled to percent_full; none and NaN yield 0. */
 static double
 color_arg_value(const ns_color_arg *a, double percent_full)
 {
@@ -2583,6 +2650,7 @@ color_arg_value(const ns_color_arg *a, double percent_full)
     return isnan(v) ? 0.0 : v;
 }
 
+/* Sets alpha from the optional fourth channel, clamped to 0..1; none marks alpha missing. */
 static gboolean
 color_alpha_from_args(const ns_color_args *args, ns_color *out)
 {
@@ -2599,6 +2667,7 @@ color_alpha_from_args(const ns_color_args *args, ns_color *out)
     return TRUE;
 }
 
+/* Builds an sRGB color from rgb()/rgba() channels; legacy syntax forbids mixed percentages. */
 static gboolean
 color_build_rgb(const ns_color_args *args, gboolean relative, ns_color *out)
 {
@@ -2625,6 +2694,7 @@ color_build_rgb(const ns_color_args *args, gboolean relative, ns_color *out)
     return color_alpha_from_args(args, out);
 }
 
+/* Builds an HSL or HWB color from parsed channels, normalizing hue and clamping as required. */
 static gboolean
 color_build_hsl(const ns_color_args *args, gboolean hwb, gboolean relative,
                 ns_color *out)
@@ -2658,6 +2728,7 @@ color_build_hsl(const ns_color_args *args, gboolean hwb, gboolean relative,
     return color_alpha_from_args(args, out);
 }
 
+/* Builds a lab/lch/oklab/oklch color, scaling percentages to each space's reference range. */
 static gboolean
 color_build_lab(const ns_color_args *args, ns_css_color_space space,
                 ns_color *out)
@@ -2692,6 +2763,7 @@ color_build_lab(const ns_color_args *args, ns_css_color_space space,
     return color_alpha_from_args(args, out);
 }
 
+/* Builds a color() function value in a predefined RGB or XYZ space. */
 static gboolean
 color_build_predefined(const ns_color_args *args, ns_css_color_space space,
                        ns_color *out)
@@ -2748,6 +2820,7 @@ color_fn_space(ns_color_fn fn)
     }
 }
 
+/* Dispatches parsed channels to the builder for the given color function. */
 static gboolean
 color_build(ns_color_fn fn, ns_css_color_space space,
             const ns_color_args *args, gboolean relative, ns_color *out)
@@ -2771,6 +2844,7 @@ color_build(ns_color_fn fn, ns_css_color_space space,
     }
 }
 
+/* Returns the end of a whitespace-delimited token, skipping over nested parentheses. */
 static const char *
 color_component_end(const char *p, const char *end)
 {
@@ -2791,6 +2865,7 @@ color_space_ident_end(const char *p, const char *end)
     return p;
 }
 
+/* Fills the channel keyword names (r g b, h s l, l c h, x y z, alpha) for relative colors. */
 static void
 color_channel_names(ns_color_fn fn, ns_css_color_space space,
                     const char *names[4])
@@ -2820,6 +2895,7 @@ color_channel_names(ns_color_fn fn, ns_css_color_space space,
     names[3] = "alpha";
 }
 
+/* Rewrites relative-color channel keywords as origin values; returns a new string. */
 static char *
 color_relative_substitute(const char *p, const char *end,
                           const char *const names[4], const double vals[4],
@@ -2873,6 +2949,7 @@ color_relative_substitute(const char *p, const char *end,
     return g_string_free(out, FALSE);
 }
 
+/* Parses relative color syntax ("from <color> ...") by substituting origin channel values. */
 static gboolean
 color_parse_relative(ns_color_fn fn, const char *p, const char *end,
                      ns_color *out, int depth)
@@ -2915,6 +2992,7 @@ color_parse_relative(ns_color_fn fn, const char *p, const char *end,
     return TRUE;
 }
 
+/* Parses the body of a color function, handling relative syntax and color() space names. */
 static gboolean
 color_parse_function(ns_color_fn fn, const char *p, const char *end,
                      ns_color *out, int depth)
@@ -2935,6 +3013,7 @@ color_parse_function(ns_color_fn fn, const char *p, const char *end,
     return color_build(fn, space, &args, FALSE, out);
 }
 
+/* Parses a color interpolation method ("in <space> [<hue> hue]") for color-mix(). */
 static gboolean
 color_parse_method(const char *text, ns_css_color_space *space,
                    ns_hue_method *hue)
@@ -2964,6 +3043,7 @@ color_parse_method(const char *text, ns_css_color_space *space,
     return ok;
 }
 
+/* Splits a color-mix() item into color and optional percentage in either order. */
 static gboolean
 color_mix_item_split(const char *s, const char **color_start,
                      const char **color_end, const char **pct_start,
@@ -2999,6 +3079,7 @@ color_mix_item_split(const char *s, const char **color_start,
     return FALSE;
 }
 
+/* Parses one color-mix() item; rejects trailing junk and percentages outside 0..100. */
 static gboolean
 color_mix_item_parse(const char *text, ns_color *col, double *pct,
                      gboolean *has_pct, int depth)
@@ -3012,6 +3093,7 @@ color_mix_item_parse(const char *text, ns_color *col, double *pct,
     return color_parse_range(cs, ce, col, depth + 1);
 }
 
+/* Interpolates two colors with premultiplied alpha, missing-component and hue-method rules. */
 static void
 color_mix_pair(ns_color *acc, const ns_color *b, double t, ns_hue_method method)
 {
@@ -3081,6 +3163,7 @@ color_mix_pair(ns_color *acc, const ns_color *b, double t, ns_hue_method method)
     *acc = r;
 }
 
+/* Implements color-mix(): normalizes percentages, mixes pairwise, scales leftover alpha. */
 static gboolean
 color_parse_mix(const char *p, const char *end, ns_color *out, int depth)
 {
@@ -3143,6 +3226,7 @@ color_parse_mix(const char *p, const char *end, ns_color *out, int depth)
     return TRUE;
 }
 
+/* Parses light-dark(), validating both colors and picking one by the current color scheme. */
 static gboolean
 color_parse_light_dark(const char *p, const char *end, ns_color *out,
                        int depth)
@@ -3165,6 +3249,7 @@ color_parse_light_dark(const char *p, const char *end, ns_color *out,
     return ok;
 }
 
+/* Parses 3/4/6/8-digit hex color digits (after #) into a legacy sRGB color. */
 static gboolean
 color_parse_hex(const char *s, const char *end, ns_color *out)
 {
@@ -3188,6 +3273,7 @@ color_parse_hex(const char *s, const char *end, ns_color *out)
     return TRUE;
 }
 
+/* Parses any CSS color (hex, function, currentcolor, transparent, named) in [s, end). */
 static gboolean
 color_parse_range(const char *s, const char *end, ns_color *out, int depth)
 {
@@ -3247,6 +3333,7 @@ color_parse_range(const char *s, const char *end, ns_color *out, int depth)
     return TRUE;
 }
 
+/* Returns a copy of s with CSS comments removed; caller frees. */
 static char *
 color_strip_comments(const char *s)
 {
@@ -3262,6 +3349,7 @@ color_strip_comments(const char *s)
     return g_string_free(out, FALSE);
 }
 
+/* Parses a NUL-terminated CSS color string, stripping comments first if present. */
 static gboolean
 color_parse_text(const char *s, ns_color *out)
 {
@@ -3275,6 +3363,7 @@ color_parse_text(const char *s, ns_color *out)
     return color_parse_range(s, s + strlen(s), out, 0);
 }
 
+/* Loads an ns_css_value color into the internal ns_color form; non-colors become black. */
 static void
 color_from_value(const ns_css_value *v, ns_color *out)
 {
@@ -3297,6 +3386,7 @@ color_from_value(const ns_css_value *v, ns_color *out)
     out->alpha = v->u.color.c[3];
 }
 
+/* Stores a color into a value: RGBA bytes, plus space coordinates for non-legacy colors. */
 static void
 color_value_store(ns_css_value *v, const ns_color *col)
 {
@@ -3328,6 +3418,7 @@ color_value_store(ns_css_value *v, const ns_color *col)
     v->u.color.c[3] = norm.alpha;
 }
 
+/* Parses color text into a new value, keeping the text when it depends on currentcolor. */
 static ns_css_value *
 color_value_parse(const char *text)
 {
@@ -3339,6 +3430,7 @@ color_value_parse(const char *text)
     return v;
 }
 
+/* Re-parses a currentcolor-dependent value against the given current color; TRUE on success. */
 static gboolean
 color_value_resolve_current(ns_css_value *v, const ns_css_value *current)
 {
@@ -3354,6 +3446,7 @@ color_value_resolve_current(ns_css_value *v, const ns_css_value *current)
     return ok;
 }
 
+/* Appends a color channel number in shortest serialized form; infinities as calc(infinity). */
 static void
 color_append_number(GString *s, double v)
 {
@@ -3381,6 +3474,7 @@ color_append_number(GString *s, double v)
 static void ns_css_append_color(GString *s, guint8 r, guint8 g, guint8 b,
                                 guint8 a);
 
+/* Serializes a computed color value: legacy rgb(), lab()-family, or color(<space> ...). */
 static void
 color_append_value(GString *s, const ns_css_value *v)
 {
@@ -3449,6 +3543,7 @@ color_fn_name(ns_color_fn fn)
     }
 }
 
+/* Appends a relative-color token, normalizing numbers and lowercasing identifiers. */
 static void
 color_append_token(GString *out, const char *p, const char *end)
 {
@@ -3469,6 +3564,7 @@ color_append_token(GString *out, const char *p, const char *end)
     color_append_lower(out, p, end);
 }
 
+/* Serializes a relative color's specified value, preserving channel expressions. */
 static gboolean
 color_relative_specified_append(GString *out, ns_color_fn fn, const char *p,
                                 const char *end, int depth)
@@ -3502,6 +3598,7 @@ color_relative_specified_append(GString *out, ns_color_fn fn, const char *p,
     return TRUE;
 }
 
+/* Serializes a resolved math channel as calc(<number>[%|deg]). */
 static void
 color_append_math_arg(GString *out, const ns_color_arg *a)
 {
@@ -3514,6 +3611,7 @@ color_append_math_arg(GString *out, const ns_color_arg *a)
     g_string_append_c(out, ')');
 }
 
+/* Serializes a non-legacy color function specified value, keeping calc() channels. */
 static gboolean
 color_absolute_specified_append(GString *out, ns_color_fn fn, const char *p,
                                 const char *end, const ns_color *col)
@@ -3545,6 +3643,7 @@ color_absolute_specified_append(GString *out, ns_color_fn fn, const char *p,
     return TRUE;
 }
 
+/* Serializes color-mix() specified value, omitting default method and equal percentages. */
 static gboolean
 color_mix_specified_append(GString *out, const char *p, const char *end,
                            int depth)
@@ -3616,6 +3715,7 @@ color_mix_specified_append(GString *out, const char *p, const char *end,
     return ok;
 }
 
+/* Serializes light-dark() specified value with both arguments canonicalized. */
 static gboolean
 color_light_dark_specified_append(GString *out, const char *p,
                                   const char *end, int depth)
@@ -3634,6 +3734,7 @@ color_light_dark_specified_append(GString *out, const char *p,
     return ok;
 }
 
+/* Appends the canonical specified-value serialization of a color per CSSOM rules. */
 static gboolean
 color_specified_append(GString *out, const char *s, const char *end, int depth)
 {
@@ -3676,6 +3777,7 @@ color_specified_append(GString *out, const char *s, const char *end, int depth)
     return TRUE;
 }
 
+/* Serializes a color's specified value; NULL for var()/attr()/comments or invalid input. */
 static char *
 color_specified_serialize(const char *text)
 {
@@ -3697,6 +3799,7 @@ color_text_valid(const char *s)
     return color_parse_text(s, &col);
 }
 
+/* Parses a color into 8-bit RGBA; fails on currentcolor when no current color context. */
 static gboolean
 parse_color(const char *s, guint8 *r, guint8 *g, guint8 *b, guint8 *a)
 {
@@ -3812,6 +3915,7 @@ static ns_css_selector *parse_one_selector_rel(const char **pp, const char *end,
 static ns_css_selector *parse_one_selector(const char **pp, const char *end,
                                            int depth);
 
+/* Parses a comma-separated selector list into a new array; strict mode flags bad entries. */
 static GPtrArray *
 parse_selector_group_rel(const char *arg, gsize arg_n, int depth,
                          gboolean relative)
@@ -3842,6 +3946,7 @@ parse_selector_group(const char *arg, gsize arg_n, int depth)
     return parse_selector_group_rel(arg, arg_n, depth, FALSE);
 }
 
+/* Finds the top-level "of" keyword in an :nth-child() argument, or NULL. */
 static const char *
 css_find_nth_of(const char *s, const char *end)
 {
@@ -3870,6 +3975,7 @@ css_find_nth_of(const char *s, const char *end)
     return NULL;
 }
 
+/* Parses a signed integer that must consist entirely of digits. */
 static gboolean
 anb_int_strict(const char *str, int *out)
 {
@@ -3882,6 +3988,7 @@ anb_int_strict(const char *str, int *out)
     return TRUE;
 }
 
+/* Parses an An+B microsyntax argument (odd, even, 2n+1, -n+3, ...) into a and b. */
 static gboolean
 parse_anb(const char *arg, gsize alen, int *out_a, int *out_b)
 {
@@ -3927,6 +4034,7 @@ parse_anb(const char *arg, gsize alen, int *out_a, int *out_b)
     return TRUE;
 }
 
+/* Reports whether a pseudo-class name is standard but not otherwise implemented here. */
 static gboolean
 css_pseudo_class_is_standard(const char *name, gsize n)
 {
@@ -3945,6 +4053,7 @@ css_pseudo_class_is_standard(const char *name, gsize n)
     return FALSE;
 }
 
+/* Reports whether a functional/standard pseudo-element name is recognized as valid. */
 static gboolean
 css_pseudo_element_is_standard(const char *name, gsize n)
 {
@@ -3962,6 +4071,7 @@ css_pseudo_element_is_standard(const char *name, gsize n)
     return FALSE;
 }
 
+/* Parses a pseudo-class name and argument (nth-*, :lang, :dir, :heading) into a predicate. */
 static gboolean
 parse_pseudo_keyword(const char *name, gsize n,
                      const char *arg, gsize alen,
@@ -4105,6 +4215,7 @@ parse_pseudo_keyword(const char *name, gsize n,
     return FALSE;
 }
 
+/* Raises (a, b, c) to the highest specificity in a selector list, as :is()/:not() require. */
 static void
 selector_group_max_specificity(const GPtrArray *group, int *a, int *b, int *c)
 {
@@ -4126,6 +4237,7 @@ parse_one_selector(const char **pp, const char *end, int depth)
     return parse_one_selector_rel(pp, end, depth, FALSE);
 }
 
+/* FNV-1a hash of a kind tag plus ASCII-lowercased name, for ancestor bloom filtering. */
 static guint32
 css_identifier_hash(char kind, const char *name, gsize len)
 {
@@ -4138,6 +4250,7 @@ css_identifier_hash(char kind, const char *name, gsize len)
 
 #define CSS_ATTR_HASH_MAX_VALUE 128
 
+/* FNV-1a hash of an attribute name/value pair for [attr=value] ancestor filtering. */
 static guint32
 css_attr_value_hash(const char *name, const char *value, gsize value_len)
 {
@@ -4148,6 +4261,7 @@ css_attr_value_hash(const char *name, const char *value, gsize value_len)
     return h;
 }
 
+/* Appends an ancestor hash to the selector's fixed-size list, dropping it when full. */
 static void
 css_selector_add_ancestor_hash(ns_css_selector *sel, guint32 hash)
 {
@@ -4155,6 +4269,7 @@ css_selector_add_ancestor_hash(ns_css_selector *sel, guint32 hash)
         sel->ancestor_hashes[sel->n_ancestor_hashes++] = hash;
 }
 
+/* Collects id/class/type/attr hashes of ancestor compounds for fast rejection. */
 static void
 css_selector_collect_ancestor_hashes(ns_css_selector *sel)
 {
@@ -4189,6 +4304,7 @@ css_selector_collect_ancestor_hashes(ns_css_selector *sel)
     }
 }
 
+/* Reports whether p names a user-action pseudo-class allowed after a pseudo-element. */
 static gboolean
 css_user_action_pseudo_at(const char *p, const char *end)
 {
@@ -4205,6 +4321,7 @@ css_user_action_pseudo_at(const char *p, const char *end)
     return FALSE;
 }
 
+/* Parses one complex selector, computing specificity; relative allows a leading combinator. */
 static ns_css_selector *
 parse_one_selector_rel(const char **pp, const char *end, int depth,
                        gboolean relative)
@@ -4679,6 +4796,7 @@ parse_one_selector_rel(const char **pp, const char *end, int depth,
     return sel;
 }
 
+/* Parses a number with optional unit; absolute units (pt, pc, cm, mm, q, in) become px. */
 static gboolean
 parse_length(const char *text, double *out_v, ns_css_unit *out_unit)
 {
@@ -4760,6 +4878,7 @@ parse_length(const char *text, double *out_v, ns_css_unit *out_unit)
     return FALSE;
 }
 
+/* Maps absolute font-size keywords (xx-small..xxx-large) to px; -1 if not a keyword. */
 static double
 font_size_keyword_px(const char *t)
 {
@@ -4781,6 +4900,7 @@ static ns_css_value *parse_calc_inner(const char *text);
 
 typedef struct { double em, rem, lh, rlh, vw, vh, vmin, vmax; } ns_font_units;
 
+/* Records an em/rem/lh/rlh amount in font, or approximates it to px when font is NULL. */
 static void
 font_units_set(ns_font_units *font, ns_css_unit unit, double v,
                double *out_px)
@@ -4796,6 +4916,7 @@ font_units_set(ns_font_units *font, ns_css_unit unit, double v,
     else font->rlh = v;
 }
 
+/* Resolves a length/calc into px and percent parts; can keep font/viewport terms. */
 static gboolean
 resolve_to_px_pct_font(const char *text, gsize len, double *out_px,
                        double *out_pct, ns_font_units *font)
@@ -4903,6 +5024,7 @@ resolve_to_px_pct(const char *text, gsize len, double *out_px, double *out_pct)
     return resolve_to_px_pct_font(text, len, out_px, out_pct, NULL);
 }
 
+/* Returns the ')' matching an already-consumed '(' at depth 1, or NULL if unbalanced. */
 static const char *
 match_close_paren(const char *p, const char *end)
 {
@@ -4923,6 +5045,7 @@ calc_skip_ws(const char **pp, const char *end)
     *pp = p;
 }
 
+/* Adds sign times a term's linear unit coefficients into an accumulator. */
 static void
 calc_linear_add(ns_calc_linear *l, const ns_calc_term *t, double sign)
 {
@@ -4938,6 +5061,7 @@ calc_linear_add(ns_calc_linear *l, const ns_calc_term *t, double sign)
     l->vmax += sign * t->vmax;
 }
 
+/* Scales a deferred math function's args; a negative factor swaps min/max or clamp bounds. */
 static void
 calc_term_fn_scale(ns_calc_term *v, double m)
 {
@@ -4971,6 +5095,7 @@ calc_term_fn_scale(ns_calc_term *v, double m)
     v->arg_none = (guint8)((none & 2u) | ((none & 1u) << 2) | ((none & 4u) >> 2));
 }
 
+/* Folds a linear term into a deferred math function's args; two functions drop the deferral. */
 static void
 calc_term_fn_add(ns_calc_term *out, const ns_calc_term *rhs, double sign)
 {
@@ -4994,6 +5119,7 @@ calc_term_fn_add(ns_calc_term *out, const ns_calc_term *rhs, double sign)
     memcpy(out->args, r.args, sizeof out->args);
 }
 
+/* Multiplies a calc term by m; non-finite m scales only nonzero parts, drops viewport. */
 static void
 calc_term_scale(ns_calc_term *v, double m)
 {
@@ -5025,6 +5151,7 @@ calc_term_scale(ns_calc_term *v, double m)
     }
 }
 
+/* Converts angle/time/resolution/flex units to canonical deg, ms, dppx or fr terms. */
 static gboolean
 calc_scalar_unit_value(const char *unit, double num, ns_calc_term *out)
 {
@@ -5048,6 +5175,7 @@ calc_scalar_unit_value(const char *unit, double num, ns_calc_term *out)
     return FALSE;
 }
 
+/* Builds a calc term from a number and unit, splitting font, viewport and container parts. */
 static gboolean
 calc_unit_value(const char *unit, double num, ns_calc_term *out)
 {
@@ -5114,6 +5242,7 @@ calc_unit_value(const char *unit, double num, ns_calc_term *out)
     return TRUE;
 }
 
+/* Parses a calc primary: number with unit, constant, parenthesized expr or nested math fn. */
 static gboolean
 calc_primary_parse(const char **pp, const char *end, ns_calc_term *out,
                    int depth)
@@ -5286,6 +5415,7 @@ calc_primary_parse(const char **pp, const char *end, ns_calc_term *out,
     return TRUE;
 }
 
+/* Parses a calc product (* and /), requiring at least one side of each step to be a number. */
 static gboolean
 calc_product_parse(const char **pp, const char *end, ns_calc_term *out,
                    int depth)
@@ -5323,6 +5453,7 @@ calc_product_parse(const char **pp, const char *end, ns_calc_term *out,
     }
 }
 
+/* Parses a calc sum (+ and -) of type-matching products into a linear term. */
 static gboolean
 calc_expr_parse(const char **pp, const char *end, ns_calc_term *out,
                 int depth)
@@ -5374,6 +5505,7 @@ calc_expr_parse(const char **pp, const char *end, ns_calc_term *out,
     }
 }
 
+/* Splits math function arguments at top-level commas into trimmed new strings. */
 static int
 calc_split_args(const char *args, const char *body_end, char *out[], int max)
 {
@@ -5392,6 +5524,7 @@ calc_split_args(const char *args, const char *body_end, char *out[], int max)
 static ns_css_value *calc_px_value(double px);
 static ns_css_value *calc_num_value(double n);
 
+/* Evaluates a full calc expression string, failing on trailing text. */
 static gboolean
 calc_eval_arg(const char *text, ns_calc_term *out)
 {
@@ -5402,6 +5535,7 @@ calc_eval_arg(const char *text, ns_calc_term *out)
     return p == end;
 }
 
+/* Approximates a calc term to a comparable number using 16px em and viewport-width percent. */
 static double
 calc_term_key(const ns_calc_term *t)
 {
@@ -5411,6 +5545,7 @@ calc_term_key(const ns_calc_term *t)
            t->pct * 0.01 * g_viewport_w;
 }
 
+/* Evaluates a calc() in a media query to px, number or resolution; percentages fail. */
 gboolean
 ns_css_calc_media(const char *text, gsize len, gboolean resolution, double *out)
 {
@@ -5434,6 +5569,7 @@ ns_css_calc_media(const char *text, gsize len, gboolean resolution, double *out)
     return TRUE;
 }
 
+/* Reports whether a length term depends on font size or a percentage basis. */
 static gboolean
 calc_term_basis_dependent(const ns_calc_term *t)
 {
@@ -5451,6 +5587,7 @@ calc_eval_number(const char *text, double *out)
     return TRUE;
 }
 
+/* Converts a number or angle term to radians for trig functions. */
 static gboolean
 calc_term_radians(const ns_calc_term *t, double *out)
 {
@@ -5460,6 +5597,7 @@ calc_term_radians(const ns_calc_term *t, double *out)
     return TRUE;
 }
 
+/* Builds a length value tagged with the canonical unit for a non-length calc kind. */
 static ns_css_value *
 calc_scalar_value(ns_calc_kind kind, double v)
 {
@@ -5474,6 +5612,7 @@ calc_scalar_value(ns_calc_kind kind, double v)
     return out;
 }
 
+/* Builds a number, px or scalar value of the same kind as like. */
 static ns_css_value *
 calc_value_like(const ns_calc_term *like, double v)
 {
@@ -5482,6 +5621,7 @@ calc_value_like(const ns_calc_term *like, double v)
     return calc_scalar_value(like->kind, v);
 }
 
+/* Reports whether text is a plain number or a calc expression yielding a number. */
 static gboolean
 calc_arg_is_number(const char *text)
 {
@@ -5525,12 +5665,14 @@ calc_num_value(double n)
     return v;
 }
 
+/* Less-than that orders -0 before +0, as CSS math functions require. */
 static gboolean
 css_less_signed(double a, double b)
 {
     return a < b || (a == 0 && b == 0 && signbit(a) && !signbit(b));
 }
 
+/* Clamps val to [lo, hi] respecting signed zero; lo wins when bounds cross. */
 static double
 css_clamp_signed(double lo, double val, double hi)
 {
@@ -5538,6 +5680,7 @@ css_clamp_signed(double lo, double val, double hi)
     return css_less_signed(out, lo) ? lo : out;
 }
 
+/* Implements round() strategies (nearest, up, down, to-zero) with CSS NaN/infinity rules. */
 static double
 css_round_step(int strategy, double a, double b)
 {
@@ -5555,6 +5698,7 @@ css_round_step(int strategy, double a, double b)
     return rq * fabs(b);
 }
 
+/* Implements mod() (sign of divisor) and rem() (sign of dividend) with CSS edge cases. */
 static double
 css_mod_rem(gboolean is_mod, double a, double b)
 {
@@ -5569,6 +5713,7 @@ css_mod_rem(gboolean is_mod, double a, double b)
     return r;
 }
 
+/* Reports whether a length term needs layout-time context (font, percent or viewport). */
 static gboolean
 calc_term_defers_to_layout(const ns_calc_term *t)
 {
@@ -5592,6 +5737,7 @@ calc_arg_from_term(ns_css_value *v, int i, const ns_calc_term *t)
     v->u.calc.args[i].vmax = t->vmax;
 }
 
+/* Returns a folded math result, or a deferred calc value when args need layout context. */
 static ns_css_value *
 calc_stepped_value(ns_css_math_fn fn, const ns_calc_term *a,
                    const ns_calc_term *b, double folded)
@@ -5612,6 +5758,7 @@ calc_stepped_value(ns_css_math_fn fn, const ns_calc_term *a,
     return v;
 }
 
+/* Parses any math expression with a per-thread recursion depth guard. */
 static ns_css_value *
 parse_calc_any(const char *text)
 {
@@ -5633,6 +5780,7 @@ value_is_scalar_dimension(const ns_css_value *v)
             v->u.length.unit == NS_CSS_UNIT_FR);
 }
 
+/* Parses a math expression, rejecting results that are angles, times, resolutions or flex. */
 static ns_css_value *
 parse_calc(const char *text)
 {
@@ -5701,6 +5849,7 @@ ns_css_unit_suffix(int unit)
     }
 }
 
+/* Formats a number for serialization, with NaN and infinity spelled per CSS; caller frees. */
 static char *
 ns_css_number_str(double n)
 {
@@ -5710,6 +5859,7 @@ ns_css_number_str(double n)
     return g_strdup_printf("%g", n);
 }
 
+/* Reports whether text contains a font-, viewport- or container-relative unit token. */
 static gboolean
 ns_value_has_relative_unit(const char *s)
 {
@@ -5737,6 +5887,7 @@ ns_value_has_relative_unit(const char *s)
     return FALSE;
 }
 
+/* Serializes a non-finite length as calc(infinity * 1unit) or similar; caller frees. */
 static char *
 serialize_nonfinite_length(double v, const char *unit)
 {
@@ -5746,6 +5897,7 @@ serialize_nonfinite_length(double v, const char *unit)
     return g_strdup_printf("calc(%s * 1%s)", nf, unit);
 }
 
+/* Serializes an absolute math expression as calc(<value><unit>); NULL if relative or mixed. */
 static char *
 ns_css_math_canonical(const char *value)
 {
@@ -5813,6 +5965,7 @@ ns_css_math_canonical(const char *value)
     return out;
 }
 
+/* Evaluates min/max/clamp over angle, time, resolution or flex args; NULL for lengths. */
 static ns_css_value *
 calc_compare_scalar(int fn, char *const *parts, int n)
 {
@@ -5855,6 +6008,7 @@ calc_compare_scalar(int fn, char *const *parts, int n)
     return calc_scalar_value(kind, result);
 }
 
+/* Evaluates min/max/clamp over lengths, deferring to a calc value when args need layout. */
 static ns_css_value *
 calc_compare_lengths(int fn, char *const *parts, int n)
 {
@@ -5944,6 +6098,7 @@ calc_compare_lengths(int fn, char *const *parts, int n)
     return mv;
 }
 
+/* Parses one CSS math function (calc, min, round, trig, log, progress...) into a value. */
 static ns_css_value *
 parse_calc_inner(const char *text)
 {
@@ -6155,6 +6310,7 @@ parse_calc_inner(const char *text)
 
 static int split_ws(const char *s, char *out[4]);
 
+/* Parses a background-size length or calc into a value and unit, flattening font units. */
 static gboolean
 parse_bg_size_component(const char *tok, double *out_v, ns_css_unit *out_unit)
 {
@@ -6184,6 +6340,7 @@ parse_bg_size_component(const char *tok, double *out_v, ns_css_unit *out_unit)
     return ok;
 }
 
+/* Parses a single grid track size keyword, fr, percentage or length into a track. */
 static gboolean
 parse_track_token(const char *tok, ns_css_track *out)
 {
@@ -6255,6 +6412,7 @@ static gboolean parse_one_track(const char *start, gsize len,
 static gboolean parse_one_track_depth(const char *start, gsize len,
                                       ns_css_track *out, int depth);
 
+/* Parses a math-function track size into px, percent, or mixed px/em/rem/percent parts. */
 static gboolean
 parse_math_track(const char *start, gsize len, ns_css_track *out)
 {
@@ -6289,6 +6447,7 @@ parse_math_track(const char *start, gsize len, ns_css_track *out)
     return ok;
 }
 
+/* Parses minmax(min, max) into a track; a flexible min is only valid with a flexible max. */
 static gboolean
 parse_minmax_token(const char *body, gsize len, ns_css_track *out, int depth)
 {
@@ -6326,6 +6485,7 @@ parse_minmax_token(const char *body, gsize len, ns_css_track *out, int depth)
     return TRUE;
 }
 
+/* Parses one track size incl. minmax() and fit-content(), bounded by recursion depth. */
 static gboolean
 parse_one_track_depth(const char *start, gsize len, ns_css_track *out, int depth)
 {
@@ -6367,6 +6527,7 @@ parse_one_track(const char *start, gsize len, ns_css_track *out)
     return parse_one_track_depth(start, len, out, 0);
 }
 
+/* Splits a track list at whitespace/commas outside parentheses into start/length pairs. */
 static int
 split_tracks_top(const char *text, gsize len, const char **starts, gsize *lens, int max)
 {
@@ -6387,6 +6548,7 @@ split_tracks_top(const char *text, gsize len, const char **starts, gsize *lens, 
     return n;
 }
 
+/* Checks whether a token is a valid CSS identifier for an unquoted font family name. */
 static gboolean
 font_family_ident_valid(const char *tok, gsize len)
 {
@@ -6410,6 +6572,7 @@ font_family_ident_valid(const char *tok, gsize len)
     return TRUE;
 }
 
+/* Reports whether a token is a generic family or reserved keyword that cannot be unquoted. */
 static gboolean
 font_family_is_generic(const char *tok, gsize len)
 {
@@ -6429,6 +6592,7 @@ font_family_is_generic(const char *tok, gsize len)
 static gboolean is_font_stretch_keyword(const char *s);
 static ns_css_value *parse_value_for(ns_css_prop prop, const char *text);
 
+/* Splits text at top-level whitespace, respecting parens, quotes and escapes; new strings. */
 static int
 split_ws_paren(const char *text, char **out, int max)
 {
@@ -6455,6 +6619,7 @@ split_ws_paren(const char *text, char **out, int max)
     return n;
 }
 
+/* Validates a font-size token: keyword, larger/smaller, math fn or non-negative length. */
 static gboolean
 font_size_token_valid(const char *tok)
 {
@@ -6475,6 +6640,7 @@ font_size_token_valid(const char *tok)
     return parse_length(tok, &v, &u) && u != NS_CSS_UNIT_NUMBER && v >= 0;
 }
 
+/* Validates a font shorthand line-height token: normal, math fn or non-negative value. */
 static gboolean
 font_line_height_token_valid(const char *tok)
 {
@@ -6492,6 +6658,7 @@ font_line_height_token_valid(const char *tok)
     return parse_length(tok, &v, &u) && v >= 0;
 }
 
+/* Returns the first top-level '/' in a token (size/line-height split), or NULL. */
 static char *
 font_shorthand_slash(char *tok)
 {
@@ -6504,6 +6671,7 @@ font_shorthand_slash(char *tok)
     return NULL;
 }
 
+/* Reports whether a token can be the font shorthand's size, excluding bare numbers. */
 static gboolean
 font_shorthand_is_size_token(const char *tok)
 {
@@ -6517,6 +6685,7 @@ font_shorthand_is_size_token(const char *tok)
     return ok;
 }
 
+/* Builds the font-size value from a shorthand size token; larger/smaller map to em ratios. */
 static ns_css_value *
 font_shorthand_size_value(const char *size_only)
 {
@@ -6539,6 +6708,7 @@ font_shorthand_size_value(const char *size_only)
     return parse_value_for(NS_CSS_FONT_SIZE, size_only);
 }
 
+/* Canonicalizes a font shorthand to style variant weight stretch size/lh family order. */
 static char *
 ns_css_font_shorthand_canonical(const char *text)
 {
@@ -6665,6 +6835,7 @@ done:
 
 #define NS_CSS_RANDOM_ITEM_MAX_DEPTH 16
 
+/* Validates a random-item() font family entry and each of its nested family lists. */
 static gboolean
 font_family_random_item_valid(const char *item, gsize ilen)
 {
@@ -6732,6 +6903,7 @@ font_family_random_item_valid(const char *item, gsize ilen)
     return ok;
 }
 
+/* Serializes a font-family list, unquoting ident-like names; NULL if invalid. Caller frees. */
 static char *
 ns_css_font_family_canonical(const char *text)
 {
@@ -6853,6 +7025,7 @@ ns_css_font_family_canonical(const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Validates a grid line name as a custom-ident, rejecting span, auto and CSS-wide keywords. */
 static gboolean
 line_name_is_custom_ident(const char *ns, gsize nlen)
 {
@@ -6879,6 +7052,7 @@ line_name_is_custom_ident(const char *ns, gsize nlen)
     return TRUE;
 }
 
+/* Records bracketed grid line names for the given line; FALSE on invalid names. */
 static gboolean
 tracks_add_names(ns_css_tracks *tk, const char *names, gsize names_len, int line)
 {
@@ -6901,6 +7075,7 @@ tracks_add_names(ns_css_tracks *tk, const char *names, gsize names_len, int line
     return TRUE;
 }
 
+/* Reports whether a track is a fixed size (or has a fixed minimum), as auto-repeat requires. */
 static gboolean
 track_is_fixed_size(const ns_css_track *t)
 {
@@ -6911,6 +7086,7 @@ track_is_fixed_size(const ns_css_track *t)
     return main_fixed || min_fixed;
 }
 
+/* Expands a repeat() body into tracks and line names repeats times. */
 static gboolean
 tracks_append_repeat_body(ns_css_tracks *tk, const char *body, gsize body_len,
                           long repeats, int *out_tracks_per_repeat)
@@ -6960,6 +7136,7 @@ tracks_append_repeat_body(ns_css_tracks *tk, const char *body, gsize body_len,
     return TRUE;
 }
 
+/* Parses grid-template-rows/columns: line names, repeat(), auto-fill/fit and subgrid. */
 static ns_css_value *
 parse_tracks(const char *text)
 {
@@ -7102,6 +7279,7 @@ parse_tracks(const char *text)
     return v;
 }
 
+/* Parses grid-template-areas strings into named rectangles; rows must have equal columns. */
 static ns_css_value *
 parse_areas(const char *text)
 {
@@ -7210,6 +7388,7 @@ static char *bg_clip_canonical(const char *text);
 static char *css_add_leading_zeros(char *v);
 static char *css_normalize_negative_zero(char *value);
 
+/* Canonicalizes one shadow length (no percentages, optional no-negatives) into out. */
 static gboolean
 shadow_length_token(const char *tok, gboolean allow_negative, GString *out)
 {
@@ -7248,6 +7427,7 @@ shadow_length_token(const char *tok, gboolean allow_negative, GString *out)
     return TRUE;
 }
 
+/* Canonicalizes one shadow layer as color, lengths, inset; FALSE when invalid. */
 static gboolean
 shadow_specified_one(const char *text, gboolean is_text, GString *out)
 {
@@ -7307,6 +7487,7 @@ shadow_specified_one(const char *text, gboolean is_text, GString *out)
     return ok;
 }
 
+/* Serializes a box-shadow/text-shadow specified value layer by layer; NULL if invalid. */
 static char *
 shadow_specified_canonical(const char *value, gboolean is_text)
 {
@@ -7335,6 +7516,7 @@ shadow_specified_canonical(const char *value, gboolean is_text)
     return g_string_free(out, FALSE);
 }
 
+/* Parses one shadow layer into offsets, blur, spread, color and inset; em/rem kept apart. */
 static gboolean
 parse_one_shadow(const char *text, ns_css_shadow *out)
 {
@@ -7390,6 +7572,7 @@ parse_one_shadow(const char *text, ns_css_shadow *out)
     return TRUE;
 }
 
+/* Parses a comma-separated shadow list into a value, skipping invalid layers. */
 static ns_css_value *
 parse_box_shadow(const char *text)
 {
@@ -7476,6 +7659,7 @@ text_is_math_fn(const char *t)
     return FALSE;
 }
 
+/* Reports whether a token is a length, percentage, zero or length-valued math function. */
 static gboolean
 token_is_length_pct(const char *t)
 {
@@ -7491,6 +7675,7 @@ token_is_length_pct(const char *t)
     return u != NS_CSS_UNIT_NUMBER || v == 0;
 }
 
+/* Reports whether a token is an angle, unitless zero, or math fn mentioning angle units. */
 static gboolean
 token_is_angle(const char *t)
 {
@@ -7510,6 +7695,7 @@ token_is_angle(const char *t)
            token_eq(end, "rad") || token_eq(end, "turn");
 }
 
+/* Serializes a gradient stop color: legacy colors resolved to rgb(), others kept as text. */
 static char *
 gradient_stop_color_specified(const char *tok)
 {
@@ -7531,6 +7717,7 @@ gradient_stop_color_specified(const char *tok)
     return g_ascii_strdown(tok, -1);
 }
 
+/* Reports whether color text uses legacy syntax (hex, keyword, rgb/rgba/hsl/hsla). */
 static gboolean
 color_text_is_legacy(const char *t)
 {
@@ -7542,6 +7729,7 @@ color_text_is_legacy(const char *t)
            g_ascii_strncasecmp(t, "hsla(", 5) == 0;
 }
 
+/* Parses a gradient "in <space> [<hue> hue]" method into out; returns tokens consumed. */
 static int
 gradient_interp_parse(char **tok, int n, char out[NS_CSS_GRADIENT_INTERP_MAX])
 {
@@ -7580,6 +7768,7 @@ gradient_interp_parse(char **tok, int n, char out[NS_CSS_GRADIENT_INTERP_MAX])
     return used;
 }
 
+/* Canonicalizes a 1-4 token <position> into x-then-y order; NULL if invalid. Caller frees. */
 static char *
 position_canonical_ex(const char *text, gboolean expand_single,
                       gboolean allow_three)
@@ -7647,6 +7836,7 @@ position_canonical(const char *text)
     return position_canonical_ex(text, FALSE, FALSE);
 }
 
+/* Parses a radial/conic "at <position>" into the gradient center; returns tokens consumed. */
 static int
 gradient_position_parse(char **tok, int n, ns_gradient_parse *gp)
 {
@@ -7681,6 +7871,7 @@ gradient_position_parse(char **tok, int n, ns_gradient_parse *gp)
     return m;
 }
 
+/* Parses a gradient's first argument: direction/angle, shape, size, at, from and in parts. */
 static gboolean
 gradient_parse_prelude(ns_gradient_parse *gp, char **tok, int n)
 {
@@ -7817,6 +8008,7 @@ gradient_parse_prelude(ns_gradient_parse *gp, char **tok, int n)
     return TRUE;
 }
 
+/* Reports whether math text contains a number followed by one of the given unit suffixes. */
 static gboolean
 math_text_has_unit(const char *t, const char *const *units, gsize n_units)
 {
@@ -7837,6 +8029,7 @@ math_text_has_unit(const char *t, const char *const *units, gsize n_units)
     return found;
 }
 
+/* Reports whether a math expression mixes angle and length units (invalid for angles). */
 static gboolean
 math_text_mixes_angle_and_length(const char *t)
 {
@@ -7848,6 +8041,7 @@ math_text_mixes_angle_and_length(const char *t)
            math_text_has_unit(t, lengths, G_N_ELEMENTS(lengths));
 }
 
+/* Reorders a conic stop calc(<angle> + <pct>) to calc(<pct> + <angle>) for serialization. */
 static char *
 conic_calc_canonical(const char *t)
 {
@@ -7867,6 +8061,7 @@ conic_calc_canonical(const char *t)
     return out ? out : g_strdup(t);
 }
 
+/* Parses a stop or hint position: lengths/percents, or angles/percents for conic gradients. */
 static gboolean
 gradient_stop_pos_parse(const char *t, gboolean conic, ns_css_gradient_stop *st)
 {
@@ -7915,6 +8110,7 @@ gradient_stop_pos_parse(const char *t, gboolean conic, ns_css_gradient_stop *st)
     return TRUE;
 }
 
+/* Parses one color stop (with up to two positions) or a hint, optionally keeping its text. */
 static gboolean
 gradient_stop_parse(ns_gradient_parse *gp, const char *seg, gboolean *is_hint)
 {
@@ -7970,6 +8166,7 @@ done:
     return ok;
 }
 
+/* Fixes up stop positions per CSS Images: clamps order, spreads unpositioned stops evenly. */
 static void
 gradient_finish_stops(ns_css_gradient *gr)
 {
@@ -8004,6 +8201,7 @@ gradient_finish_stops(ns_css_gradient *gr)
     }
 }
 
+/* Parses linear/radial/conic gradient text, optionally recording specified-value texts. */
 static gboolean
 gradient_parse(const char *text, ns_gradient_parse *gp, const char **out_end,
                gboolean keep_texts)
@@ -8097,6 +8295,7 @@ gradient_parse(const char *text, ns_gradient_parse *gp, const char **out_end,
     return TRUE;
 }
 
+/* Serializes a stop position as deg, %, px or calc(% +/- px). */
 static void
 gradient_append_stop_pos(GString *s, const ns_css_gradient_stop *st)
 {
@@ -8112,6 +8311,7 @@ gradient_append_stop_pos(GString *s, const ns_css_gradient_stop *st)
     }
 }
 
+/* Serializes a gradient coordinate as %, px or calc(% +/- px). */
 static void
 gradient_append_center_coord(GString *s, double frac, double px)
 {
@@ -8146,6 +8346,7 @@ gradient_append_prelude_part(GString *prelude, const char *part)
     g_string_append(prelude, part);
 }
 
+/* Serializes a parsed gradient's computed value, omitting default direction and center. */
 static void
 gradient_serialize_computed(GString *s, const ns_css_gradient *gr)
 {
@@ -8224,6 +8425,7 @@ gradient_serialize_computed(GString *s, const ns_css_gradient *gr)
     g_string_append_c(s, ')');
 }
 
+/* Serializes a gradient's specified value from retained prelude and stop texts. */
 static char *
 gradient_serialize_specified(const ns_gradient_parse *gp)
 {
@@ -8281,6 +8483,7 @@ gradient_serialize_specified(const ns_gradient_parse *gp)
     return g_string_free(s, FALSE);
 }
 
+/* Reports whether text begins with a (repeating-) linear, radial or conic gradient function. */
 static gboolean
 text_starts_gradient(const char *p)
 {
@@ -8295,6 +8498,7 @@ static char *image_set_canonical(const char *text, gboolean computed);
 static gboolean text_starts_image_set(const char *p);
 static const char *cq_match_paren(const char *p, const char *end);
 
+/* Canonicalizes an image list, re-serializing gradients and image-set(); NULL if invalid. */
 static char *
 ns_css_image_value_canonical(const char *text)
 {
@@ -8339,6 +8543,7 @@ ns_css_image_value_canonical(const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Returns a linear gradient's angle in degrees; corner directions depend on box aspect. */
 double
 ns_css_gradient_angle(const ns_css_gradient *gr, double w, double h)
 {
@@ -8357,6 +8562,7 @@ ns_css_gradient_angle(const ns_css_gradient *gr, double w, double h)
     return 180.0 + corner;
 }
 
+/* Computes radial gradient ending-shape radii for the box and center per size keyword. */
 void
 ns_css_gradient_radii(const ns_css_gradient *gr, double w, double h,
                       double cx, double cy, double *rx, double *ry)
@@ -8420,6 +8626,7 @@ content_tok_clear(gpointer data)
     g_free(t->args);
 }
 
+/* Decodes escapes in a content string and re-quotes it with double quotes; caller frees. */
 static char *
 content_string_canonical(const char *raw, gsize len)
 {
@@ -8438,6 +8645,7 @@ content_string_canonical(const char *raw, gsize len)
     return g_string_free(out, FALSE);
 }
 
+/* Returns the closing quote of a string starting at p, honoring escapes; NULL if open. */
 static const char *
 content_scan_string_end(const char *p)
 {
@@ -8450,6 +8658,7 @@ content_scan_string_end(const char *p)
     return NULL;
 }
 
+/* Tokenizes a content value into strings, idents, functions and slashes; NULL on error. */
 static GArray *
 content_tokenize(const char *text)
 {
@@ -8513,6 +8722,7 @@ fail:
     return NULL;
 }
 
+/* Splits function args at top-level commas, skipping quoted strings; NULL if unterminated. */
 static GPtrArray *
 content_split_args(const char *args)
 {
@@ -8542,6 +8752,7 @@ content_split_args(const char *args)
 static gboolean css_wide_keyword_or_default(const char *item);
 static gboolean attr_functions_syntax_valid(const char *text);
 
+/* Validates a counter or attribute name as a CSS identifier (escapes allowed). */
 static gboolean
 content_ident_valid(const char *s)
 {
@@ -8564,6 +8775,7 @@ content_is_string_token(const char *s)
     return e && e[1] == '\0';
 }
 
+/* Canonicalizes symbols() arguments; drops default symbolic and rejects invalid systems. */
 static char *
 content_symbols_canonical(const char *args)
 {
@@ -8612,6 +8824,7 @@ content_symbols_canonical(const char *args)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes a counter style argument; decimal becomes "" so it is omitted. */
 static char *
 content_counter_style_canonical(const char *style)
 {
@@ -8631,6 +8844,7 @@ content_counter_style_canonical(const char *style)
     return g_strdup(style);
 }
 
+/* Validates and serializes counter()/counters() with canonical separator and style. */
 static char *
 content_counter_canonical(const content_tok *t)
 {
@@ -8678,6 +8892,7 @@ content_func_is_image(const content_tok *t)
            g_str_has_suffix(t->text, "-gradient");
 }
 
+/* Serializes one content item; alt text after "/" allows only strings, counters and attr(). */
 static char *
 content_item_canonical(const content_tok *t, gboolean alt)
 {
@@ -8723,6 +8938,7 @@ content_item_canonical(const content_tok *t, gboolean alt)
     return NULL;
 }
 
+/* Serializes the content property's specified value incl. alt text; NULL if invalid. */
 static char *
 ns_css_content_canonical(const char *text)
 {
@@ -8768,6 +8984,7 @@ ns_css_content_canonical(const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Splits an image-set option at top-level whitespace, skipping strings; -1 if unterminated. */
 static int
 image_set_split_ws(const char *text, char **out, int max)
 {
@@ -8795,6 +9012,7 @@ image_set_split_ws(const char *text, char **out, int max)
     return n;
 }
 
+/* Canonicalizes an image-set resolution; computed form is always dppx. */
 static char *
 image_set_resolution_canonical(const char *tok, gboolean computed)
 {
@@ -8819,6 +9037,7 @@ image_set_resolution_canonical(const char *tok, gboolean computed)
     return res;
 }
 
+/* Serializes image-set() options as image resolution [type]; defaults resolution to 1x. */
 static char *
 image_set_canonical(const char *text, gboolean computed)
 {
@@ -8902,6 +9121,7 @@ text_starts_image_set(const char *p)
            g_ascii_strncasecmp(p, "-webkit-image-set(", 18) == 0;
 }
 
+/* Validates and serializes a unicode-range list as uppercase U+X or U+X-Y ranges. */
 static char *
 ns_css_unicode_range_canonical(const char *text)
 {
@@ -8960,6 +9180,7 @@ ns_css_unicode_range_canonical(const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Returns the closing quote in u honoring backslash escapes, or NULL. */
 static const char *
 css_quoted_end(const char *u, char quote)
 {
@@ -8972,6 +9193,7 @@ css_quoted_end(const char *u, char quote)
     return NULL;
 }
 
+/* Copies a URL dropping backslashes before escaped characters; caller frees. */
 static char *
 css_unescape_url(const char *u, gsize len)
 {
@@ -8983,6 +9205,7 @@ css_unescape_url(const char *u, gsize len)
     return g_string_free(out, FALSE);
 }
 
+/* Picks the image-set() url() whose resolution is closest to 1x; caller frees. */
 static char *
 pick_image_set_url(const char *t)
 {
@@ -9036,6 +9259,7 @@ pick_image_set_url(const char *t)
     return best;
 }
 
+/* Parses gradient text into a value; allow_trailing permits text after the closing paren. */
 static ns_css_value *
 parse_gradient_text(const char *t, gboolean allow_trailing)
 {
@@ -9060,6 +9284,7 @@ parse_any_gradient(const char *t)
     return parse_gradient_text(t, FALSE);
 }
 
+/* Converts an angle string to degrees (deg, rad, turn, grad); unitless taken as degrees. */
 static double
 parse_angle_deg(const char *s)
 {
@@ -9074,6 +9299,7 @@ parse_angle_deg(const char *s)
     return v;
 }
 
+/* Parses a transform length to px or a pure percentage, flagging which via is_percent. */
 static gboolean
 parse_transform_len(const char *s, double *out, gboolean *is_percent)
 {
@@ -9098,6 +9324,7 @@ parse_transform_len(const char *s, double *out, gboolean *is_percent)
     return TRUE;
 }
 
+/* Parses one translate axis into px, percent and em/rem parts; z rejects percentages. */
 static gboolean
 parse_translate_len(const char *s, ns_css_transform_op *op, int axis)
 {
@@ -9132,6 +9359,7 @@ parse_translate_len(const char *s, ns_css_transform_op *op, int axis)
     return TRUE;
 }
 
+/* Parses an angle or angle-valued math expression to degrees. */
 static gboolean
 parse_angle_any(const char *s, double *deg_out)
 {
@@ -9154,6 +9382,7 @@ parse_angle_any(const char *s, double *deg_out)
 
 static gboolean parse_scale_number(const char *s, double *out);
 
+/* Parses a transform function list into ops (translate, rotate, scale, skew, matrix, 3D). */
 static ns_css_value *
 parse_transform(const char *text)
 {
@@ -9328,6 +9557,7 @@ parse_transform(const char *text)
     return v;
 }
 
+/* Parses a transform-origin axis keyword or length into a value and percent flag. */
 static gboolean
 parse_origin_axis(const char *tok, gboolean is_y,
                   double *out, gboolean *is_percent)
@@ -9345,6 +9575,7 @@ parse_origin_axis(const char *tok, gboolean is_y,
     return ok;
 }
 
+/* Parses transform-origin into a single translate op (x, y as px/%, optional z length). */
 static ns_css_value *
 parse_transform_origin(const char *text)
 {
@@ -9426,6 +9657,7 @@ transform_value_one_op(const ns_css_transform_op *op)
     return v;
 }
 
+/* Parses the individual translate property (up to three lengths) into one translate op. */
 static ns_css_value *
 parse_translate_prop(const char *text)
 {
@@ -9445,6 +9677,7 @@ parse_translate_prop(const char *text)
     return transform_value_one_op(&op);
 }
 
+/* Parses the individual rotate property: angle, axis keyword plus angle, or x y z angle. */
 static ns_css_value *
 parse_rotate_prop(const char *text)
 {
@@ -9486,6 +9719,7 @@ parse_rotate_prop(const char *text)
     return v;
 }
 
+/* Parses a scale factor from a number, percentage or math expression. */
 static gboolean
 parse_scale_number(const char *s, double *out)
 {
@@ -9522,6 +9756,7 @@ parse_scale_number(const char *s, double *out)
     return FALSE;
 }
 
+/* Parses the individual scale property (one to three factors) into one scale op. */
 static ns_css_value *
 parse_scale_prop(const char *text)
 {
@@ -9543,6 +9778,7 @@ parse_scale_prop(const char *text)
     return transform_value_one_op(&op);
 }
 
+/* Appends a number for transform serialization; NaN as 0, infinities as calc(infinity). */
 static void
 append_scale_number(GString *s, double n)
 {
@@ -9559,6 +9795,7 @@ append_scale_number(GString *s, double n)
     g_free(t);
 }
 
+/* Reports whether a translate axis mixes percent or em/rem parts with px. */
 static gboolean
 translate_axis_is_mixed(const ns_css_transform_op *op, int axis)
 {
@@ -9566,6 +9803,7 @@ translate_axis_is_mixed(const ns_css_transform_op *op, int axis)
     return pct != 0 || op->em[axis] != 0 || op->rem[axis] != 0;
 }
 
+/* Serializes one translate axis as px, % or a calc() of its %/px/em/rem parts. */
 static void
 append_translate_length(GString *s, const ns_css_transform_op *op, int axis)
 {
@@ -9598,6 +9836,7 @@ append_translate_length(GString *s, const ns_css_transform_op *op, int axis)
     g_string_append_c(s, ')');
 }
 
+/* Serializes a translate, rotate or scale property value, omitting defaulted components. */
 char *
 ns_css_individual_transform_serialize(const ns_css_value *v, int prop)
 {
@@ -9672,6 +9911,7 @@ ns_css_transform_has_3d_function(const ns_css_transform *tf)
     return FALSE;
 }
 
+/* Reports whether a transform has a real 3D effect (z offset, z scale, off-axis rotation). */
 gboolean
 ns_css_transform_is_3d(const ns_css_transform *tf)
 {
@@ -9698,6 +9938,7 @@ ns_css_transform_is_3d(const ns_css_transform *tf)
     return FALSE;
 }
 
+/* Concatenates translate, rotate, scale and then transform (or the override) into one list. */
 void
 ns_css_style_effective_transform(const ns_style *st,
                                  const ns_css_transform *transform_override,
@@ -9722,6 +9963,7 @@ ns_css_style_effective_transform(const ns_style *st,
             out->ops[out->n_ops++] = tf->ops[i];
 }
 
+/* Builds a 4x4 matrix from transform ops; percentages resolve against the box size. */
 void
 ns_css_transform_to_mat4(const ns_css_transform *tf,
                          double bw, double bh, ns_mat4 *out)
@@ -9780,6 +10022,7 @@ ns_css_transform_to_mat4(const ns_css_transform *tf,
     }
 }
 
+/* Maps an easing keyword (linear, ease*, step-start/end) to a timing function; default ease. */
 static ns_css_timing
 parse_timing_keyword(const char *kw)
 {
@@ -9810,6 +10053,7 @@ timing_keyword_matches(const char *kw)
            g_ascii_strcasecmp(kw, "step-end") == 0;
 }
 
+/* Parses a time token with s or ms units into milliseconds. */
 static gboolean
 parse_time_ms(const char *tok, double *out_ms)
 {
@@ -9839,6 +10083,7 @@ static gboolean anim_range_shorthand_expand(const char *text, char **out_start, 
 static gboolean anim_range_item_canonical(const char *item, gboolean is_end, char **out);
 static gboolean css_time_value(const char *s, const char *e, double *out_ms);
 
+/* Splits a comma-separated animation/transition list into trimmed new strings. */
 static int
 anim_list_split(const char *text, char *items[], int max)
 {
@@ -9858,6 +10103,7 @@ anim_list_split(const char *text, char *items[], int max)
 
 static gboolean timing_item_parse(const char *item, ns_css_timing *out);
 
+/* Parses an easing function string (keyword, linear(), steps(), cubic-bezier()). */
 gboolean
 ns_css_timing_parse(const char *text, ns_css_timing *out)
 {
@@ -9868,6 +10114,7 @@ ns_css_timing_parse(const char *text, ns_css_timing *out)
     return ok;
 }
 
+/* Parses one easing function; steps() validates jump keyword and cubic-bezier x range. */
 static gboolean
 timing_item_parse(const char *item, ns_css_timing *out)
 {
@@ -9929,6 +10176,7 @@ timing_item_parse(const char *item, ns_css_timing *out)
     return ok;
 }
 
+/* Reports whether item is a CSS-wide keyword or "default" (invalid as a custom-ident). */
 static gboolean
 css_wide_keyword_or_default(const char *item)
 {
@@ -9939,6 +10187,7 @@ css_wide_keyword_or_default(const char *item)
     return FALSE;
 }
 
+/* Validates one list item for an animation or transition longhand. */
 static gboolean
 anim_longhand_item_valid(ns_css_prop prop, const char *item)
 {
@@ -10017,6 +10266,7 @@ anim_range_is_name(const char *tok)
     return FALSE;
 }
 
+/* Canonicalizes an animation-range length-percentage, rejecting time and angle units. */
 static char *
 anim_range_lp_canonical(const char *tok)
 {
@@ -10053,6 +10303,7 @@ anim_range_lp_canonical(const char *tok)
     return r;
 }
 
+/* Canonicalizes an animation-range-start/end item; drops the default 0%/100% offset. */
 static gboolean
 anim_range_item_canonical(const char *item, gboolean is_end, char **out)
 {
@@ -10087,6 +10338,7 @@ anim_range_item_canonical(const char *item, gboolean is_end, char **out)
     return ok;
 }
 
+/* Validates animation-duration items (auto or time) and stores the canonical list text. */
 static ns_css_value *
 parse_animation_duration(const char *t)
 {
@@ -10121,6 +10373,7 @@ parse_animation_duration(const char *t)
     return v;
 }
 
+/* Serializes an identifier per CSSOM, escaping leading digits and special characters. */
 static char *
 ns_css_ident_serialize(const char *name)
 {
@@ -10151,6 +10404,7 @@ ns_css_ident_serialize(const char *name)
     return g_string_free(out, FALSE);
 }
 
+/* Validates and canonicalizes an animation/transition longhand list into keyword text. */
 static ns_css_value *
 parse_anim_longhand(ns_css_prop prop, const char *t)
 {
@@ -10214,6 +10468,7 @@ parse_anim_longhand(ns_css_prop prop, const char *t)
     return v;
 }
 
+/* Resets an animation entry to defaults: target all, ease timing, one iteration. */
 static void
 anim_entry_init(ns_css_anim_entry *e)
 {
@@ -10223,6 +10478,7 @@ anim_entry_init(ns_css_anim_entry *e)
     e->iterations = 1;
 }
 
+/* Sets an entry's animation name or transition-property target from a token. */
 static void
 anim_entry_set_target(ns_css_anim_entry *e, const char *tok, gboolean is_animation)
 {
@@ -10254,6 +10510,7 @@ anim_entry_set_target(ns_css_anim_entry *e, const char *tok, gboolean is_animati
     }
 }
 
+/* Applies a longhand list to entries, cycling items when the list is shorter. */
 static void
 anim_apply_longhand(ns_css_anim_list *out, const ns_css_value *v, ns_css_prop prop)
 {
@@ -10327,6 +10584,7 @@ ns_css_anim_list_clear(ns_css_anim_list *list)
     list->n = 0;
 }
 
+/* Returns the number of comma-separated items in a longhand's keyword value. */
 static int
 anim_longhand_count(const ns_css_value *v)
 {
@@ -10337,6 +10595,7 @@ anim_longhand_count(const ns_css_value *v)
     return n;
 }
 
+/* Builds n animation or transition entries from the style's longhand values. */
 static void
 anim_build_list(const ns_style *s, gboolean is_animation, int n,
                 ns_css_anim_list *out)
@@ -10376,6 +10635,7 @@ anim_build_list(const ns_style *s, gboolean is_animation, int n,
     }
 }
 
+/* Returns the longhand property list for animation or transition shorthands. */
 static const ns_css_prop *
 anim_longhand_props(gboolean is_animation, gsize *n)
 {
@@ -10394,6 +10654,7 @@ anim_longhand_props(gboolean is_animation, gsize *n)
     return is_animation ? anim : trans;
 }
 
+/* Reports whether a style sets animation-name or any transition longhand. */
 gboolean
 ns_css_style_has_anim(const ns_style *s)
 {
@@ -10406,6 +10667,7 @@ ns_css_style_has_anim(const ns_style *s)
     return FALSE;
 }
 
+/* Builds the effective animation/transition list sized by the name/property list. */
 void
 ns_css_anim_effective(const ns_style *s, gboolean is_animation, ns_css_anim_list *out)
 {
@@ -10426,6 +10688,7 @@ ns_css_anim_effective(const ns_style *s, gboolean is_animation, ns_css_anim_list
     anim_build_list(s, is_animation, n, out);
 }
 
+/* Builds entries sized by the longest longhand list; flags mismatched list lengths. */
 void
 ns_css_anim_lists(const ns_style *s, gboolean is_animation, ns_css_anim_list *out,
                   gboolean *out_mismatch)
@@ -10445,6 +10708,7 @@ ns_css_anim_lists(const ns_style *s, gboolean is_animation, ns_css_anim_list *ou
     anim_build_list(s, is_animation, n, out);
 }
 
+/* Appends a space-separated part to a shorthand string and frees the part. */
 static void
 anim_append_part(GString *out, char *part)
 {
@@ -10454,6 +10718,7 @@ anim_append_part(GString *out, char *part)
     g_free(part);
 }
 
+/* Serializes animation/transition entries as shorthands, omitting default components. */
 char *
 ns_css_anim_shorthand_serialize(const ns_css_anim_list *list, gboolean is_animation)
 {
@@ -10500,6 +10765,7 @@ ns_css_anim_shorthand_serialize(const ns_css_anim_list *list, gboolean is_animat
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes animation/transition shorthand text by parsing and re-serializing it. */
 static char *
 ns_css_animation_shorthand_canonical(const char *text, gboolean is_animation)
 {
@@ -10510,6 +10776,7 @@ ns_css_animation_shorthand_canonical(const char *text, gboolean is_animation)
     return r;
 }
 
+/* Returns the serialized initial value of a property by name, or NULL if not tabled. */
 const char *
 ns_css_initial_value_text(const char *name)
 {
@@ -10752,6 +11019,7 @@ ns_css_initial_value_text(const char *name)
     return NULL;
 }
 
+/* Serializes a timing function; steps() keeps jump-start vs start spelling. Caller frees. */
 char *
 ns_css_timing_serialize(const ns_css_timing *t)
 {
@@ -10781,6 +11049,7 @@ ns_css_timing_serialize(const ns_css_timing *t)
     }
 }
 
+/* Decodes the escapes inside a quoted token, stripping the quotes; caller frees. */
 static char *
 anim_string_decode(const char *tok)
 {
@@ -10792,6 +11061,7 @@ anim_string_decode(const char *tok)
     return g_string_free(out, FALSE);
 }
 
+/* Decodes a token as a single escaped identifier; NULL if trailing text remains. */
 static char *
 anim_ident_decode(const char *tok)
 {
@@ -10805,6 +11075,7 @@ anim_ident_decode(const char *tok)
     return r;
 }
 
+/* Validates a counter value integer or integer-valued math expression into new text. */
 static gboolean
 counter_integer_text(const char *tok, char **out)
 {
@@ -10823,6 +11094,7 @@ counter_integer_text(const char *tok, char **out)
     return TRUE;
 }
 
+/* Canonicalizes counter-reset/increment/set lists, adding default values per name. */
 static char *
 counter_list_canonical(const char *text, ns_css_prop prop)
 {
@@ -10882,6 +11154,7 @@ counter_list_canonical(const char *text, ns_css_prop prop)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes a list-style-type token: symbols(), string, none or counter-style ident. */
 static char *
 list_style_type_canonical(const char *text)
 {
@@ -10911,6 +11184,7 @@ list_style_type_canonical(const char *text)
     return r;
 }
 
+/* Canonicalizes overflow-clip-margin, dropping the default padding-box and zero length. */
 static char *
 overflow_clip_margin_canonical(const char *text)
 {
@@ -10968,6 +11242,7 @@ overflow_clip_margin_canonical(const char *text)
     return r;
 }
 
+/* Splits the list-style shorthand into type, position and image, resolving "none". */
 static gboolean
 list_style_split(const char *text, char **out_type, char **out_position,
                  char **out_image)
@@ -11023,6 +11298,7 @@ list_style_split(const char *text, char **out_type, char **out_position,
     return TRUE;
 }
 
+/* Serializes the list-style shorthand, omitting default position, image and type. */
 char *
 ns_css_list_style_serialize(const char *type, const char *position,
                             const char *image)
@@ -11051,6 +11327,7 @@ ns_css_list_style_serialize(const char *type, const char *position,
     return g_string_free(out, FALSE);
 }
 
+/* Parses an animation or transition shorthand list into entries; NULL on any invalid item. */
 static ns_css_value *
 parse_anim_value(const char *text, gboolean is_animation)
 {
@@ -11300,6 +11577,7 @@ display_inner_from_token(const char *tok, guint8 *out)
     return FALSE;
 }
 
+/* Parses a display keyword or multi-keyword (outer inner list-item) into ns_display. */
 static gboolean
 display_parse(const char *lowered, ns_display *out)
 {
@@ -11344,6 +11622,7 @@ display_parse(const char *lowered, ns_display *out)
     return TRUE;
 }
 
+/* Serializes ns_display using the shortest legacy keyword where one exists; caller frees. */
 static char *
 ns_css_display_serialize(ns_display d)
 {
@@ -11384,6 +11663,7 @@ ns_css_display_serialize(ns_display d)
     return g_strdup_printf("run-in %s", inner_names[d.inner]);
 }
 
+/* Parses a canonical display keyword; unparseable input yields a zeroed display. */
 static ns_display
 ns_css_display_from_keyword(const char *canonical)
 {
@@ -11399,6 +11679,7 @@ ns_css_display_of(const ns_style *s)
     return s ? s->display : d;
 }
 
+/* Blockifies a display per CSS Display §2.7 (internal table/ruby types become block flow). */
 static ns_display
 ns_css_display_blockified(ns_display d)
 {
@@ -11414,6 +11695,7 @@ ns_css_display_blockified(ns_display d)
     return d;
 }
 
+/* Maps vendor-prefixed display aliases to standard ones and re-serializes canonically. */
 static char *
 normalize_display_value(const char *text)
 {
@@ -11440,6 +11722,7 @@ normalize_display_value(const char *text)
     return ok ? ns_css_display_serialize(d) : NULL;
 }
 
+/* Trims and canonicalizes a display value; NULL if invalid. */
 static char *
 ns_css_display_canonical(const char *value)
 {
@@ -11468,6 +11751,7 @@ is_math_fn_start(const char *s)
     return FALSE;
 }
 
+/* Serializes degrees as calc(<n>deg), with NaN and infinity spelled per CSS. */
 static char *
 serialize_calc_angle(double deg)
 {
@@ -11480,6 +11764,7 @@ serialize_calc_angle(double deg)
     return out;
 }
 
+/* Serializes a number as calc(<n>), with NaN and infinity spelled per CSS. */
 static char *
 serialize_calc_number(double n)
 {
@@ -11491,6 +11776,7 @@ serialize_calc_number(double n)
     return out;
 }
 
+/* Evaluates a math expression that must produce a plain number. */
 static gboolean
 eval_calc_number(const char *arg, double *out)
 {
@@ -11505,6 +11791,7 @@ eval_calc_number(const char *arg, double *out)
 
 enum { TF_ARG_NONE = 0, TF_ARG_ANGLE, TF_ARG_NUMBER, TF_ARG_LENGTH };
 
+/* Returns the expected argument type (angle, number, length) for a transform function arg. */
 static int
 transform_arg_type(const char *fn_lc, int idx)
 {
@@ -11528,6 +11815,7 @@ transform_arg_type(const char *fn_lc, int idx)
     return TF_ARG_NONE;
 }
 
+/* Folds a math-function transform argument into calc(<value><unit>); NULL if relative. */
 static char *
 canonicalize_transform_arg(const char *arg, int type)
 {
@@ -11562,6 +11850,7 @@ canonicalize_transform_arg(const char *arg, int type)
     return NULL;
 }
 
+/* Rewrites math-function arguments in a transform list to canonical calc(); NULL if none. */
 static char *
 ns_css_transform_canonical(const char *value)
 {
@@ -11629,6 +11918,7 @@ ns_css_transform_canonical(const char *value)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes one side of border-radius (1-4 radii), collapsing repeated values. */
 static char *
 border_radius_half_canonical(const char *text)
 {
@@ -11669,6 +11959,7 @@ border_radius_half_canonical(const char *text)
     return r;
 }
 
+/* Canonicalizes border-radius, omitting the "/ vertical" part when it equals horizontal. */
 static char *
 border_radius_canonical(const char *value)
 {
@@ -11694,6 +11985,7 @@ border_radius_canonical(const char *value)
     return r;
 }
 
+/* Reports whether a property name takes a single <color> value. */
 static gboolean
 prop_name_is_color(const char *prop)
 {
@@ -11711,6 +12003,7 @@ prop_name_is_color(const char *prop)
     return FALSE;
 }
 
+/* Returns the computed-value serialization of color text, or NULL if invalid. */
 static char *
 color_computed_text(const char *text)
 {
@@ -11724,6 +12017,7 @@ color_computed_text(const char *text)
     return g_string_free(s, FALSE);
 }
 
+/* Reports whether color text contains a non-color function (e.g. calc()). */
 static gboolean
 color_text_has_math(const char *p)
 {
@@ -11741,6 +12035,7 @@ color_text_has_math(const char *p)
     return FALSE;
 }
 
+/* Reports whether canonical color text computes to the same color as the raw text. */
 static gboolean
 color_canonical_keeps_value(const char *raw, const char *canonical)
 {
@@ -11753,6 +12048,7 @@ color_canonical_keeps_value(const char *raw, const char *canonical)
     return same;
 }
 
+/* Returns the CSSOM specified-value serialization of prop: value, per property. */
 char *
 ns_css_specified_canonical(const char *prop, const char *value)
 {
@@ -11874,6 +12170,7 @@ static gboolean is_font_ligatures_value(const char *s);
 static gboolean is_font_feature_settings_value(const char *s);
 static gboolean is_font_variation_settings_value(const char *s);
 
+/* Parses a plain s/ms time without float rounding error into milliseconds. */
 static gboolean
 css_time_plain(const char *s, const char *e, double *out_ms)
 {
@@ -11911,6 +12208,7 @@ css_time_plain(const char *s, const char *e, double *out_ms)
     return TRUE;
 }
 
+/* Parses a time or time-valued math expression into milliseconds. */
 static gboolean
 css_time_value(const char *s, const char *e, double *out_ms)
 {
@@ -11928,6 +12226,7 @@ css_time_value(const char *s, const char *e, double *out_ms)
     return ok;
 }
 
+/* Validates a comma-separated time list and stores its text as a keyword value. */
 static ns_css_value *
 parse_time_property(const char *t)
 {
@@ -11960,6 +12259,7 @@ css_time_seconds(const char *s, const char *e, double *out)
     return TRUE;
 }
 
+/* Reports whether [s, e) begins with a supported math function name. */
 static gboolean
 css_starts_math_fn(const char *s, const char *e)
 {
@@ -11976,6 +12276,7 @@ css_starts_math_fn(const char *s, const char *e)
     return FALSE;
 }
 
+/* Serializes math items in a time list (computed: all items as seconds); NULL if unchanged. */
 static char *
 css_time_list_serialize(const char *value, gboolean computed)
 {
@@ -12038,6 +12339,7 @@ ns_css_time_computed(const char *value)
     return value ? css_time_list_serialize(value, TRUE) : NULL;
 }
 
+/* Reports whether a token is an optionally signed run of decimal digits. */
 static gboolean
 css_is_integer_token(const char *s)
 {
@@ -12049,6 +12351,7 @@ css_is_integer_token(const char *s)
     return TRUE;
 }
 
+/* Returns the keyword alternative (auto, none, no-limit) for an integer property. */
 static const char *
 integer_prop_keyword(ns_css_prop prop)
 {
@@ -12061,6 +12364,7 @@ integer_prop_keyword(ns_css_prop prop)
     }
 }
 
+/* Parses an integer property: its keyword, a literal integer, or a rounded math result. */
 static ns_css_value *
 parse_integer_property(ns_css_prop prop, const char *t)
 {
@@ -12093,6 +12397,7 @@ parse_integer_property(ns_css_prop prop, const char *t)
     return NULL;
 }
 
+/* Reports whether text has a comma outside parentheses. */
 static gboolean
 value_has_top_level_comma(const char *t)
 {
@@ -12105,6 +12410,7 @@ value_has_top_level_comma(const char *t)
     return FALSE;
 }
 
+/* Reports whether a background longhand takes a comma-separated layer list. */
 static gboolean
 prop_is_bg_layered(ns_css_prop prop)
 {
@@ -12118,6 +12424,7 @@ prop_is_bg_layered(ns_css_prop prop)
            prop == NS_CSS_BACKGROUND_ATTACHMENT;
 }
 
+/* Validates a grid line name custom-ident and re-escapes it; NULL for reserved words. */
 static char *
 grid_custom_ident_canonical(const char *tok)
 {
@@ -12150,6 +12457,7 @@ grid_custom_ident_canonical(const char *tok)
     return out;
 }
 
+/* Canonicalizes a grid line integer, literal or math; reports literal value via out-params. */
 static char *
 grid_integer_canonical(const char *tok, gboolean *literal, long *value)
 {
@@ -12171,6 +12479,7 @@ grid_integer_canonical(const char *tok, gboolean *literal, long *value)
     return canon ? canon : g_strdup(tok);
 }
 
+/* Splits grid line text into up to max tokens honoring escapes; max+1 means too many. */
 static int
 grid_line_tokens(const char *text, char **out, int max)
 {
@@ -12206,6 +12515,7 @@ grid_line_tokens(const char *text, char **out, int max)
     return n;
 }
 
+/* Canonicalizes a grid line ([span] integer ident or auto); flags ident-only lines. */
 static char *
 grid_line_canonical(const char *text, gboolean *ident_only)
 {
@@ -12273,6 +12583,7 @@ done:
     return result;
 }
 
+/* Splits a grid placement at top-level slashes and canonicalizes each line. */
 static int
 grid_placement_parts(const char *text, int max_parts, char *parts[4],
                      gboolean ident_only[4])
@@ -12300,6 +12611,7 @@ fail:
     return 0;
 }
 
+/* Fills an omitted placement slot: copies an ident-only line, else uses auto. */
 static void
 grid_placement_fill(char *parts[4], gboolean ident_only[4], int n,
                     int index, int from)
@@ -12309,6 +12621,7 @@ grid_placement_fill(char *parts[4], gboolean ident_only[4], int n,
     ident_only[index] = ident_only[from];
 }
 
+/* Expands grid-row/column/area shorthand text to all 2 or 4 longhand lines. */
 static int
 grid_placement_expand(const char *text, gboolean area, char *out[4],
                       gboolean ident_only[4])
@@ -12324,6 +12637,7 @@ grid_placement_expand(const char *text, gboolean area, char *out[4],
     return max;
 }
 
+/* Reports whether a placement line equals the value it would default to if omitted. */
 static gboolean
 grid_line_is_default_for(char *const full[4], const gboolean ident_only[4],
                          int index, int from)
@@ -12332,6 +12646,7 @@ grid_line_is_default_for(char *const full[4], const gboolean ident_only[4],
     return strcmp(full[index], expected) == 0;
 }
 
+/* Serializes a grid placement shorthand, dropping trailing lines that equal defaults. */
 static char *
 grid_placement_canonical(const char *text, gboolean area)
 {
@@ -12379,6 +12694,7 @@ grid_tok_clear(gpointer data)
     g_free(((grid_tok *)data)->text);
 }
 
+/* Tokenizes grid template text into strings, [names], slashes and other tokens. */
 static GArray *
 grid_tokens(const char *text)
 {
@@ -12427,6 +12743,7 @@ grid_tokens(const char *text)
     return NULL;
 }
 
+/* Appends validated line names from a [names] token to acc; FALSE on invalid name. */
 static gboolean
 grid_names_append(GString *acc, const char *tok)
 {
@@ -12446,6 +12763,7 @@ grid_names_append(GString *acc, const char *tok)
     return TRUE;
 }
 
+/* Canonicalizes a track token: unitless 0 to 0px and lowercased keywords. */
 static char *
 grid_track_token_canonical(const char *tok)
 {
@@ -12469,6 +12787,7 @@ grid_parts_append(GString *out, const char *part)
     g_string_append(out, part);
 }
 
+/* Serializes track tokens, normalizing names and dropping empty [] groups. */
 static char *
 grid_track_tokens_canonical(const grid_tok *toks, int n)
 {
@@ -12490,6 +12809,7 @@ grid_track_tokens_canonical(const grid_tok *toks, int n)
     return g_string_free(out, FALSE);
 }
 
+/* Appends a canonical " [names]" group to out after validation. */
 static gboolean
 grid_name_group_append(GString *out, const char *tok)
 {
@@ -12500,6 +12820,7 @@ grid_name_group_append(GString *out, const char *tok)
     return ok;
 }
 
+/* Appends a subgrid repeat(N|auto-fill, [names]...) group; only one auto-fill allowed. */
 static gboolean
 grid_name_repeat_append(GString *out, const char *tok, gboolean *auto_fill)
 {
@@ -12540,6 +12861,7 @@ grid_name_repeat_append(GString *out, const char *tok, gboolean *auto_fill)
     return ok;
 }
 
+/* Canonicalizes a "subgrid [names] repeat(...)" line-name list. */
 static char *
 grid_subgrid_canonical(const char *text)
 {
@@ -12565,6 +12887,7 @@ grid_subgrid_canonical(const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes a grid-template-rows/columns value, including subgrid. */
 static char *
 grid_track_text_canonical(const char *text)
 {
@@ -12580,6 +12903,7 @@ grid_track_text_canonical(const char *text)
     return out;
 }
 
+/* Validates tokens as a track list for prop and serializes them; explicit_only bans repeat. */
 static char *
 grid_track_list_canonical(const grid_tok *toks, int n, ns_css_prop prop,
                           gboolean explicit_only)
@@ -12605,6 +12929,7 @@ grid_track_list_canonical(const grid_tok *toks, int n, ns_css_prop prop,
     return ok ? grid_track_tokens_canonical(toks, n) : NULL;
 }
 
+/* Normalizes a grid-template-areas row string to single-space separated cells. */
 static char *
 grid_area_string_canonical(const char *tok)
 {
@@ -12625,6 +12950,7 @@ grid_area_string_canonical(const char *tok)
     return g_string_free(out, FALSE);
 }
 
+/* Reports whether a token is a single valid track size (repeat() not allowed). */
 static gboolean
 grid_track_size_valid(const char *tok)
 {
@@ -12633,6 +12959,7 @@ grid_track_size_valid(const char *tok)
     return parse_one_track(tok, strlen(tok), &track);
 }
 
+/* Appends pending line names as a [group] to both rows and canonical text. */
 static void
 grid_flush_names(GString *names, GString *rows, GString *canon)
 {
@@ -12644,6 +12971,7 @@ grid_flush_names(GString *names, GString *rows, GString *canon)
     g_string_truncate(names, 0);
 }
 
+/* Parses the areas form of grid-template ([names] "row" size [names])* into parts. */
 static gboolean
 grid_template_areas_form(const grid_tok *t, int n, GString *rows,
                          GString *canon, GString *areas)
@@ -12687,6 +13015,7 @@ grid_template_areas_form(const grid_tok *t, int n, GString *rows,
     return ok;
 }
 
+/* Returns the index of the single slash token, -1 if none, -2 if more than one. */
 static int
 grid_slash_index(const grid_tok *t, int n)
 {
@@ -12699,6 +13028,7 @@ grid_slash_index(const grid_tok *t, int n)
     return at;
 }
 
+/* Expands grid-template into rows, columns and areas longhands plus canonical text. */
 static gboolean
 grid_template_tokens_parse(const grid_tok *t, int n, char *out[3],
                            char **canon)
@@ -12757,6 +13087,7 @@ grid_template_tokens_parse(const grid_tok *t, int n, char *out[3],
     return TRUE;
 }
 
+/* Tokenizes and expands a grid-template shorthand into its three longhands. */
 static gboolean
 grid_template_parse(const char *text, char *out[3], char **canon)
 {
@@ -12768,6 +13099,7 @@ grid_template_parse(const char *text, char *out[3], char **canon)
     return ok;
 }
 
+/* Detects a leading "auto-flow [dense]" in a grid shorthand side; returns tokens used. */
 static int
 grid_auto_flow_prefix(const grid_tok *t, int n, gboolean *dense)
 {
@@ -12785,6 +13117,7 @@ grid_auto_flow_prefix(const grid_tok *t, int n, gboolean *dense)
     return flow ? i : 0;
 }
 
+/* Canonicalizes an implicit track list for grid-auto-rows/columns; empty becomes auto. */
 static char *
 grid_auto_tracks_canonical(const grid_tok *t, int n, ns_css_prop prop)
 {
@@ -12795,6 +13128,7 @@ grid_auto_tracks_canonical(const grid_tok *t, int n, ns_css_prop prop)
     return grid_track_list_canonical(t, n, prop, TRUE);
 }
 
+/* Expands the grid shorthand (template or auto-flow forms) into six longhands. */
 static gboolean
 grid_shorthand_parse(const char *text, char *out[6], char **canon)
 {
@@ -12865,6 +13199,7 @@ grid_shorthand_parse(const char *text, char *out[6], char **canon)
     return ok;
 }
 
+/* Canonicalizes grid-auto-flow; row is implied, so "row dense" serializes as dense. */
 static char *
 grid_auto_flow_canonical(const char *text)
 {
@@ -12896,6 +13231,7 @@ prop_is_corner_radius(ns_css_prop prop)
            prop == NS_CSS_BORDER_BOTTOM_LEFT_RADIUS;
 }
 
+/* Reports whether w case-insensitively equals one of the space-separated choices. */
 static gboolean
 word_is_one_of(const char *w, const char *choices)
 {
@@ -12920,6 +13256,7 @@ keyword_value(const char *canonical)
     return v;
 }
 
+/* Parses scroll-snap-type as none or axis plus strictness (default proximity). */
 static ns_css_value *
 parse_scroll_snap_type(const char *text)
 {
@@ -12952,6 +13289,7 @@ parse_scroll_snap_type(const char *text)
     return v;
 }
 
+/* Parses scroll-snap-align one or two keywords, duplicating a single value. */
 static ns_css_value *
 parse_scroll_snap_align(const char *text)
 {
@@ -12983,6 +13321,7 @@ parse_scroll_snap_align(const char *text)
     return v;
 }
 
+/* Returns a lowercased keyword value if text matches one of the space-separated choices. */
 static ns_css_value *
 parse_keyword_choice(const char *text, const char *choices)
 {
@@ -13011,6 +13350,7 @@ parse_keyword_choice(const char *text, const char *choices)
     return v;
 }
 
+/* Reports whether kw is a self/content position keyword that safe/unsafe may prefix. */
 static gboolean
 alignment_is_position_keyword(const char *kw)
 {
@@ -13023,6 +13363,7 @@ alignment_is_position_keyword(const char *kw)
     return FALSE;
 }
 
+/* Parses box alignment values incl. first/last baseline, safe/unsafe and legacy forms. */
 static ns_css_value *
 parse_alignment_keyword(const char *text, const char *choices)
 {
@@ -13067,6 +13408,7 @@ parse_alignment_keyword(const char *text, const char *choices)
     return v;
 }
 
+/* Returns the alignment keyword without its safe/unsafe/legacy prefix. */
 const char *
 ns_css_alignment_base(const char *kw)
 {
@@ -13085,6 +13427,7 @@ prop_is_alignment(ns_css_prop p)
            p == NS_CSS_JUSTIFY_ITEMS || p == NS_CSS_JUSTIFY_SELF;
 }
 
+/* Reports whether a length property accepts the auto keyword. */
 static gboolean
 prop_accepts_auto(ns_css_prop prop)
 {
@@ -13109,6 +13452,7 @@ prop_accepts_auto(ns_css_prop prop)
     }
 }
 
+/* Reports whether a length property accepts the normal keyword. */
 static gboolean
 prop_accepts_normal(ns_css_prop prop)
 {
@@ -13120,6 +13464,7 @@ prop_accepts_normal(ns_css_prop prop)
            prop == NS_CSS_COLUMN_GAP;
 }
 
+/* Reports whether a numeric property rejects negative values. */
 static gboolean
 prop_requires_nonnegative(ns_css_prop prop)
 {
@@ -13160,6 +13505,7 @@ prop_requires_nonnegative(ns_css_prop prop)
     }
 }
 
+/* Reports whether a unitless number for prop is treated as px (not opacity/flex/lh). */
 static gboolean
 prop_bare_number_is_length(ns_css_prop prop)
 {
@@ -13167,6 +13513,7 @@ prop_bare_number_is_length(ns_css_prop prop)
            prop != NS_CSS_FLEX_SHRINK && prop != NS_CSS_LINE_HEIGHT;
 }
 
+/* Validates a parsed length/calc against a property's unit and sign constraints. */
 static gboolean
 numeric_value_valid_for_prop(ns_css_prop prop, const ns_css_value *v)
 {
@@ -13196,6 +13543,7 @@ numeric_value_valid_for_prop(ns_css_prop prop, const ns_css_value *v)
     return TRUE;
 }
 
+/* Reports whether text is a simple ASCII identifier (letters, digits, -, _). */
 static gboolean
 text_is_ident(const char *t)
 {
@@ -13217,6 +13565,7 @@ prop_is_border_width(ns_css_prop prop)
            prop == NS_CSS_COLUMN_RULE_WIDTH;
 }
 
+/* Keeps the specified keyword text for named colors and thin/medium/thick widths. */
 static void
 value_record_specified_keyword(ns_css_value *v, ns_css_prop prop,
                                const char *t)
@@ -13232,6 +13581,7 @@ value_record_specified_keyword(ns_css_value *v, ns_css_prop prop,
         v->specified = ascii_lower(t, strlen(t));
 }
 
+/* Parses a comma-separated background layer list into a next_layer chain. */
 static ns_css_value *
 parse_value_layer_list(ns_css_prop prop, const char *t)
 {
@@ -13259,6 +13609,7 @@ parse_value_layer_list(ns_css_prop prop, const char *t)
     return head;
 }
 
+/* Parses a declaration value for a property into a new ns_css_value; NULL if invalid. */
 static ns_css_value *
 parse_value_for(ns_css_prop prop, const char *text)
 {
@@ -14561,6 +14912,7 @@ parse_value_for(ns_css_prop prop, const char *text)
     return v;
 }
 
+/* Maps a logical side property to its physical side given the side index mapping. */
 static ns_css_prop
 logical_side_prop(ns_css_prop prop, int block_start, int block_end,
                   int inline_start, int inline_end)
@@ -14617,6 +14969,7 @@ logical_side_prop(ns_css_prop prop, int block_start, int block_end,
     }
 }
 
+/* Maps a logical corner radius to the physical corner for the given side mapping. */
 static ns_css_prop
 logical_corner_prop(ns_css_prop prop, int block_start, int block_end,
                     int inline_start, int inline_end)
@@ -14647,6 +15000,7 @@ logical_corner_prop(ns_css_prop prop, int block_start, int block_end,
     return NS_CSS_BORDER_BOTTOM_LEFT_RADIUS;
 }
 
+/* Maps logical properties to physical ones for a writing mode and direction. */
 static ns_css_prop
 logical_to_physical(ns_css_prop prop, int writing_mode, gboolean rtl)
 {
@@ -14678,6 +15032,7 @@ logical_to_physical(ns_css_prop prop, int writing_mode, gboolean rtl)
     }
 }
 
+/* Resolves a logical property to physical using the style's writing-mode and direction. */
 int
 ns_css_resolve_prop(int prop, const ns_style *style)
 {
@@ -14695,6 +15050,7 @@ ns_css_prop_name(int prop)
         ? kProperty[prop].name : NULL;
 }
 
+/* Looks up a property id by name, including legacy and -webkit- aliases; -1 if unknown. */
 static int
 prop_id(const char *name)
 {
@@ -14740,6 +15096,7 @@ ns_css_prop_id(const char *name)
     return name ? prop_id(name) : -1;
 }
 
+/* Validates a value for prop; values with var()/attr() are accepted unparsed. */
 static gboolean
 ns_css_declaration_valid(int prop, const char *text)
 {
@@ -14752,6 +15109,7 @@ ns_css_declaration_valid(int prop, const char *text)
     return TRUE;
 }
 
+/* Validates a named declaration, incl. custom props, unicode-range and the all shorthand. */
 gboolean
 ns_css_named_declaration_valid(const char *name, const char *text)
 {
@@ -14789,6 +15147,7 @@ ns_css_named_declaration_valid(const char *name, const char *text)
     return TRUE;
 }
 
+/* Maps font-stretch keyword or percentage to a 0..8 width rank; normal (4) by default. */
 int
 ns_css_font_stretch_rank(const ns_css_value *v)
 {
@@ -14821,6 +15180,7 @@ ns_css_font_stretch_rank(const ns_css_value *v)
     return 4;
 }
 
+/* Expands a 1-4 value box shorthand to its four longhands; emits nothing if any is invalid. */
 static void
 emit_quad(GArray *decls, ns_css_prop t, ns_css_prop r,
           ns_css_prop b, ns_css_prop l,
@@ -14850,6 +15210,7 @@ emit_quad(GArray *decls, ns_css_prop t, ns_css_prop r,
     }
 }
 
+/* Splits text at top-level whitespace into at most max new strings; returns the count. */
 static int
 split_ws_limit(const char *s, char *out[], int max)
 {
@@ -14867,6 +15228,7 @@ split_ws_limit(const char *s, char *out[], int max)
     return n;
 }
 
+/* Counts top-level whitespace-separated tokens in s. */
 static int
 css_ws_token_count(const char *s)
 {
@@ -14910,6 +15272,7 @@ position_is_keyword(const char *t)
            g_ascii_strcasecmp(t, "center") == 0;
 }
 
+/* Converts an edge keyword plus offset to a from-start offset (e.g. calc(100% - x)). */
 static char *
 position_from_edge(const char *edge, const char *offset)
 {
@@ -14924,6 +15287,7 @@ position_from_edge(const char *edge, const char *offset)
     return g_strdup_printf("calc(100%% - %s)", offset);
 }
 
+/* Splits a <position> into x and y offset strings measured from top/left; caller frees. */
 static void
 position_split(const char *text, char **out_x, char **out_y)
 {
@@ -14963,6 +15327,7 @@ position_split(const char *text, char **out_x, char **out_y)
     *out_y = y ? y : g_strdup("50%");
 }
 
+/* Splits a canonical <position> into x and y parts keeping edge keywords. */
 static void
 position_split_specified(const char *canon, char **out_x, char **out_y)
 {
@@ -14989,6 +15354,7 @@ position_split_specified(const char *canon, char **out_x, char **out_y)
 
 #define NS_CSS_VAR_MAX_DEPTH 16
 
+/* Replaces each var() with its (recursively expanded) fallback, or nothing if none. */
 static char *
 substitute_var_fallbacks(const char *vtext, int depth)
 {
@@ -15038,6 +15404,7 @@ typedef enum ns_custom_prop_wide {
     NS_CUSTOM_WIDE_REVERT_RULE,
 } ns_custom_prop_wide;
 
+/* Classifies a custom property value as a CSS-wide keyword, or NONE. */
 static ns_custom_prop_wide
 custom_prop_wide_kind(const char *text)
 {
@@ -15062,6 +15429,7 @@ custom_prop_wide_kind(const char *text)
     return NS_CUSTOM_WIDE_NONE;
 }
 
+/* Reports whether a custom property value is missing or a CSS-wide keyword. */
 static gboolean
 custom_prop_value_invalid(const char *text)
 {
@@ -15106,6 +15474,7 @@ ns_var_map_unref(ns_var_map *m)
     }
 }
 
+/* Looks up a custom property, walking the inherited parent chain of var maps. */
 const char *
 ns_var_map_lookup(const ns_var_map *m, const char *name)
 {
@@ -15126,6 +15495,7 @@ ns_var_name_compare(gconstpointer a, gconstpointer b)
     return strcmp(left, right);
 }
 
+/* Returns sorted visible custom property names (cached, excluding initial); new ref. */
 GPtrArray *
 ns_var_map_names(const ns_var_map *m)
 {
@@ -15162,6 +15532,7 @@ typedef struct {
     GHashTable *cyclic;
 } ns_var_budget;
 
+/* Marks a var() name active at depth; on a cycle records the cycle members and fails. */
 static gboolean
 var_budget_enter(ns_var_budget *b, const char *name, int depth)
 {
@@ -15177,6 +15548,7 @@ var_budget_enter(ns_var_budget *b, const char *name, int depth)
     return FALSE;
 }
 
+/* Charges output bytes against the var() expansion budget; flags overflow as invalid. */
 static gboolean
 var_budget_take(ns_var_budget *b, gsize n, gboolean *valid)
 {
@@ -15190,6 +15562,7 @@ var_budget_take(ns_var_budget *b, gsize n, gboolean *valid)
     return TRUE;
 }
 
+/* Expands var() with fallbacks, cycle detection and size limits per CSS Variables. */
 static char *
 substitute_vars_with_valid(const char *vtext, const ns_var_map *map, int depth,
                            gboolean *valid, ns_var_budget *b)
@@ -15290,6 +15663,7 @@ substitute_vars_with_valid(const char *vtext, const ns_var_map *map, int depth,
     return g_string_free(out, FALSE);
 }
 
+/* Expands var() references; returns NULL if the result is invalid at computed time. */
 static char *
 substitute_vars_tracked(const char *vtext, const ns_var_map *map,
                         ns_var_budget *budget)
@@ -15303,6 +15677,7 @@ substitute_vars_tracked(const char *vtext, const ns_var_map *map,
     return out;
 }
 
+/* Expands var() references against a var map with a fresh expansion budget. */
 static char *
 substitute_vars_with(const char *vtext, const ns_var_map *map)
 {
@@ -15352,6 +15727,7 @@ is_font_ligature_token(const char *s)
          strcmp(s, "no-contextual") == 0);
 }
 
+/* Validates a font-variant-ligatures value: normal, none or ligature keywords. */
 static gboolean
 is_font_ligatures_value(const char *s)
 {
@@ -15379,6 +15755,7 @@ font_feature_skip_ws(const char *p)
     return p;
 }
 
+/* Reads a quoted 4-character printable OpenType feature tag and advances *pp. */
 static gboolean
 font_feature_read_tag(const char **pp, char tag[5])
 {
@@ -15398,6 +15775,7 @@ font_feature_read_tag(const char **pp, char tag[5])
     return TRUE;
 }
 
+/* Reads an optional on/off or integer feature value after a tag. */
 static gboolean
 font_feature_read_optional_value(const char **pp)
 {
@@ -15424,6 +15802,7 @@ font_feature_read_optional_value(const char **pp)
     return TRUE;
 }
 
+/* Validates a font-feature-settings list of "tag" [value] items. */
 static gboolean
 is_font_feature_settings_value(const char *s)
 {
@@ -15444,6 +15823,7 @@ is_font_feature_settings_value(const char *s)
     return FALSE;
 }
 
+/* Reads the required finite number after a font-variation axis tag. */
 static gboolean
 font_variation_read_value(const char **pp)
 {
@@ -15456,6 +15836,7 @@ font_variation_read_value(const char **pp)
     return TRUE;
 }
 
+/* Validates a font-variation-settings list of "tag" number items. */
 static gboolean
 is_font_variation_settings_value(const char *s)
 {
@@ -15476,6 +15857,7 @@ is_font_variation_settings_value(const char *s)
     return FALSE;
 }
 
+/* Reports whether text contains a number with a container query unit (cqw, cqi, ...). */
 static gboolean
 css_value_has_container_unit(const char *text)
 {
@@ -15497,6 +15879,7 @@ css_value_has_container_unit(const char *text)
     return FALSE;
 }
 
+/* Formats milliseconds as a seconds value like "0.5s"; caller frees. */
 static char *
 css_time_text(double ms)
 {
@@ -15506,6 +15889,7 @@ css_time_text(double ms)
     return r;
 }
 
+/* Returns the transition-property name for an entry's target. */
 static const char *
 anim_target_text(const ns_css_anim_entry *e)
 {
@@ -15520,6 +15904,7 @@ anim_target_text(const ns_css_anim_entry *e)
     }
 }
 
+/* Serializes one animation/transition entry field for the given longhand; caller frees. */
 static char *
 anim_entry_longhand_text(const ns_css_anim_entry *e, ns_css_prop lh)
 {
@@ -15582,6 +15967,7 @@ static const ns_css_prop kTransitionLonghands[] = {
     NS_CSS_TRANSITION_BEHAVIOR,
 };
 
+/* Emits a CSS-wide keyword for every animation or transition longhand. */
 static void
 anim_shorthand_emit_wide_longhands(GArray *decls, const ns_css_value *wide,
                                    gboolean is_animation, gboolean important)
@@ -15596,6 +15982,7 @@ anim_shorthand_emit_wide_longhands(GArray *decls, const ns_css_value *wide,
     }
 }
 
+/* Expands parsed animation/transition entries into longhand declarations. */
 static void
 anim_shorthand_emit_longhands(GArray *decls, const ns_css_anim_list *list,
                               gboolean is_animation, gboolean important)
@@ -15626,6 +16013,7 @@ anim_shorthand_emit_longhands(GArray *decls, const ns_css_anim_list *list,
     }
 }
 
+/* Splits one animation-range item into start and end, inferring the end per spec. */
 static gboolean
 anim_range_shorthand_split(const char *item, char **out_start, char **out_end)
 {
@@ -15680,6 +16068,7 @@ anim_range_shorthand_split(const char *item, char **out_start, char **out_end)
     return FALSE;
 }
 
+/* Expands an animation-range list into start and end longhand lists. */
 static gboolean
 anim_range_shorthand_expand(const char *text, char **out_start, char **out_end)
 {
@@ -15710,6 +16099,7 @@ anim_range_shorthand_expand(const char *text, char **out_start, char **out_end)
     return TRUE;
 }
 
+/* Serializes animation-range from start/end lists, omitting an implied end. */
 char *
 ns_css_animation_range_serialize(const char *start_list, const char *end_list)
 {
@@ -15739,6 +16129,7 @@ ns_css_animation_range_serialize(const char *start_list, const char *end_list)
     return g_string_free(out, FALSE);
 }
 
+/* Reports whether tok is a background-repeat keyword; allow_axis admits repeat-x/y. */
 static gboolean
 bg_repeat_token(const char *tok, gboolean allow_axis)
 {
@@ -15750,6 +16141,7 @@ bg_repeat_token(const char *tok, gboolean allow_axis)
                            g_ascii_strcasecmp(tok, "repeat-y") == 0));
 }
 
+/* Canonicalizes a background-repeat pair, collapsing to one keyword or repeat-x/y. */
 static char *
 bg_repeat_canonical(const char *a, const char *b)
 {
@@ -15770,6 +16162,7 @@ bg_repeat_canonical(const char *a, const char *b)
     return r;
 }
 
+/* Splits text at top-level commas into trimmed new strings. */
 static GPtrArray *
 css_split_top_level_commas(const char *text)
 {
@@ -15792,6 +16185,7 @@ ns_css_background_position_join(const char *xs, const char *ys)
     return bg_position_zip(xs, ys);
 }
 
+/* Appends " !important" to value when important; consumes value. */
 static char *
 inline_mark_important(char *value, gboolean important)
 {
@@ -15801,6 +16195,7 @@ inline_mark_important(char *value, gboolean important)
     return with;
 }
 
+/* Joins x and y position lists into background-position; NULL if they cannot combine. */
 static char *
 bg_position_zip(const char *xs, const char *ys)
 {
@@ -15832,6 +16227,7 @@ bg_position_zip(const char *xs, const char *ys)
     return r;
 }
 
+/* Canonicalizes background-clip: a box keyword, text, border-area, or "border-area text". */
 static char *
 bg_clip_canonical(const char *text)
 {
@@ -15856,6 +16252,7 @@ bg_clip_canonical(const char *text)
     return r;
 }
 
+/* Serializes background longhand lists as the shorthand, omitting initial values. */
 static char *
 ns_css_background_shorthand_serialize(const char *image, const char *position,
                                       const char *size, const char *repeat,
@@ -15958,6 +16355,7 @@ bg_layer_text_clear(bg_layer_text *l)
     memset(l, 0, sizeof *l);
 }
 
+/* Reports whether a token is a length (or 0) or math expression, optionally non-negative. */
 static gboolean
 bg_token_is_length_like(const char *tok, gboolean nonnegative)
 {
@@ -15972,6 +16370,7 @@ bg_token_is_length_like(const char *tok, gboolean nonnegative)
     return ok;
 }
 
+/* Reports whether a token may be part of a background position. */
 static gboolean
 bg_token_is_position(const char *tok)
 {
@@ -15991,6 +16390,7 @@ bg_token_is_box(const char *tok)
            g_ascii_strcasecmp(tok, "content-box") == 0;
 }
 
+/* Reports whether a token is a background image (none, url, gradient, image-set). */
 static gboolean
 bg_token_is_image(const char *tok)
 {
@@ -15999,6 +16399,7 @@ bg_token_is_image(const char *tok)
            text_starts_gradient(tok) || text_starts_image_set(tok);
 }
 
+/* Parses one background shorthand layer into longhand texts; color only in final layer. */
 static gboolean
 bg_layer_parse(const char *text, gboolean final_layer, bg_layer_text *out,
                char **color_out)
@@ -16152,6 +16553,7 @@ bg_layer_parse(const char *text, gboolean final_layer, bg_layer_text *out,
     return ok;
 }
 
+/* Expands the background shorthand into per-layer longhand lists plus background-color. */
 static gboolean
 parse_background_shorthand(const char *vtext, gboolean important,
                            GArray *decls_out)
@@ -16236,6 +16638,7 @@ enum {
     BI_NUMBER = 1, BI_PERCENT = 2, BI_LENGTH = 4, BI_AUTO = 8, BI_CALC = 16,
 };
 
+/* Classifies a border-image token (number, %, length, auto, calc) and canonicalizes it. */
 static int
 border_image_token_kind(const char *tok, char **canon)
 {
@@ -16262,6 +16665,7 @@ border_image_token_kind(const char *tok, char **canon)
     return BI_CALC;
 }
 
+/* Serializes four box-side values in the shortest 1-4 value form. */
 static char *
 quad_text_collapse(char *const v[4])
 {
@@ -16275,6 +16679,7 @@ quad_text_collapse(char *const v[4])
     return g_strdup_printf("%s %s %s %s", v[0], v[1], v[2], v[3]);
 }
 
+/* Canonicalizes a 1-4 value border-image longhand of allowed kinds, with optional fill. */
 static char *
 border_image_quad_canonical(char *const tokens[], int n, int allowed,
                             gboolean *fill_out)
@@ -16323,6 +16728,7 @@ border_image_repeat_token(const char *tok)
            g_ascii_strcasecmp(tok, "space") == 0;
 }
 
+/* Canonicalizes border-image-repeat, collapsing two equal keywords to one. */
 static char *
 border_image_repeat_canonical(char *const tokens[], int n)
 {
@@ -16338,6 +16744,7 @@ border_image_repeat_canonical(char *const tokens[], int n)
     return r;
 }
 
+/* Canonicalizes a border-image slice, width, outset or repeat value; NULL if invalid. */
 static char *
 border_image_longhand_canonical(ns_css_prop prop, const char *text)
 {
@@ -16373,6 +16780,7 @@ border_image_longhand_canonical(ns_css_prop prop, const char *text)
     return r;
 }
 
+/* Validates border shorthand tokens: at most one color, width and style each. */
 static gboolean
 border_shorthand_tokens_valid(char *const tokens[], int n)
 {
@@ -16410,6 +16818,7 @@ border_shorthand_tokens_valid(char *const tokens[], int n)
     return colors <= 1 && widths <= 1 && styles <= 1;
 }
 
+/* Parses and appends n longhand declarations; appends none if any value is invalid. */
 static gboolean
 emit_longhands(GArray *decls_out, const ns_css_prop *props,
                const char *const *texts, int n, gboolean important)
@@ -16432,6 +16841,7 @@ emit_longhands(GArray *decls_out, const ns_css_prop *props,
     return valid;
 }
 
+/* Expands a one- or two-value shorthand into a pair of longhands. */
 static void
 emit_pair(GArray *decls_out, ns_css_prop first, ns_css_prop second,
           const char *vtext, gboolean important)
@@ -16448,6 +16858,7 @@ emit_pair(GArray *decls_out, ns_css_prop first, ns_css_prop second,
     for (int i = 0; i < n; i++) g_free(tokens[i]);
 }
 
+/* Classifies validated border shorthand tokens into width, style and color. */
 static void
 border_shorthand_split(char *const tokens[], int n, const char **width,
                        const char **style, const char **color)
@@ -16469,6 +16880,7 @@ border_shorthand_split(char *const tokens[], int n, const char **width,
     }
 }
 
+/* Appends initial-value declarations for all border-image longhands (reset by border). */
 static void
 border_image_emit_initials(GArray *decls_out, gboolean important)
 {
@@ -16488,6 +16900,7 @@ border_image_emit_initials(GArray *decls_out, gboolean important)
     }
 }
 
+/* Expands border-image (source slice / width / outset repeat) into its five longhands. */
 static gboolean
 parse_border_image_shorthand(const char *vtext, gboolean important,
                              GArray *decls_out)
@@ -16627,6 +17040,7 @@ parse_border_image_shorthand(const char *vtext, gboolean important,
     return ok;
 }
 
+/* Serializes border-image longhands as the shorthand, omitting initial values. */
 static char *
 ns_css_border_image_shorthand_serialize(const char *source, const char *slice,
                                         const char *width, const char *outset,
@@ -16658,6 +17072,7 @@ ns_css_border_image_shorthand_serialize(const char *source, const char *slice,
 
 typedef struct { const char *name; ns_css_prop t, r, b; } border_side_map;
 
+/* Expands border or a border side shorthand; full border also resets border-image. */
 static void
 parse_border_shorthand(const border_side_map *side, const char *vtext,
                        gboolean important, GArray *decls_out)
@@ -16737,6 +17152,7 @@ parse_border_shorthand(const border_side_map *side, const char *vtext,
 
 enum { TX_NUMBER = 1, TX_PERCENT = 2, TX_LENGTH = 4, TX_ANGLE = 8 };
 
+/* Canonicalizes one transform argument of the allowed types; scale maps % to a number. */
 static char *
 transform_arg_canonical(const char *arg, int want, gboolean scale_percent)
 {
@@ -16835,6 +17251,7 @@ transform_arg_canonical(const char *arg, int want, gboolean scale_percent)
     return canon;
 }
 
+/* Validates arity and argument types of one transform function and serializes it. */
 static char *
 transform_function_canonical(const char *fn_lc, char *const args[], int n)
 {
@@ -16891,6 +17308,7 @@ transform_function_canonical(const char *fn_lc, char *const args[], int n)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes a transform function list; NULL if any function is invalid. */
 static char *
 transform_list_canonical(const char *value)
 {
@@ -16949,6 +17367,7 @@ transform_list_canonical(const char *value)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes translate/scale/rotate property values, dropping defaulted components. */
 static char *
 individual_transform_canonical(const char *value, ns_css_prop prop)
 {
@@ -17069,6 +17488,7 @@ individual_transform_canonical(const char *value, ns_css_prop prop)
     return r;
 }
 
+/* Canonicalizes transform-origin (x y [z]) or perspective-origin (2D only). */
 static char *
 transform_origin_canonical(const char *value, gboolean two_only)
 {
@@ -17132,6 +17552,7 @@ transform_origin_canonical(const char *value, gboolean two_only)
     return r;
 }
 
+/* Assigns source order to newly added declarations and pending var() declarations. */
 static void
 stamp_declaration_order(GArray *decls, const ns_css_rule *capture,
                         guint *decl_mark, guint *pending_mark, int *seq)
@@ -17148,6 +17569,7 @@ stamp_declaration_order(GArray *decls, const ns_css_rule *capture,
     *pending_mark = pending->len;
 }
 
+/* Parses declarations until '}', expanding shorthands; var()/attr() values are deferred. */
 static void
 parse_declaration_block(const char **pp, const char *end,
                         GArray *decls_out, ns_css_rule *capture)
@@ -18563,6 +18985,7 @@ ns_css_rule_free(ns_css_rule *r)
     g_free(r);
 }
 
+/* Skips a CSS comment starting at p; returns p if none starts there, end if unterminated. */
 static const char *
 css_skip_comment(const char *p, const char *end)
 {
@@ -18572,6 +18995,7 @@ css_skip_comment(const char *p, const char *end)
     return p + 1 < end ? p + 2 : end;
 }
 
+/* Advances one step through string, escape or comment state; NULL for an ordinary char. */
 static const char *
 css_skip_quoted_step(const char *p, const char *end, char *quote,
                      gboolean newline_ends)
@@ -18631,6 +19055,7 @@ css_declaration_value_syntax_valid(const char *text)
     return ns_css_component_value_valid(text ? text : "");
 }
 
+/* True for custom props, longhands, known shorthands, or names that parse with 'initial'. */
 gboolean
 ns_css_named_property_supported(const char *name)
 {
@@ -18671,6 +19096,7 @@ ns_css_named_property_supported(const char *name)
     return supported;
 }
 
+/* Returns the position just past the brace closing the first {} block, skipping strings. */
 static const char *
 css_skip_to_block_end(const char *p, const char *end)
 {
@@ -18700,6 +19126,7 @@ css_block_body_end(const char *body_start, const char *block_end)
                                                           : block_end;
 }
 
+/* Returns the first top-level occurrence of needle per ns_css_syntax_scan, or NULL. */
 static const char *
 css_find_top_level_char(const char *p, const char *end, char needle)
 {
@@ -18709,6 +19136,7 @@ css_find_top_level_char(const char *p, const char *end, char needle)
     return term == needle ? q : NULL;
 }
 
+/* Finds an unquoted case-insensitive "name(" not preceded by an ident char; NULL if absent. */
 static const char *
 css_find_function(const char *p, const char *end, const char *name)
 {
@@ -18730,6 +19158,7 @@ css_find_function(const char *p, const char *end, const char *name)
     return NULL;
 }
 
+/* Strips a trailing top-level !important (comments allowed) in place and reports it. */
 static void
 css_strip_important(char *text, gboolean *important)
 {
@@ -18784,6 +19213,7 @@ css_property_rule_free(gpointer data)
     g_free(data);
 }
 
+/* Returns a copy of the value if it is a single CSS string token, else NULL. */
 static char *
 css_string_descriptor_dup(const char *value)
 {
@@ -18814,6 +19244,7 @@ font_url_suffix_eq(const char *url, const char *end, const char *suffix)
            g_ascii_strncasecmp(end - n, suffix, n) == 0;
 }
 
+/* Ranks a @font-face src URL by format (woff2 > woff > otf/ttf); -1 for eot, svg or empty. */
 static int
 font_src_score(const char *url)
 {
@@ -18839,6 +19270,7 @@ font_src_score(const char *url)
     return 10;
 }
 
+/* Replaces *best with the candidate URL if it scores higher; unsupported formats dropped. */
 static void
 font_src_consider(char **best, const char *start, gsize len)
 {
@@ -18858,6 +19290,7 @@ font_src_consider(char **best, const char *start, gsize len)
     }
 }
 
+/* Scans a @font-face src value for url() tokens and keeps the best-scoring one in *best. */
 static void
 font_src_consider_urls(char **best, const char *value)
 {
@@ -18904,6 +19337,7 @@ font_src_consider_urls(char **best, const char *value)
     }
 }
 
+/* Returns the trimmed @keyframes name, unquoting a string name; caller frees. */
 static char *
 css_keyframes_name_from_range(const char *start, const char *end)
 {
@@ -18932,6 +19366,7 @@ keyframes_clear(gpointer data)
     g_free(kf->stops);
 }
 
+/* Returns a copy with var() substituted in stop props, or NULL if no stop has raw props. */
 ns_css_keyframes *
 ns_css_keyframes_resolve(const ns_css_keyframes *kf,
                          const struct ns_var_map *vars)
@@ -18975,6 +19410,7 @@ keyframe_stop_cmp(gconstpointer a, gconstpointer b)
     return 0;
 }
 
+/* Parses a keyframe selector (from, to or N%) into a percentage; FALSE if invalid. */
 static gboolean
 parse_keyframe_stop_pct(const char *sel, double *out_pct)
 {
@@ -18990,6 +19426,7 @@ parse_keyframe_stop_pct(const char *sel, double *out_pct)
     return TRUE;
 }
 
+/* Advances *pp past an at-rule: through its ';' or its whole {} block. */
 static void
 skip_at_rule(const char **pp, const char *end)
 {
@@ -19016,6 +19453,7 @@ ns_css_get_color_scheme(void)
     return g_color_scheme;
 }
 
+/* Sets the prefers-reduced-motion value; drops the stylesheet cache when it changes. */
 void
 ns_css_set_reduced_motion(ns_css_reduced_motion motion)
 {
@@ -19024,6 +19462,7 @@ ns_css_set_reduced_motion(ns_css_reduced_motion motion)
     ns_css_stylesheet_cache_drop();
 }
 
+/* Sets the prefers-color-scheme value; drops the stylesheet cache when it changes. */
 void
 ns_css_set_color_scheme(ns_css_color_scheme scheme)
 {
@@ -19041,6 +19480,7 @@ sizes_is_length_fn(const char *p)
            g_ascii_strncasecmp(p, "clamp(", 6) == 0;
 }
 
+/* Resolves a sizes length to px with percentages against viewport width; -1 if invalid. */
 static double
 sizes_length_px(const char *len, gsize len_n)
 {
@@ -19049,6 +19489,7 @@ sizes_length_px(const char *len, gsize len_n)
     return px + pct * 0.01 * g_viewport_w;
 }
 
+/* Evaluates an img sizes attribute: first entry whose media matches, else viewport width. */
 double
 ns_css_sizes_resolve(const char *sizes)
 {
@@ -19103,6 +19544,7 @@ static gboolean supports_expr(const char **pp, const char *end, int depth);
 
 static __thread int g_supports_parse_depth;
 
+/* Implements @supports (prop: value) by parsing a one-rule sheet and checking for a decl. */
 gboolean
 ns_css_supports_declaration(const char *property, const char *value)
 {
@@ -19149,6 +19591,7 @@ ns_css_supports_declaration(const char *property, const char *value)
     return ok;
 }
 
+/* Evaluates a "prop: value" @supports feature by splitting at the top-level colon. */
 static gboolean
 supports_feature_matches(const char *src, gsize len)
 {
@@ -19165,6 +19608,7 @@ supports_feature_matches(const char *src, gsize len)
 
 static gboolean supports_selector_supported(const ns_css_selector *sel);
 
+/* False if a compound, or any selector nested in :is/:not/:has, can never match. */
 static gboolean
 supports_simple_supported(const ns_css_simple *c)
 {
@@ -19192,6 +19636,7 @@ supports_selector_supported(const ns_css_selector *sel)
     return TRUE;
 }
 
+/* Implements @supports selector(): strict-parses exactly one selector and checks support. */
 static gboolean
 supports_selector_matches(const char *src, gsize len)
 {
@@ -19210,6 +19655,7 @@ supports_selector_matches(const char *src, gsize len)
     return ok;
 }
 
+/* Case-insensitive keyword match at p followed by end, whitespace or a comment. */
 static gboolean
 match_kw(const char *p, const char *end, const char *kw)
 {
@@ -19231,6 +19677,7 @@ supports_function_start(const char *p, const char *end)
     return result;
 }
 
+/* Parses one @supports term (not, selector(), unknown fn, nested, feature); advances *pp. */
 static gboolean
 supports_term(const char **pp, const char *end, int depth)
 {
@@ -19293,6 +19740,7 @@ supports_term(const char **pp, const char *end, int depth)
     return result;
 }
 
+/* Parses and/or chains of @supports terms; mixing and with or unparenthesized yields FALSE. */
 static gboolean
 supports_expr(const char **pp, const char *end, int depth)
 {
@@ -19325,6 +19773,7 @@ supports_expr(const char **pp, const char *end, int depth)
     return acc;
 }
 
+/* Evaluates a CSS.supports()/@supports condition, optionally a bare "prop: value" form. */
 gboolean
 ns_css_supports_condition(const char *condition,
                           gboolean allow_bare_declaration)
@@ -19412,6 +19861,7 @@ ns_css_container_map_new(void)
                                  NULL, cq_container_free);
 }
 
+/* Records a query container's type, names, size and element-sibling position for node. */
 void
 ns_css_container_map_add(GHashTable *map, const void *node,
                          const char *type_kw, const char *name_kw,
@@ -19453,6 +19903,7 @@ cq_container_equal(const ns_cq_container *a, const ns_cq_container *b)
            g_strcmp0(a->names, b->names) == 0;
 }
 
+/* True when both maps hold the same nodes with identical container info. */
 gboolean
 ns_css_container_maps_equal(GHashTable *a, GHashTable *b)
 {
@@ -19470,6 +19921,7 @@ ns_css_container_maps_equal(GHashTable *a, GHashTable *b)
     return TRUE;
 }
 
+/* Order-independent hash of a container map's nodes, sizes and types; 0 when empty. */
 static guint64
 cq_map_signature(GHashTable *map)
 {
@@ -19495,6 +19947,7 @@ cq_map_signature(GHashTable *map)
     return sig;
 }
 
+/* True if the whitespace-separated container-name list contains the given name. */
 static gboolean
 cq_names_contain(const char *names, const char *name, gsize nlen)
 {
@@ -19510,6 +19963,7 @@ cq_names_contain(const char *names, const char *name, gsize nlen)
     return FALSE;
 }
 
+/* Pads range operators (<, >, =) with spaces and normalizes whitespace; caller frees. */
 static char *
 cq_spacify(const char *s)
 {
@@ -19530,6 +19984,7 @@ cq_spacify(const char *s)
     return g_string_free(o, FALSE);
 }
 
+/* Returns the innermost stacked container, optionally the innermost with the given name. */
 static const ns_cq_container *
 cq_select_container(const char *name, gsize nlen)
 {
@@ -19542,6 +19997,7 @@ cq_select_container(const char *name, gsize nlen)
     return NULL;
 }
 
+/* Returns the innermost container for an axis; the block axis needs container-type: size. */
 static const ns_cq_container *
 cq_select_axis(gboolean block_axis)
 {
@@ -19554,6 +20010,7 @@ cq_select_axis(gboolean block_axis)
     return NULL;
 }
 
+/* Resolves cq* units against the nearest eligible containers, falling back to the viewport. */
 static double
 container_unit_resolve(double v, ns_css_unit unit)
 {
@@ -19658,6 +20115,7 @@ cq_word_at(const char *p, const char *end, const char *word)
     return after == end || ns_is_ascii_ws(*after) || *after == '(';
 }
 
+/* Returns the ')' matching the '(' at p, skipping quoted strings; NULL if unbalanced. */
 static const char *
 cq_match_paren(const char *p, const char *end)
 {
@@ -19684,6 +20142,7 @@ cq_feature_name_known(const char *name)
     return FALSE;
 }
 
+/* Parses a non-negative <ratio> (a or a/b) into *out; b of 0 maps to G_MAXDOUBLE or 0. */
 static gboolean
 cq_value_is_ratio(const char *v, double *out)
 {
@@ -19706,6 +20165,7 @@ cq_value_is_ratio(const char *v, double *out)
     return ok;
 }
 
+/* True for a parseable math function or a length (a unitless number only if zero). */
 static gboolean
 cq_value_is_length(const char *v)
 {
@@ -19720,6 +20180,7 @@ cq_value_is_length(const char *v)
     return u != NS_CSS_UNIT_NUMBER || n == 0;
 }
 
+/* Validates a container feature value by its type; orientation is not allowed in range form. */
 static gboolean
 cq_feature_value_valid(const char *name, const char *value, gboolean range)
 {
@@ -19754,6 +20215,7 @@ cq_op_text(cq_op op)
     }
 }
 
+/* Parses a size feature in plain, min-/max- or range (a < name <= b) form; NULL if invalid. */
 static cq_node *
 cq_parse_feature(const char *text)
 {
@@ -19847,6 +20309,7 @@ cq_parse_feature(const char *text)
 static cq_node *cq_parse_query(const char *p, const char *end, gboolean *ok,
                                int depth);
 
+/* Parses a parenthesized container condition or function; unknown ones become general. */
 static cq_node *
 cq_parse_in_parens(const char **pp, const char *end, gboolean *ok, int depth)
 {
@@ -19895,6 +20358,7 @@ cq_parse_in_parens(const char **pp, const char *end, gboolean *ok, int depth)
     return NULL;
 }
 
+/* Parses a container query: a 'not' term or an and/or chain; mixing and/or clears *ok. */
 static cq_node *
 cq_parse_query(const char *p, const char *end, gboolean *ok, int depth)
 {
@@ -19940,6 +20404,7 @@ cq_parse_query(const char *p, const char *end, gboolean *ok, int depth)
     return list ? list : first;
 }
 
+/* Validates a container-name ident: rejects reserved words, leading digits, non-ident chars. */
 static gboolean
 cq_container_name_valid(const char *name, gsize len)
 {
@@ -19963,6 +20428,7 @@ cq_container_name_valid(const char *name, gsize len)
     return TRUE;
 }
 
+/* Splits a @container condition into an optional name and query tree; FALSE if invalid. */
 static gboolean
 cq_parse_condition(const char *cond, char **out_name, cq_node **out_query)
 {
@@ -19995,6 +20461,7 @@ cq_parse_condition(const char *cond, char **out_name, cq_node **out_query)
     return TRUE;
 }
 
+/* Splits text at commas outside parentheses into trimmed, newly allocated pieces. */
 static GPtrArray *
 cq_split_commas(const char *text)
 {
@@ -20017,6 +20484,7 @@ cq_split_commas(const char *text)
     return parts;
 }
 
+/* Appends the canonical serialization of a container query tree to out. */
 static void
 cq_serialize(const cq_node *n, GString *out)
 {
@@ -20059,6 +20527,7 @@ cq_serialize(const cq_node *n, GString *out)
     }
 }
 
+/* Canonicalizes container-name: "none" or valid idents space-joined; NULL if invalid. */
 static char *
 ns_css_container_name_canonical(const char *text)
 {
@@ -20077,6 +20546,7 @@ ns_css_container_name_canonical(const char *text)
     return res;
 }
 
+/* Canonicalizes the container shorthand "name [/ type]", omitting normal; NULL if invalid. */
 static char *
 ns_css_container_shorthand_canonical(const char *text)
 {
@@ -20103,6 +20573,7 @@ ns_css_container_shorthand_canonical(const char *text)
     return res;
 }
 
+/* Returns canonical @container condition text, or NULL if any alternative fails to parse. */
 char *
 ns_css_container_condition_canonical(const char *cond)
 {
@@ -20126,6 +20597,7 @@ ns_css_container_condition_canonical(const char *cond)
     return g_string_free(out, FALSE);
 }
 
+/* Replaces sibling-index() and sibling-count() with the given integers; caller frees. */
 static char *
 substitute_tree_counting(const char *text, int index, int count)
 {
@@ -20153,6 +20625,7 @@ substitute_tree_counting(const char *text, int index, int count)
     return g_string_free(out, FALSE);
 }
 
+/* Resolves a container query length to px, substituting sibling functions; 0 if invalid. */
 static double
 cq_length_resolve(const char *v, double pct_basis, const ns_cq_container *c)
 {
@@ -20167,6 +20640,7 @@ cq_length_resolve(const char *v, double pct_basis, const ns_cq_container *c)
     return px + pct / 100.0 * pct_basis;
 }
 
+/* Compares actual against v with op; equality uses a 0.001 tolerance. */
 static cq_tri
 cq_compare(double actual, cq_op op, double v)
 {
@@ -20180,6 +20654,7 @@ cq_compare(double actual, cq_op op, double v)
     }
 }
 
+/* Evaluates a size feature against a container, mapping logical axes by writing mode. */
 static cq_tri
 cq_eval_feature(const cq_node *n, const ns_cq_container *c)
 {
@@ -20234,6 +20709,7 @@ cq_eval_feature(const cq_node *n, const ns_cq_container *c)
     return CQ_TRI_TRUE;
 }
 
+/* Three-valued evaluation of a container query tree; general-enclosed terms yield unknown. */
 static cq_tri
 cq_eval(const cq_node *n, const ns_cq_container *c)
 {
@@ -20292,6 +20768,7 @@ cq_query_free(ns_css_container_query *q)
     g_free(q);
 }
 
+/* Compiles comma-separated container alternatives, dropping ones that fail to parse. */
 static GArray *
 cq_compile_term(const char *text)
 {
@@ -20308,6 +20785,7 @@ cq_compile_term(const char *text)
     return term;
 }
 
+/* Compiles a container condition whose nested @container terms are joined by 0x1F. */
 static ns_css_container_query *
 cq_compile(const char *cond)
 {
@@ -20325,6 +20803,7 @@ cq_compile(const char *cond)
     return q;
 }
 
+/* True if any alternative's named (or nearest) container matches its query. */
 static gboolean
 cq_term_matches(const GArray *term)
 {
@@ -20337,6 +20816,7 @@ cq_term_matches(const GArray *term)
     return FALSE;
 }
 
+/* True if every nested @container term matches; compiles and caches the query lazily. */
 static gboolean
 container_rule_matches(ns_css_rule *r)
 {
@@ -20356,6 +20836,7 @@ css_trim_dup_range(const char *start, const char *end)
     return g_strndup(start, (gsize)(end - start));
 }
 
+/* Appends the missing closing quote and brackets to a value cut off at EOF; caller frees. */
 static char *
 css_value_closed_at_eof(const char *value)
 {
@@ -20396,6 +20877,7 @@ css_stylesheet_ensure_layers(ns_css_stylesheet *sh)
         sh->layers = g_hash_table_new(g_str_hash, g_str_equal);
 }
 
+/* Returns the cascade layer's order rank, assigning the next rank on first sight. */
 static int
 css_layer_register(ns_css_stylesheet *sh, const char *name)
 {
@@ -20412,6 +20894,7 @@ css_layer_register(ns_css_stylesheet *sh, const char *name)
 
 static char *css_layer_join(const char *parent, const char *child);
 
+/* Creates and registers a unique anonymous layer name nested under current_layer. */
 static char *
 css_layer_anonymous(ns_css_stylesheet *sh, const char *current_layer)
 {
@@ -20432,6 +20915,7 @@ css_layer_join(const char *parent, const char *child)
     return g_strconcat(parent, ".", child, NULL);
 }
 
+/* Registers the dotted layer name from a prelude range, anonymous if empty; caller frees. */
 static char *
 css_layer_name_from_range(ns_css_stylesheet *sh, const char *current_layer,
                           const char *start, const char *end)
@@ -20448,6 +20932,7 @@ css_layer_name_from_range(ns_css_stylesheet *sh, const char *current_layer,
     return full;
 }
 
+/* Registers each comma-separated name of a @layer statement under current_layer. */
 static void
 css_layer_register_list(ns_css_stylesheet *sh, const char *current_layer,
                         const char *start, const char *end)
@@ -20468,6 +20953,7 @@ css_layer_register_list(ns_css_stylesheet *sh, const char *current_layer,
     }
 }
 
+/* Case-insensitive keyword match at p followed by end, whitespace, '(', ';' or ','. */
 static gboolean
 css_at_keyword(const char *p, const char *end, const char *kw)
 {
@@ -20479,6 +20965,7 @@ css_at_keyword(const char *p, const char *end, const char *kw)
     return ns_is_ascii_ws(c) || c == '(' || c == ';' || c == ',';
 }
 
+/* Parses a url() or string from an @import/@namespace prelude; advances *pp; caller frees. */
 static char *
 css_parse_import_url(const char **pp, const char *end)
 {
@@ -20523,6 +21010,7 @@ css_parse_import_url(const char **pp, const char *end)
     return url;
 }
 
+/* Registers an @namespace prefix, or the default namespace, in the selector namespace map. */
 static void
 css_parse_namespace_prelude(const char *start, const char *end)
 {
@@ -20547,6 +21035,7 @@ css_parse_namespace_prelude(const char *start, const char *end)
     g_free(prefix);
 }
 
+/* Parses an @import "layer" or "layer(name)" clause into a registered layer name. */
 static char *
 css_parse_layer_function(ns_css_stylesheet *sh, const char **pp,
                          const char *end)
@@ -20585,6 +21074,7 @@ css_import_clear(gpointer data)
     g_free(im->media);
 }
 
+/* Appends an @import entry with its layer and media to the sheet; registers the layer. */
 static void
 css_stylesheet_add_import(ns_css_stylesheet *sh, const char *url,
                           const char *layer_name, const char *media)
@@ -20603,6 +21093,7 @@ css_stylesheet_add_import(ns_css_stylesheet *sh, const char *url,
     g_array_append_val(sh->imports, im);
 }
 
+/* Parses an @import prelude (url, layer, supports(), media); dropped if supports fails. */
 static void
 css_parse_import_prelude(ns_css_stylesheet *sh, const char *current_layer,
                          const char *start, const char *end)
@@ -20680,6 +21171,7 @@ css_scope_selector_group_valid(GPtrArray *group)
     return TRUE;
 }
 
+/* Parses a @scope root/limit selector list; NULL if empty or any has a pseudo-element. */
 static GPtrArray *
 css_scope_parse_selector_list(const char *text)
 {
@@ -20691,6 +21183,7 @@ css_scope_parse_selector_list(const char *text)
     return group;
 }
 
+/* Checks that @scope root (default :root) and limit selector lists parse. */
 static gboolean
 css_scope_text_valid(const ns_css_scope_text *s)
 {
@@ -20706,6 +21199,7 @@ css_scope_text_valid(const ns_css_scope_text *s)
     return TRUE;
 }
 
+/* Parses a @scope prelude "(start) to (end)" into text; NULL if malformed or invalid. */
 static ns_css_scope_text *
 css_scope_text_from_prelude(const char *start, const char *end)
 {
@@ -20756,6 +21250,7 @@ css_scope_text_from_prelude(const char *start, const char *end)
     return s;
 }
 
+/* Builds parsed @scope roots (default :root) and limits from text; NULL if invalid. */
 static ns_css_scope *
 css_scope_from_text(const ns_css_scope_text *text)
 {
@@ -20776,6 +21271,7 @@ css_scope_from_text(const ns_css_scope_text *text)
     return s;
 }
 
+/* Attaches a parsed scope for each enclosing @scope to rule; FALSE if any fails to parse. */
 static gboolean
 css_scope_stack_apply_to_rule(ns_css_rule *rule, GPtrArray *scope_stack)
 {
@@ -20790,6 +21286,7 @@ css_scope_stack_apply_to_rule(ns_css_rule *rule, GPtrArray *scope_stack)
     return TRUE;
 }
 
+/* True if a selector has & or :scope outside attribute brackets and strings. */
 static gboolean
 css_selector_segment_has_scope_marker(const char *p, const char *end)
 {
@@ -20817,6 +21314,7 @@ css_selector_segment_has_scope_marker(const char *p, const char *end)
     return FALSE;
 }
 
+/* Copies selector text to out, replacing top-level & with replacement; TRUE if any replaced. */
 static gboolean
 css_replace_nesting_amp(GString *out, const char *p, const char *end,
                         const char *replacement)
@@ -20846,6 +21344,7 @@ css_replace_nesting_amp(GString *out, const char *p, const char *end,
     return replaced;
 }
 
+/* Rewrites @scope selectors: & becomes :scope, others get a ":where(:scope) " prefix. */
 static char *
 css_scope_selector_list_text(const char *start, const char *end)
 {
@@ -20875,6 +21374,7 @@ css_scope_selector_list_text(const char *start, const char *end)
     return g_string_free(out, FALSE);
 }
 
+/* Looks up a CSS page size keyword (A/B/JIS sizes, letter, legal, ledger) in px at 96dpi. */
 static gboolean
 page_named_size(const char *name, double *w, double *h)
 {
@@ -20896,6 +21396,7 @@ page_named_size(const char *name, double *w, double *h)
     return FALSE;
 }
 
+/* Parses text as a width length that resolves to px; FALSE otherwise. */
 static gboolean
 page_length_px(const char *text, double *out)
 {
@@ -20907,6 +21408,7 @@ page_length_px(const char *text, double *out)
     return ok;
 }
 
+/* Applies an @page size value (lengths, named size, orientation) to the page rule. */
 static void
 page_apply_size(ns_css_page_rule *pr, const char *text)
 {
@@ -20943,6 +21445,7 @@ page_apply_size(ns_css_page_rule *pr, const char *text)
     pr->has_size = TRUE;
 }
 
+/* Applies an @page margin shorthand of 1 to 4 lengths to the page rule. */
 static void
 page_apply_margin(ns_css_page_rule *pr, const char *text)
 {
@@ -20967,6 +21470,7 @@ page_apply_margin(ns_css_page_rule *pr, const char *text)
     for (int i = 0; i < 4; i++) pr->has_margin[i] = TRUE;
 }
 
+/* Returns the next "name: value" descriptor; name/value point into the returned buffer. */
 static char *
 css_next_descriptor(const char **cursor, const char *end, char **name,
                     char **value)
@@ -20990,6 +21494,7 @@ css_next_descriptor(const char **cursor, const char *end, char **name,
     return NULL;
 }
 
+/* Parses @page size and margin descriptors into the sheet's page rule. */
 static void
 css_parse_page_block(ns_css_stylesheet *sh, const char *body_start,
                      const char *body_end)
@@ -21019,6 +21524,7 @@ css_parse_page_block(ns_css_stylesheet *sh, const char *body_start,
     }
 }
 
+/* Skips an invalid qualified rule through its {} block; stops at '}' when nested. */
 static const char *
 css_skip_invalid_qualified_rule(const char *p, const char *end,
                                 gboolean nested)
@@ -21034,6 +21540,7 @@ css_skip_invalid_qualified_rule(const char *p, const char *end,
     return end;
 }
 
+/* Parses rules and at-rules until EOF or close_at, recursing into matching groups. */
 static void
 parse_rules_until(const char **pp, const char *end,
                   ns_css_stylesheet *sh, int *source_order,
@@ -21556,6 +22063,7 @@ parse_rules_until(const char **pp, const char *end,
     if (nested) at_depth--;
 }
 
+/* Nests child under parent: & becomes :is(parent), else prefixed; NULL over max_len. */
 static char *
 css_combine_selectors(const char *parent, const char *child, gsize max_len)
 {
@@ -21614,6 +22122,7 @@ static void css_flatten_style_rule(GString *out, const char *sel,
 #define NS_CSS_NEST_MAX_DEPTH 128
 #define NS_CSS_NEST_SELECTOR_BUDGET ((gsize)16 * 1024 * 1024)
 
+/* Trims whitespace in place, keeping trailing whitespace that is backslash-escaped. */
 static void
 css_trim_selector(char *sel)
 {
@@ -21630,6 +22139,7 @@ css_trim_selector(char *sel)
     sel[n] = '\0';
 }
 
+/* Flattens a rule list into out, keeping group at-rules and desugaring nested style rules. */
 static void
 css_flatten_rule_list(GString *out, const char *p, const char *end, int depth,
                       gsize *budget)
@@ -21697,6 +22207,7 @@ css_flatten_rule_list(GString *out, const char *p, const char *end, int depth,
     }
 }
 
+/* True if a declaration block contains a nested rule (a segment ending in '{'). */
 static gboolean
 css_body_has_nested_rule(const char *s, const char *e)
 {
@@ -21719,6 +22230,7 @@ css_body_has_nested_rule(const char *s, const char *e)
     return FALSE;
 }
 
+/* Charges a selector's length to the flattening budget; FALSE and zeroes it when exhausted. */
 static gboolean
 css_flatten_take_budget(gsize *budget, const char *sel)
 {
@@ -21732,6 +22244,7 @@ css_flatten_take_budget(gsize *budget, const char *sel)
     return TRUE;
 }
 
+/* Emits buffered declarations as a rule under sel, then clears the buffer. */
 static void
 css_flatten_flush_decls(GString *out, const char *sel, GString *decls,
                         gsize *budget)
@@ -21748,6 +22261,7 @@ css_flatten_flush_decls(GString *out, const char *sel, GString *decls,
     g_string_truncate(decls, 0);
 }
 
+/* Desugars CSS nesting: emits sel's declarations and nested rules into out as flat rules. */
 static void
 css_flatten_style_rule(GString *out, const char *sel,
                        const char *body_s, const char *body_e, int depth,
@@ -21820,6 +22334,7 @@ css_flatten_style_rule(GString *out, const char *sel,
     g_string_free(decls, TRUE);
 }
 
+/* Returns the stylesheet text with CSS nesting flattened, bounded by a selector size budget. */
 static char *
 css_flatten_nesting(const char *text, gssize len)
 {
@@ -21834,6 +22349,7 @@ css_flatten_nesting(const char *text, gssize len)
 
 static guint64 g_stylesheet_serial_next = 1;
 
+/* Parses CSS text into a new stylesheet after flattening nesting; namespaces are per sheet. */
 ns_css_stylesheet *
 ns_css_stylesheet_parse(const char *text, gssize len_in)
 {
@@ -21867,6 +22383,7 @@ ns_css_stylesheet_parse(const char *text, gssize len_in)
     return sh;
 }
 
+/* False for empty, fragment-only, data: and blob: URLs. */
 static gboolean
 css_url_should_resolve(const char *url)
 {
@@ -21877,6 +22394,7 @@ css_url_should_resolve(const char *url)
     return TRUE;
 }
 
+/* Resolves url() values in every layer of v against base_url in place. */
 static void
 css_value_resolve_url(ns_css_value *v, const char *base_url)
 {
@@ -21891,6 +22409,7 @@ css_value_resolve_url(ns_css_value *v, const char *base_url)
     }
 }
 
+/* Rewrites url() references in raw text to absolute URLs; NULL if nothing changed. */
 static char *
 css_raw_text_resolve_urls(const char *text, const char *base_url)
 {
@@ -21935,6 +22454,7 @@ css_raw_text_resolve_urls(const char *text, const char *base_url)
     return g_string_free(out, FALSE);
 }
 
+/* Absolutizes URLs in decls, custom props, pending decls and font faces; once per base. */
 void
 ns_css_stylesheet_resolve_urls(ns_css_stylesheet *s, const char *base_url)
 {
@@ -22043,6 +22563,7 @@ ns_css_stylesheet_has_active_rules(const ns_css_stylesheet *sh)
 
 static void incr_sheet_keys_free(struct ns_css_incr_sheet_keys *k);
 
+/* Frees a stylesheet with its index; does nothing for sheets owned by the cache. */
 void
 ns_css_stylesheet_free(ns_css_stylesheet *s)
 {
@@ -22070,6 +22591,7 @@ ns_css_stylesheet_free(ns_css_stylesheet *s)
     g_free(s);
 }
 
+/* Moves every rule, import and layer of the sheet under layer_name, as for @import layer(). */
 static void
 ns_css_stylesheet_force_layer(ns_css_stylesheet *s, const char *layer_name)
 {
@@ -22129,6 +22651,7 @@ ns_css_rule_index_free(ns_css_rule_index *idx)
     g_free(idx);
 }
 
+/* Appends a rule/selector candidate unless it duplicates the last entry. */
 static void
 index_add_candidate_array(GArray *bucket, guint rule_idx, guint selector_idx)
 {
@@ -22142,6 +22665,7 @@ index_add_candidate_array(GArray *bucket, guint rule_idx, guint selector_idx)
     g_array_append_val(bucket, cand);
 }
 
+/* Caches each candidate's selector, pseudo-element, scope flag and ancestor hashes. */
 static void
 index_fill_candidates(const ns_css_stylesheet *sheet, GArray *bucket)
 {
@@ -22232,6 +22756,7 @@ index_counts_free(css_index_counts *counts)
     g_hash_table_destroy(counts->by_attr);
 }
 
+/* Counts a subject compound's id, classes, tag and attribute names for index key choice. */
 static void
 index_counts_add_subject(css_index_counts *counts, const ns_css_simple *subj)
 {
@@ -22260,6 +22785,7 @@ index_choice_take(guint count, guint *best)
     return TRUE;
 }
 
+/* Picks the subject key (id, class, tag or attr) with the fewest selectors sharing it. */
 static css_index_kind
 index_subject_kind(const css_index_counts *counts,
                    const ns_css_simple *subj,
@@ -22307,6 +22833,7 @@ index_subject_kind(const css_index_counts *counts,
     return kind;
 }
 
+/* Files a selector under its rarest subject key; FALSE if the subject has none. */
 static gboolean
 index_add_subject(ns_css_rule_index *idx, const css_index_counts *counts,
                   const ns_css_simple *subj, guint ri, guint si)
@@ -22345,6 +22872,7 @@ index_add_subject(ns_css_rule_index *idx, const css_index_counts *counts,
     return FALSE;
 }
 
+/* Indexes a selector via the arms of its smallest :is() group; FALSE if any is unindexable. */
 static gboolean
 index_add_matches_any(ns_css_rule_index *idx, const css_index_counts *counts,
                       const ns_css_simple *subj, guint ri, guint si)
@@ -22382,6 +22910,7 @@ index_add_matches_any(ns_css_rule_index *idx, const css_index_counts *counts,
     return TRUE;
 }
 
+/* Builds id/class/tag/attr rule buckets plus a universal list; also sets the pseudo_mask. */
 static ns_css_rule_index *
 ns_css_rule_index_build(const ns_css_stylesheet *sheet)
 {
@@ -22456,6 +22985,7 @@ ns_css_rule_index_ensure(const ns_css_stylesheet *sheet)
 static gboolean match_selector(const ns_css_selector *sel, const ns_node *el);
 static const ns_node *g_css_match_scope;
 
+/* Sets the :scope element used during matching; returns the previous one. */
 const ns_node *
 ns_css_set_match_scope(const ns_node *scope)
 {
@@ -22466,6 +22996,7 @@ ns_css_set_match_scope(const ns_node *scope)
 
 static gboolean match_simple(const ns_css_simple *sel, const ns_node *el);
 
+/* True for free-text input types: missing, text, search, url, tel, email, password, number. */
 static gboolean
 ns_input_is_text_entry(const ns_node *el)
 {
@@ -22480,6 +23011,7 @@ ns_input_is_text_entry(const ns_node *el)
            g_ascii_strcasecmp(type, "number") == 0;
 }
 
+/* Matches :read-write: a writable, enabled input or textarea, or a contenteditable element. */
 static gboolean
 ns_el_is_read_write(const ns_node *el)
 {
@@ -22498,6 +23030,7 @@ ns_el_is_read_write(const ns_node *el)
     return FALSE;
 }
 
+/* Matches :placeholder-shown: has a placeholder and an empty text input or blank textarea. */
 static gboolean
 ns_el_placeholder_shown(const ns_node *el)
 {
@@ -22522,6 +23055,7 @@ ns_el_placeholder_shown(const ns_node *el)
     return FALSE;
 }
 
+/* Matches :checked: checked checkbox/radio, or a selected option incl. a select's choice. */
 static gboolean
 ns_el_is_checked(const ns_node *el)
 {
@@ -22542,6 +23076,7 @@ ns_el_is_checked(const ns_node *el)
     return ns_input_is_checked(el);
 }
 
+/* True for submit/image inputs and buttons whose type is missing, submit or auto. */
 static gboolean
 ns_el_is_submit_button(const ns_node *el)
 {
@@ -22557,6 +23092,7 @@ ns_el_is_submit_button(const ns_node *el)
            g_ascii_strcasecmp(type, "auto") == 0;
 }
 
+/* Returns the first enabled submit button in tree order whose form owner is owner. */
 static const ns_node *
 ns_css_first_submit_button_for(const ns_node *scan, const ns_node *doc,
                                const ns_node *owner, int depth)
@@ -22576,6 +23112,7 @@ ns_css_first_submit_button_for(const ns_node *scan, const ns_node *doc,
     return NULL;
 }
 
+/* Matches :default: selected options, checked checkboxes/radios, or a form's default button. */
 static gboolean
 ns_el_is_default(const ns_node *el)
 {
@@ -22594,6 +23131,7 @@ ns_el_is_default(const ns_node *el)
     return ns_css_first_submit_button_for(doc ? doc : owner, doc, owner, 0) == el;
 }
 
+/* True if any radio under scan with the same name and form owner is checked. */
 static gboolean
 ns_css_radio_group_has_checked(const ns_node *scan, const ns_node *doc,
                                const ns_node *owner, const char *name,
@@ -22618,6 +23156,7 @@ ns_css_radio_group_has_checked(const ns_node *scan, const ns_node *doc,
     return FALSE;
 }
 
+/* Matches :indeterminate: progress without value, or a radio whose group has none checked. */
 static gboolean
 ns_el_is_indeterminate(const ns_node *el)
 {
@@ -22633,6 +23172,7 @@ ns_el_is_indeterminate(const ns_node *el)
     return !ns_css_radio_group_has_checked(doc ? doc : el, doc, owner, name, 0);
 }
 
+/* Reports underflow/overflow for numeric inputs with min/max and a value; FALSE if N/A. */
 static gboolean
 ns_el_range_state(const ns_node *el, gboolean *under, gboolean *over)
 {
@@ -22648,6 +23188,7 @@ ns_el_range_state(const ns_node *el, gboolean *under, gboolean *over)
     return ns_input_value_range_state(el, value, under, over);
 }
 
+/* Matches :blank: an empty text-entry input value or a whitespace-only textarea. */
 static gboolean
 ns_el_is_blank(const ns_node *el)
 {
@@ -22669,6 +23210,7 @@ ns_el_is_blank(const ns_node *el)
     return blank;
 }
 
+/* Matches :empty: no element children and no non-empty text nodes. */
 static gboolean
 ns_el_is_empty(const ns_node *el)
 {
@@ -22692,6 +23234,7 @@ static GHashTable *g_visited_urls = NULL;
 static char       *g_css_doc_base = NULL;
 static char       *g_css_doc_language = NULL;
 
+/* Records an absolute URL as visited for :link/:visited matching. */
 void
 ns_css_mark_visited(const char *abs_url)
 {
@@ -22717,6 +23260,7 @@ ns_css_set_doc_language(const char *lang)
     g_css_doc_language = (lang && *lang) ? g_strdup(lang) : NULL;
 }
 
+/* True if the link's href, resolved against the document base, is in the visited set. */
 static gboolean
 ns_el_is_visited_link(const ns_node *el)
 {
@@ -22750,6 +23294,7 @@ typedef struct css_sibling_position {
 static GHashTable *g_sibling_positions;
 static GPtrArray  *g_sibling_position_blocks;
 
+/* Starts a per-pass cache of element sibling positions for structural pseudo-classes. */
 static void
 css_sibling_positions_begin(void)
 {
@@ -22764,6 +23309,7 @@ css_sibling_positions_end(void)
     g_clear_pointer(&g_sibling_position_blocks, g_ptr_array_unref);
 }
 
+/* Computes child, last-child, of-type and last-of-type indices for all children of parent. */
 static void
 css_sibling_positions_fill(const ns_node *parent)
 {
@@ -22801,6 +23347,7 @@ css_sibling_positions_fill(const ns_node *parent)
     g_hash_table_destroy(type_counts);
 }
 
+/* Returns el's cached sibling position, filling its parent's on a miss; NULL if no cache. */
 static const css_sibling_position *
 css_sibling_position_of(const ns_node *el)
 {
@@ -22812,6 +23359,7 @@ css_sibling_position_of(const ns_node *el)
     return g_hash_table_lookup(g_sibling_positions, el);
 }
 
+/* Computes the 1-based :nth-* index, honoring "of S"; FALSE if el itself fails S. */
 static gboolean
 ns_css_sibling_counts_for_nth(const ns_node *el, const ns_css_pseudo_pred *pc,
                               int *idx_out)
@@ -22851,6 +23399,7 @@ static __thread const ns_node *g_pragma_doc;
 static __thread const char    *g_pragma_lang;
 static __thread gboolean       g_pragma_valid;
 
+/* Finds the last single-valued meta http-equiv content-language; result is a static buffer. */
 static void
 ns_css_pragma_language_scan(const ns_node *n, const char **found, int depth)
 {
@@ -22881,6 +23430,7 @@ ns_css_pragma_language_scan(const ns_node *n, const char **found, int depth)
     }
 }
 
+/* Returns el's language from xml:lang/lang, else the pragma default, else the doc language. */
 static const char *
 ns_css_node_language(const ns_node *el)
 {
@@ -22904,6 +23454,7 @@ ns_css_node_language(const ns_node *el)
     return g_pragma_lang ? g_pragma_lang : g_css_doc_language;
 }
 
+/* Extended-range :lang() match of one range, supporting * and *-subtag wildcards. */
 static gboolean
 ns_css_lang_one_matches(const char *lang, const char *want)
 {
@@ -22931,6 +23482,7 @@ ns_css_lang_one_matches(const char *lang, const char *want)
     return lang[wlen] == '\0' || lang[wlen] == '-';
 }
 
+/* True if el's language matches any comma-separated :lang() range. */
 static gboolean
 ns_css_lang_matches(const ns_node *el, const char *arg)
 {
@@ -22976,6 +23528,7 @@ ns_dir_attr_sets_direction(const char *dir)
          g_ascii_strcasecmp(dir, "auto") == 0);
 }
 
+/* Finds the first strong direction in descendant text, skipping script/style/bdi/dir. */
 static const char *
 ns_dir_first_strong(const ns_node *n, int depth)
 {
@@ -23006,6 +23559,7 @@ ns_dir_first_strong(const ns_node *n, int depth)
     return NULL;
 }
 
+/* Returns "rtl" or "ltr" for the first strong character in s, or NULL if none. */
 static const char *
 ns_dir_first_strong_str(const char *s)
 {
@@ -23018,6 +23572,7 @@ ns_dir_first_strong_str(const char *s)
     return NULL;
 }
 
+/* Returns the value used for dir=auto of textarea and text-like inputs; NULL otherwise. */
 static const char *
 ns_dir_form_control_value(const ns_node *n)
 {
@@ -23037,6 +23592,7 @@ ns_dir_form_control_value(const ns_node *n)
     return ns_node_editable_value(n);
 }
 
+/* Resolves dir=auto from a control's value or descendant text; defaults to ltr. */
 static const char *
 ns_dir_auto_resolve(const ns_node *n)
 {
@@ -23049,6 +23605,7 @@ ns_dir_auto_resolve(const ns_node *n)
     return d ? d : "ltr";
 }
 
+/* Computes directionality for :dir() from ancestor dir attributes, bdi and tel inputs. */
 const char *
 ns_css_node_dir(const ns_node *el)
 {
@@ -23076,6 +23633,7 @@ ns_css_node_dir(const ns_node *el)
     return "ltr";
 }
 
+/* True if el's id, or an a element's name, equals the current URL fragment. */
 static gboolean
 ns_css_node_is_target(const ns_node *el)
 {
@@ -23089,6 +23647,7 @@ ns_css_node_is_target(const ns_node *el)
     return FALSE;
 }
 
+/* Matches :target-within: el or a descendant outside templates is the target. */
 static gboolean
 ns_css_node_has_target_within(const ns_node *el, int depth)
 {
@@ -23102,6 +23661,7 @@ ns_css_node_has_target_within(const ns_node *el, int depth)
     return FALSE;
 }
 
+/* Tests value against an input pattern anchored as ^(?:p)$; empty or invalid patterns match. */
 static gboolean
 ns_css_value_matches_pattern(const char *value, const char *pattern)
 {
@@ -23116,6 +23676,7 @@ ns_css_value_matches_pattern(const char *value, const char *pattern)
     return ok;
 }
 
+/* Validation candidate test: enabled input/textarea/select not barred by type or readonly. */
 static gboolean
 ns_css_node_will_validate(const ns_node *el)
 {
@@ -23137,6 +23698,7 @@ ns_css_node_will_validate(const ns_node *el)
     return TRUE;
 }
 
+/* Returns the control's current value (first selected option for select); caller frees. */
 static char *
 ns_css_control_value_dup(const ns_node *el)
 {
@@ -23153,6 +23715,7 @@ ns_css_control_value_dup(const ns_node *el)
     return g_strdup(v ? v : "");
 }
 
+/* Checks custom validity, required, type, range, step, pattern and length constraints. */
 static gboolean
 ns_css_control_is_valid(const ns_node *el)
 {
@@ -23206,6 +23769,7 @@ ns_css_control_is_valid(const ns_node *el)
     return valid;
 }
 
+/* True if no validating descendant control of the fieldset is invalid. */
 static gboolean
 ns_css_fieldset_is_valid(const ns_node *fieldset, int depth)
 {
@@ -23220,6 +23784,7 @@ ns_css_fieldset_is_valid(const ns_node *fieldset, int depth)
     return TRUE;
 }
 
+/* Walks the tree for controls owned by form (form attr or ancestry); FALSE on any invalid. */
 static gboolean
 ns_css_form_is_valid_walk(const ns_node *root, const ns_node *form,
                           const char *form_id, int depth)
@@ -23277,6 +23842,7 @@ static gboolean
 relative_chain_matches(const ns_css_selector *rel, const ns_node *anchor,
                        const ns_node *base, guint idx, int depth);
 
+/* Matches compound idx of a :has() relative selector at candidate, then the rest. */
 static gboolean
 relative_try_candidate(const ns_css_selector *rel, const ns_node *anchor,
                        const ns_node *candidate, guint idx, int depth)
@@ -23287,6 +23853,7 @@ relative_try_candidate(const ns_css_selector *rel, const ns_node *anchor,
     return relative_chain_matches(rel, anchor, candidate, idx + 1, depth + 1);
 }
 
+/* Tries compound idx of a relative selector on every descendant element of base. */
 static gboolean
 relative_descendant_matches(const ns_css_selector *rel, const ns_node *anchor,
                             const ns_node *base, guint idx, int depth)
@@ -23301,6 +23868,7 @@ relative_descendant_matches(const ns_css_selector *rel, const ns_node *anchor,
     return FALSE;
 }
 
+/* Matches a :has() relative selector chain from base, following its combinators. */
 static gboolean
 relative_chain_matches(const ns_css_selector *rel, const ns_node *anchor,
                        const ns_node *base, guint idx, int depth)
@@ -23334,6 +23902,7 @@ relative_chain_matches(const ns_css_selector *rel, const ns_node *anchor,
     return relative_descendant_matches(rel, anchor, base, idx, depth + 1);
 }
 
+/* True if a :has() argument matches relative to anchor; anchor is :scope if none is set. */
 static gboolean
 has_relative_matches(const ns_css_selector *rel, const ns_node *anchor)
 {
@@ -23368,6 +23937,7 @@ has_memo_equal(gconstpointer pa, gconstpointer pb)
 
 static GHashTable *g_has_memo;
 
+/* Evaluates a :has() selector list for anchor, memoized per group and anchor when enabled. */
 static gboolean
 has_group_matches(const GPtrArray *group, const ns_node *anchor)
 {
@@ -23388,6 +23958,7 @@ has_group_matches(const GPtrArray *group, const ns_node *anchor)
     return matched;
 }
 
+/* True for HTML attributes whose values match ASCII case-insensitively in selectors. */
 static gboolean
 ns_css_html_ci_attr(const char *name)
 {
@@ -23406,6 +23977,7 @@ ns_css_html_ci_attr(const char *name)
     return FALSE;
 }
 
+/* Applies an attribute selector operator to value, with HTML case-insensitivity rules. */
 static gboolean
 ns_css_attr_value_matches(const ns_css_attr_pred *a, const char *value,
                           gboolean html_doc)
@@ -23460,6 +24032,7 @@ ns_css_attr_value_matches(const ns_css_attr_pred *a, const char *value,
     return FALSE;
 }
 
+/* Returns el's namespace URI (explicit, SVG or XHTML); NULL for no-namespace foreign/XML. */
 static const char *
 css_element_namespace(const ns_node *el)
 {
@@ -23472,6 +24045,7 @@ css_element_namespace(const ns_node *el)
     return NULL;
 }
 
+/* Returns el's name without a recorded namespace prefix. */
 static const char *
 css_element_local_name(const ns_node *el)
 {
@@ -23492,6 +24066,7 @@ css_name_equals_lower(const char *name, const char *lower)
     }
 }
 
+/* Matches one compound selector against el: namespace, type, id, classes, attrs, pseudos. */
 static gboolean
 match_simple(const ns_css_simple *sel, const ns_node *el)
 {
@@ -23918,6 +24493,7 @@ match_simple(const ns_css_simple *sel, const ns_node *el)
     return TRUE;
 }
 
+/* Inserts a 0 before bare leading-dot numbers (.5 becomes 0.5); takes ownership of v. */
 static char *
 css_add_leading_zeros(char *v)
 {
@@ -23946,6 +24522,7 @@ css_add_leading_zeros(char *v)
     return g_string_free(out, FALSE);
 }
 
+/* True if the '(' at paren opens a math function such as calc(). */
 static gboolean
 is_math_fn_open(const char *text, const char *paren)
 {
@@ -23954,6 +24531,7 @@ is_math_fn_open(const char *text, const char *paren)
     return start < paren && is_math_fn_start(start);
 }
 
+/* Rewrites -0 literals to 0, skipping math functions unless inside_math; takes ownership. */
 static char *
 negative_zero_normalize(char *value, gboolean inside_math)
 {
@@ -24006,6 +24584,7 @@ ns_css_negative_zero_normalize(char *value)
     return negative_zero_normalize(value, TRUE);
 }
 
+/* Reserializes url() tokens in double-quoted form, escaping quotes; takes ownership. */
 static char *
 css_serialize_urls(char *value)
 {
@@ -24050,6 +24629,7 @@ css_serialize_urls(char *value)
     return g_string_free(out, FALSE);
 }
 
+/* Canonicalizes a place-* shorthand via its align/justify parts, collapsing equal halves. */
 static char *
 place_shorthand_canonical(const char *prop, char *value)
 {
@@ -24092,6 +24672,7 @@ place_shorthand_canonical(const char *prop, char *value)
     return result;
 }
 
+/* Canonicalizes an inline style value per property for CSSOM serialization; takes ownership. */
 static char *
 css_inline_value_canonical(const char *prop, char *value)
 {
@@ -24207,6 +24788,7 @@ css_inline_value_canonical(const char *prop, char *value)
     return value;
 }
 
+/* Extracts longhand prop's specified value from a shorthand declaration; NULL with var(). */
 static char *
 inline_expanded_value(const char *name, const char *value, int prop,
                       gboolean *important)
@@ -24251,6 +24833,7 @@ inline_expanded_value(const char *name, const char *value, int prop,
     return result;
 }
 
+/* True for supported non-custom properties reset by all (excludes direction, unicode-bidi). */
 static gboolean
 inline_property_is_all_covered(const char *name)
 {
@@ -24260,6 +24843,7 @@ inline_property_is_all_covered(const char *name)
            ns_css_named_property_supported(name);
 }
 
+/* Skips an at-rule inside style attribute text through its ';' or its block. */
 static const char *
 inline_skip_at_rule(const char *p, const char *end)
 {
@@ -24270,6 +24854,7 @@ inline_skip_at_rule(const char *p, const char *end)
     return stop > p ? stop : p + 1;
 }
 
+/* Yields the next trimmed name/value pair from style attribute text, skipping at-rules. */
 static gboolean
 inline_next_declaration(const char **cursor, const char *end,
                         char **name, char **value)
@@ -24298,6 +24883,7 @@ inline_next_declaration(const char **cursor, const char *end,
     }
 }
 
+/* Returns the all value unless a later valid longhand (optionally under prefix) wins. */
 static char *
 inline_all_value_for(const char *style, const char *prefix)
 {
@@ -24349,6 +24935,7 @@ inline_css_wide_value(const char *value)
     return FALSE;
 }
 
+/* Maps a box shorthand (margin, padding, border-width/color/style) to its four side ids. */
 static const int *
 inline_quad_ids(const char *prop)
 {
@@ -24378,6 +24965,7 @@ inline_quad_ids(const char *prop)
     return NULL;
 }
 
+/* Serializes a four-side shorthand from inline longhands in shortest form; NULL if partial. */
 static char *
 inline_quad_value(const char *style, const char *prop,
                   gboolean *important_out)
@@ -24437,6 +25025,7 @@ inline_quad_value(const char *style, const char *prop,
     return result;
 }
 
+/* Serializes a two-longhand shorthand such as overflow from inline style; NULL if mismatch. */
 static char *
 inline_pair_value(const char *style, int first_id, int second_id,
                   gboolean *important_out)
@@ -24492,6 +25081,7 @@ inline_pair_value(const char *style, int first_id, int second_id,
     return result;
 }
 
+/* Serializes animation/transition from inline longhands; NULL on list length mismatch. */
 static char *
 inline_anim_shorthand_value(const char *style, gboolean is_animation)
 {
@@ -24531,6 +25121,7 @@ inline_anim_shorthand_value(const char *style, gboolean is_animation)
     return r;
 }
 
+/* Fetches inline longhand values; FALSE if any is missing or their priorities differ. */
 static gboolean
 inline_longhands_get(const char *style, const char *const *names, gsize n,
                      char **values, gboolean *important)
@@ -24553,6 +25144,7 @@ inline_values_same(char *const *values, gsize n)
     return TRUE;
 }
 
+/* Serializes the background shorthand from its eight inline longhands; NULL if any missing. */
 static char *
 inline_background_value(const char *style, gboolean *important_out)
 {
@@ -24580,6 +25172,7 @@ inline_background_value(const char *style, gboolean *important_out)
     return r;
 }
 
+/* Serializes border-image from its five inline longhands; NULL if any is missing. */
 static char *
 inline_border_image_value(const char *style)
 {
@@ -24604,6 +25197,7 @@ inline_border_image_value(const char *style)
     return r;
 }
 
+/* Maps -webkit-border-*radius names to the standard property names. */
 static const char *
 inline_prop_alias(const char *name)
 {
@@ -24618,6 +25212,7 @@ inline_prop_alias(const char *name)
     return name;
 }
 
+/* Serializes border width/style/color omitting initial values; "medium" if all are initial. */
 static char *
 border_side_serialize(const char *width, const char *style, const char *color)
 {
@@ -24639,6 +25234,7 @@ static const char *const border_side_names[4] = {
     "top", "right", "bottom", "left",
 };
 
+/* Serializes a border-<side> shorthand from inline longhands; NULL if not representable. */
 static char *
 inline_border_side_value(const char *style, int side)
 {
@@ -24665,6 +25261,7 @@ inline_border_side_value(const char *style, int side)
     return r;
 }
 
+/* Serializes border only if all sides agree and border-image is none or the same keyword. */
 static char *
 inline_border_value(const char *style)
 {
@@ -24690,6 +25287,7 @@ inline_border_value(const char *style)
     return r;
 }
 
+/* Serializes border-radius from the four corner longhands, using " / " for elliptical radii. */
 static char *
 inline_border_radius_value(const char *style)
 {
@@ -24731,6 +25329,7 @@ inline_border_radius_value(const char *style)
     return r;
 }
 
+/* Composes grid-template from rows, columns and areas; empty string if not representable. */
 static char *
 inline_grid_template_compose(char *const v[3])
 {
@@ -24786,6 +25385,7 @@ inline_grid_template_compose(char *const v[3])
     return out ? g_string_free(out, FALSE) : g_strdup("");
 }
 
+/* Composes the grid shorthand, using auto-flow forms when needed; empty if unrepresentable. */
 static char *
 inline_grid_compose(char *const v[6])
 {
@@ -24818,6 +25418,7 @@ inline_grid_compose(char *const v[6])
     return g_strdup("");
 }
 
+/* Joins grid line longhands with " / " and canonicalizes; empty string if any missing. */
 char *
 ns_css_grid_placement_compose(char *const values[4], gboolean area)
 {
@@ -24836,6 +25437,7 @@ ns_css_grid_placement_compose(char *const values[4], gboolean area)
     return out ? out : g_strdup("");
 }
 
+/* Composes grid or grid-template text from longhand values; empty string if any missing. */
 char *
 ns_css_grid_shorthand_compose(char *const values[6], gboolean full)
 {
@@ -24846,6 +25448,7 @@ ns_css_grid_shorthand_compose(char *const values[6], gboolean full)
                 : inline_grid_template_compose(values);
 }
 
+/* Serializes grid/grid-template from inline longhands; empty string if only partly set. */
 static char *
 inline_grid_value(const char *style, gboolean full)
 {
@@ -24888,6 +25491,7 @@ inline_grid_value(const char *style, gboolean full)
     return r;
 }
 
+/* Returns a property's value from style attribute text, composing shorthands; caller frees. */
 char *
 ns_inline_style_get(const char *style, const char *prop)
 {
@@ -25045,6 +25649,7 @@ inline_decl_find(GPtrArray *decls, const char *name)
     return NULL;
 }
 
+/* Stores a declaration, overriding unless the old one is important; moves it to the end. */
 static void
 inline_decl_store(GPtrArray *decls, char *name, char *value,
                   gboolean important)
@@ -25074,6 +25679,7 @@ inline_decl_store(GPtrArray *decls, char *name, char *value,
     }
 }
 
+/* Expands box, background, border, list-style and animation shorthands into longhands. */
 static gboolean
 inline_decl_expand_group_shorthand(GPtrArray *decls, const char *name,
                                    const char *value, gboolean important)
@@ -25134,6 +25740,7 @@ inline_decl_expand_group_shorthand(GPtrArray *decls, const char *name,
     return stored;
 }
 
+/* True if a non-important background-* longhand is shadowed by an important background. */
 static gboolean
 inline_background_longhand_blocked(GPtrArray *decls, const char *name,
                                     gboolean important)
@@ -25143,6 +25750,7 @@ inline_background_longhand_blocked(GPtrArray *decls, const char *name,
     return background && background->important;
 }
 
+/* Removes background-* longhands that a newly set background shorthand overrides. */
 static void
 inline_background_shorthand_override(GPtrArray *decls, gboolean important)
 {
@@ -25166,6 +25774,7 @@ inline_prop_is_logical(int prop)
     return ns_css_prop_is_logical(prop);
 }
 
+/* Classifies a logical property: 1 block-axis, 2 inline-axis, 3 other logical, 0 physical. */
 static int
 inline_mapping_logic(int prop)
 {
@@ -25176,6 +25785,7 @@ inline_mapping_logic(int prop)
     return 3;
 }
 
+/* Parses style text into validated, canonical, deduplicated decls with shorthands expanded. */
 static GPtrArray *
 inline_decl_list_parse(const char *style)
 {
@@ -25236,6 +25846,7 @@ inline_decl_list_parse(const char *style)
     return decls;
 }
 
+/* Serializes style text as cssText, collapsing complete longhand sets into shorthands. */
 char *
 ns_inline_style_serialize(const char *style)
 {
@@ -25696,6 +26307,7 @@ ns_inline_style_serialize(const char *style)
     return g_string_free(out, FALSE);
 }
 
+/* Returns a copy of style with url() references absolutized against base_url; caller frees. */
 char *
 ns_inline_style_resolve_urls(const char *style, const char *base_url)
 {
@@ -25704,6 +26316,7 @@ ns_inline_style_resolve_urls(const char *style, const char *base_url)
     return resolved ? resolved : g_strdup(style ? style : "");
 }
 
+/* Counts declarations after shorthand expansion, for CSSStyleDeclaration.length. */
 guint
 ns_inline_style_length(const char *style)
 {
@@ -25713,6 +26326,7 @@ ns_inline_style_length(const char *style)
     return length;
 }
 
+/* Returns the property name at index in the expanded declaration list; caller frees. */
 char *
 ns_inline_style_item(const char *style, guint index)
 {
@@ -25732,6 +26346,7 @@ ns_inline_value_strip_important(char *value)
     return important;
 }
 
+/* True if a shorthand declared after prop in style also sets prop. */
 static gboolean
 inline_shorthand_follows(const char *style, const char *prop, int prop_id)
 {
@@ -25758,6 +26373,7 @@ inline_shorthand_follows(const char *style, const char *prop, int prop_id)
     return FALSE;
 }
 
+/* Rewrites an overflow shorthand in style as overflow-x/-y longhands; NULL if none. */
 static char *
 inline_expand_overflow_shorthand(const char *style)
 {
@@ -25791,6 +26407,7 @@ inline_expand_overflow_shorthand(const char *style)
     return g_string_free(out, FALSE);
 }
 
+/* Returns the set of longhand names a property expands to, using value and initial. */
 static GHashTable *
 inline_longhand_names(const char *prop, const char *value)
 {
@@ -25822,6 +26439,7 @@ inline_longhand_names(const char *prop, const char *value)
     return names;
 }
 
+/* Expands a shorthand to "name: value" longhands, skipping excluded names; NULL with var(). */
 static char *
 inline_shorthand_expansion(const char *prop, const char *value,
                            GHashTable *exclude)
@@ -25892,6 +26510,7 @@ inline_style_append_decl(GString *out, const char *name, const char *value)
     g_string_append(out, value);
 }
 
+/* Implements setProperty/removeProperty on style text, splitting overlapping shorthands. */
 char *
 ns_inline_style_set(const char *style, const char *prop, const char *raw_value)
 {
@@ -25993,6 +26612,7 @@ ns_inline_style_set(const char *style, const char *prop, const char *raw_value)
     return g_string_free(out, FALSE);
 }
 
+/* Parses a comma-separated selector list; empty items set g_sel_parse_error. */
 GPtrArray *
 ns_css_parse_selector_list(const char *text)
 {
@@ -26025,6 +26645,7 @@ ns_css_parse_selector_list(const char *text)
     return out;
 }
 
+/* Parses a selector list; *out_valid is FALSE on errors, namespace prefixes or no selectors. */
 GPtrArray *
 ns_css_parse_selector_list_checked(const char *text, gboolean *out_valid)
 {
@@ -26058,6 +26679,7 @@ static __thread int g_sel_chain_depth;
 static css_chain_result match_complex_chain(const ns_css_selector *sel,
                                             int idx, const ns_node *cur);
 
+/* Matches compound idx at el, then the rest of the chain leftward; depth-limited. */
 static css_chain_result
 match_compound_then_chain(const ns_css_selector *sel, int idx,
                           const ns_node *el)
@@ -26072,6 +26694,7 @@ match_compound_then_chain(const ns_css_selector *sel, int idx,
     return r;
 }
 
+/* Matches combinators right to left, returning fail-fast codes that prune the search. */
 static css_chain_result
 match_complex_chain(const ns_css_selector *sel, int idx, const ns_node *cur)
 {
@@ -26117,6 +26740,7 @@ static guint8         g_ancestor_filter[CSS_ANCESTOR_FILTER_SIZE];
 static gboolean       g_ancestor_filter_active;
 static const ns_node *g_ancestor_filter_subject;
 
+/* Adjusts the two counting-Bloom slots for hash; saturated counters stay fixed. */
 static void
 css_ancestor_filter_count(guint32 hash, int delta)
 {
@@ -26130,6 +26754,7 @@ css_ancestor_filter_count(guint32 hash, int delta)
     }
 }
 
+/* Adds or removes an element's tag, id, class and attribute hashes in the ancestor filter. */
 static void
 css_ancestor_filter_update(const ns_node *el, int delta)
 {
@@ -26159,6 +26784,7 @@ css_ancestor_filter_update(const ns_node *el, int delta)
     }
 }
 
+/* True if any ancestor hash is absent from the filter, so the selector cannot match. */
 static gboolean
 css_ancestor_filter_rejects_hashes(const guint32 *hashes, guint n)
 {
@@ -26171,6 +26797,7 @@ css_ancestor_filter_rejects_hashes(const guint32 *hashes, guint n)
     return FALSE;
 }
 
+/* Matches a complex selector against el, ignoring its pseudo-element. */
 static gboolean
 match_selector_structural(const ns_css_selector *sel, const ns_node *el)
 {
@@ -26196,6 +26823,7 @@ match_selector_for_pe(const ns_css_selector *sel, const ns_node *el,
     return match_selector_structural(sel, el);
 }
 
+/* True if any selector in group matches el with :scope temporarily set to scope. */
 static gboolean
 selector_group_matches_with_scope(const GPtrArray *group, const ns_node *el,
                                   const ns_node *scope)
@@ -26221,6 +26849,7 @@ css_scope_root_matches(const ns_css_scope *scope, const ns_node *el)
                                             el, g_css_match_scope);
 }
 
+/* Counts parent hops from el up to root; INT_MAX if root is not an ancestor-or-self. */
 static int
 css_scope_hops(const ns_node *root, const ns_node *el)
 {
@@ -26230,6 +26859,7 @@ css_scope_hops(const ns_node *root, const ns_node *el)
     return INT_MAX;
 }
 
+/* True if el or an ancestor up to root matches the @scope limit selectors. */
 static gboolean
 css_scope_limit_excludes(const ns_css_scope *scope, const ns_node *root,
                          const ns_node *el)
@@ -26244,6 +26874,7 @@ css_scope_limit_excludes(const ns_css_scope *scope, const ns_node *root,
     return FALSE;
 }
 
+/* True if el is within root's @scope subtree and not beyond a scope limit. */
 static gboolean
 css_scope_contains(const ns_css_scope *scope, const ns_node *root,
                    const ns_node *el)
@@ -26253,6 +26884,7 @@ css_scope_contains(const ns_css_scope *scope, const ns_node *root,
     return !css_scope_limit_excludes(scope, root, el);
 }
 
+/* True if some ancestor-or-self of el is a matching scope root that contains el. */
 static gboolean
 css_scope_applies_to(const ns_css_scope *scope, const ns_node *el)
 {
@@ -26264,6 +26896,7 @@ css_scope_applies_to(const ns_css_scope *scope, const ns_node *el)
     return FALSE;
 }
 
+/* True if every outer @scope before index upto applies to both root and el. */
 static gboolean
 rule_outer_scopes_apply(const ns_css_rule *r, guint upto,
                         const ns_node *root, const ns_node *el)
@@ -26276,6 +26909,7 @@ rule_outer_scopes_apply(const ns_css_rule *r, guint upto,
     return TRUE;
 }
 
+/* Matches a rule's selector honoring @scope; *scope_order favors the nearest scope root. */
 static gboolean
 rule_selector_matches(const ns_css_rule *r, const ns_css_selector *sel,
                       const ns_node *el, ns_css_pseudo_element pe,
@@ -26315,6 +26949,7 @@ rule_selector_matches(const ns_css_rule *r, const ns_css_selector *sel,
 static ns_style *g_style_pool[16384];
 static int g_style_pool_n;
 
+/* Allocates a zeroed style, reusing one from the free pool when available. */
 static ns_style *
 ns_style_alloc(void)
 {
@@ -26326,6 +26961,7 @@ ns_style_alloc(void)
     return g_new0(ns_style, 1);
 }
 
+/* Drops a style reference; on the last one frees values and pseudo styles and pools it. */
 void
 ns_style_free(ns_style *s)
 {
@@ -26349,6 +26985,7 @@ ns_style_free(ns_style *s)
         g_free(s);
 }
 
+/* Returns a keyword value, reduced to its base keyword for alignment props; NULL otherwise. */
 const char *
 ns_style_keyword(const ns_style *s, ns_css_prop p)
 {
@@ -26359,6 +26996,7 @@ ns_style_keyword(const ns_style *s, ns_css_prop p)
                                 : v->u.keyword;
 }
 
+/* Formats an 8-bit alpha with the fewest decimals that round-trip, trailing zeros removed. */
 static void
 ns_css_alpha_serialize(guint8 a, char *buf, gsize cap)
 {
@@ -26377,6 +27015,7 @@ ns_css_alpha_serialize(guint8 a, char *buf, gsize cap)
     }
 }
 
+/* Appends the rgb() or rgba() serialization of a color to s. */
 static void
 ns_css_append_color(GString *s, guint8 r, guint8 g, guint8 b, guint8 a)
 {
@@ -26389,6 +27028,7 @@ ns_css_append_color(GString *s, guint8 r, guint8 g, guint8 b, guint8 a)
     }
 }
 
+/* Interpolates lengths, via calc for mixed px/%/em; zero adopts the other unit. */
 static gboolean
 value_lerp_lengths(const ns_css_value *a, const ns_css_value *b, double t,
                    ns_css_value *out)
@@ -26447,6 +27087,7 @@ lerp_channel(guint8 a, guint8 b, double t)
     return (guint8)(v + 0.5);
 }
 
+/* Parses a keyword as a number (bold 700, normal 400) and reports whether it is integral. */
 static gboolean
 keyword_number(const char *kw, double *out, gboolean *is_int)
 {
@@ -26463,6 +27104,7 @@ keyword_number(const char *kw, double *out, gboolean *is_int)
 
 static gboolean keyword_lerp(const char *ka, const char *kb, double t, char **out);
 
+/* Interpolates equal-length space-separated keyword lists item by item. */
 static gboolean
 keyword_lerp_list(const char *ka, const char *kb, double t, char **out)
 {
@@ -26489,6 +27131,7 @@ keyword_lerp_list(const char *ka, const char *kb, double t, char **out)
     return TRUE;
 }
 
+/* Interpolates numeric or same-unit length keywords; integer inputs stay integral. */
 static gboolean
 keyword_lerp(const char *ka, const char *kb, double t, char **out)
 {
@@ -26515,6 +27158,7 @@ keyword_lerp(const char *ka, const char *kb, double t, char **out)
     return FALSE;
 }
 
+/* Interpolates one translate axis, keeping pure percents or mixing px with a percent part. */
 static void
 translate_axis_lerp(const ns_css_transform_op *x, const ns_css_transform_op *y,
                     double t, int axis, ns_css_transform_op *o)
@@ -26541,6 +27185,7 @@ translate_axis_lerp(const ns_css_transform_op *x, const ns_css_transform_op *y,
     }
 }
 
+/* Returns src's transform functions set to identity values; NULL if any is unsupported. */
 static ns_css_value *
 transform_identity_like(const ns_css_value *src)
 {
@@ -26581,6 +27226,7 @@ value_is_none_keyword(const ns_css_value *v)
            strcmp(v->u.keyword, "none") == 0;
 }
 
+/* Interpolates lengths, keywords, rects, colors, shadows or transforms at t; NULL if not. */
 ns_css_value *
 ns_css_value_interpolate(const ns_css_value *a, const ns_css_value *b, double t)
 {
@@ -26688,6 +27334,7 @@ ns_css_value_interpolate(const ns_css_value *a, const ns_css_value *b, double t)
     return NULL;
 }
 
+/* Compares two values by their computed serialization. */
 gboolean
 ns_css_value_equal(const ns_css_value *a, const ns_css_value *b)
 {
@@ -26701,6 +27348,7 @@ ns_css_value_equal(const ns_css_value *a, const ns_css_value *b)
     return eq;
 }
 
+/* Parses declaration-block text into a new decl array; free with ns_css_declarations_free. */
 GArray *
 ns_css_parse_declarations(const char *text)
 {
@@ -26736,6 +27384,7 @@ static const ns_css_prop css_currentcolor_props[] = {
     NS_CSS_STOP_COLOR,
 };
 
+/* True if prop's computed color came from currentcolor, per the style's bitset. */
 gboolean
 ns_style_prop_from_currentcolor(const ns_style *s, int prop)
 {
@@ -26746,6 +27395,7 @@ ns_style_prop_from_currentcolor(const ns_style *s, int prop)
     return FALSE;
 }
 
+/* Marks or unmarks node as excluded from incremental style recalculation. */
 void
 ns_css_incremental_exclude(const void *node, gboolean exclude)
 {
@@ -26776,6 +27426,7 @@ style_is_absolute(const ns_style *s)
            strcmp(v->u.keyword, "absolute") == 0;
 }
 
+/* Compares styles for layout; non-exact mode ignores paint-only diffs, flags abspos moves. */
 static gboolean
 style_layout_equal_(const ns_style *a, const ns_style *b, gboolean exact,
                     gboolean *moved)
@@ -26849,6 +27500,7 @@ style_layout_equal_(const ns_style *a, const ns_style *b, gboolean exact,
     return TRUE;
 }
 
+/* Classifies a style change as layout-changed, moved (abspos offsets only) or equal. */
 int
 ns_css_style_layout_change(const ns_style *a, const ns_style *b)
 {
@@ -26858,6 +27510,7 @@ ns_css_style_layout_change(const ns_style *a, const ns_style *b)
     return moved ? NS_CSS_LAYOUT_MOVED : NS_CSS_LAYOUT_EQUAL;
 }
 
+/* False for paint-only properties such as color, opacity, transform and shadows. */
 gboolean
 ns_css_prop_affects_layout(int prop)
 {
@@ -26881,6 +27534,7 @@ ns_css_prop_affects_layout(int prop)
     }
 }
 
+/* Serializes a single computed value layer to text; caller frees. */
 static char *
 value_serialize_one(const ns_css_value *v)
 {
@@ -27113,6 +27767,7 @@ value_serialize_one(const ns_css_value *v)
     return g_strdup("");
 }
 
+/* Serializes all value layers comma-separated, preferring specified text when asked. */
 static char *
 value_serialize_layers(const ns_css_value *v, gboolean specified)
 {
@@ -27194,6 +27849,7 @@ typedef struct pending_match {
     ns_css_pending_decl *pd;
 } pending_match;
 
+/* Orders cascade layers; important declarations reverse the layer order. */
 static int
 css_layer_cmp(int a, int b, gboolean important)
 {
@@ -27202,6 +27858,7 @@ css_layer_cmp(int a, int b, gboolean important)
     return a < b ? -1 : 1;
 }
 
+/* True if candidate shares the revert origin; author includes presentational hints. */
 static gboolean
 css_same_revert_origin(int rollback_origin, int candidate_origin)
 {
@@ -27211,6 +27868,7 @@ css_same_revert_origin(int rollback_origin, int candidate_origin)
     return rollback_origin == candidate_origin;
 }
 
+/* Returns a layer's rank in the merged ranking, or NS_CSS_LAYER_NONE when unlayered. */
 static int
 css_layer_rank_for(GHashTable *layer_ranks, const char *layer_name)
 {
@@ -27219,6 +27877,7 @@ css_layer_rank_for(GHashTable *layer_ranks, const char *layer_name)
     return v ? GPOINTER_TO_INT(v) - 1 : NS_CSS_LAYER_NONE;
 }
 
+/* Appends a sheet's layer names to the merged ranking in first-seen order. */
 static void
 css_layer_rank_add_sheet(GHashTable *layer_ranks,
                          const ns_css_stylesheet *sheet)
@@ -27233,6 +27892,7 @@ css_layer_rank_add_sheet(GHashTable *layer_ranks,
     }
 }
 
+/* Records the earliest rank index seen for each dotted prefix of a layer name. */
 static void
 css_layer_prefix_note(GHashTable *first, const char *name, int index)
 {
@@ -27260,6 +27920,7 @@ css_layer_first_index(GHashTable *first, const char *name, gsize len)
     return v ? GPOINTER_TO_INT(v) - 1 : INT_MAX;
 }
 
+/* Orders layer names by first appearance of differing prefixes; parents sort after children. */
 static int
 css_layer_name_cmp(gconstpointer a_, gconstpointer b_, gpointer user_data)
 {
@@ -27286,6 +27947,7 @@ css_layer_name_cmp(gconstpointer a_, gconstpointer b_, gpointer user_data)
     }
 }
 
+/* Re-ranks all layers and their prefixes so nested layers precede their parent. */
 static void
 css_layer_ranks_finalize(GHashTable *layer_ranks)
 {
@@ -27313,6 +27975,7 @@ css_layer_ranks_finalize(GHashTable *layer_ranks)
     g_hash_table_destroy(first);
 }
 
+/* Cascade order: importance, origin, inline, layer, specificity, scope, sheet, source, decl. */
 static int
 match_cmp(gconstpointer a_, gconstpointer b_)
 {
@@ -27400,6 +28063,7 @@ selector_cache_reset_arena(void)
     g_selector_cache_used = NS_SELECTOR_CACHE_BLOCK;
 }
 
+/* Starts a per-pass cache of selector match results keyed by rule, selector, element. */
 void
 ns_css_selector_cache_begin(void)
 {
@@ -27417,6 +28081,7 @@ ns_css_selector_cache_end(void)
     selector_cache_reset_arena();
 }
 
+/* Looks up a cached match result and scope order; FALSE on a miss or without a cache. */
 static gboolean
 selector_cache_lookup(const ns_css_rule *rule,
                       const ns_css_selector *selector,
@@ -27434,6 +28099,7 @@ selector_cache_lookup(const ns_css_rule *rule,
     return TRUE;
 }
 
+/* Caches a match result in arena blocks, up to NS_SELECTOR_CACHE_MAX entries. */
 static void
 selector_cache_insert(const ns_css_rule *rule,
                       const ns_css_selector *selector,
@@ -27479,6 +28145,7 @@ static GByteArray *g_el_key_buf;
 static GArray     *g_el_key_offs;
 static GPtrArray  *g_el_key_ptrs;
 
+/* Appends a NUL-terminated, optionally lowercased copy to the key buffer; returns offset. */
 static guint
 css_el_key_put(const char *s, gsize len, gboolean lower)
 {
@@ -27493,6 +28160,7 @@ css_el_key_put(const char *s, gsize len, gboolean lower)
     return off;
 }
 
+/* Collects el's id, classes, attr names and tag for index lookup; valid until the next call. */
 static void
 css_el_keys_build(const ns_node *el, css_el_keys *k)
 {
@@ -27548,6 +28216,7 @@ css_el_keys_build(const ns_node *el, css_el_keys *k)
     k->tag_suffix = have_suffix ? base + suffix_off : NULL;
 }
 
+/* Collects one sheet's matching decls, custom props and pending decls for el per pseudo. */
 static void
 gather_matches_multi(const ns_css_stylesheet *sheet, int origin,
                      int sheet_index, const ns_node *el,
@@ -27779,6 +28448,7 @@ gather_matches_multi(const ns_css_stylesheet *sheet, int origin,
     (void)cands;
 }
 
+/* Cascade order comparator for custom property declarations. */
 static int
 var_match_cmp(gconstpointer a_, gconstpointer b_)
 {
@@ -27803,6 +28473,7 @@ var_match_cmp(gconstpointer a_, gconstpointer b_)
     return a->decl_order < b->decl_order ? -1 : 1;
 }
 
+/* Finds the declaration a revert, revert-layer or revert-rule rolls back to, recursively. */
 static const var_match *
 var_rollback_match(GArray *matches, gint before, const var_match *rollback,
                    ns_custom_prop_wide kind)
@@ -27839,6 +28510,7 @@ var_rollback_match(GArray *matches, gint before, const var_match *rollback,
     return NULL;
 }
 
+/* Returns the effective custom property match, following revert keywords to earlier ones. */
 static const var_match *
 var_resolved_match(GArray *matches, guint index)
 {
@@ -27851,6 +28523,7 @@ var_resolved_match(GArray *matches, guint index)
     return match;
 }
 
+/* Cascade order comparator for pending var()-dependent declarations. */
 static int
 pending_match_cmp(gconstpointer a_, gconstpointer b_)
 {
@@ -27875,6 +28548,7 @@ pending_match_cmp(gconstpointer a_, gconstpointer b_)
     return a->source_order < b->source_order ? -1 : 1;
 }
 
+/* Registers a sheet's @property rules by name; later sheets override earlier ones. */
 static void
 css_collect_property_rules(GHashTable *reg, const ns_css_stylesheet *sh)
 {
@@ -27886,6 +28560,7 @@ css_collect_property_rules(GHashTable *reg, const ns_css_stylesheet *sh)
     }
 }
 
+/* Applies a cascaded unregistered custom property to own, handling CSS-wide keywords. */
 static void
 var_map_apply_unregistered(GHashTable *own, const ns_var_map *parent,
                            GArray *matches, guint index)
@@ -27926,6 +28601,7 @@ var_map_apply_unregistered(GHashTable *own, const ns_var_map *parent,
     g_free(expanded);
 }
 
+/* Sets a custom property to its inherited or registered initial value, or "initial". */
 static void
 var_map_restore_default(GHashTable *vars, const ns_var_map *parent,
                         const char *name, const ns_css_property_rule *pr,
@@ -27945,6 +28621,7 @@ var_map_restore_default(GHashTable *vars, const ns_var_map *parent,
     }
 }
 
+/* Applies a cascaded @property-registered custom property, validating syntax and keywords. */
 static void
 var_map_apply_registered(GHashTable *vars, const ns_var_map *parent,
                          GArray *matches, guint index)
@@ -28000,6 +28677,7 @@ var_map_apply_registered(GHashTable *vars, const ns_var_map *parent,
     g_free(expanded);
 }
 
+/* Stores an expanded custom property (takes ownership), else falls back to its default. */
 static void
 var_map_store_expanded(GHashTable *table, const ns_var_map *parent,
                        const char *name, char *expanded)
@@ -28018,6 +28696,7 @@ var_map_store_expanded(GHashTable *table, const ns_var_map *parent,
     else g_hash_table_replace(table, g_strdup(name), g_strdup("initial"));
 }
 
+/* Substitutes var() inside custom property values in place; cyclic ones become invalid. */
 static void
 var_map_expand(GHashTable *table, const ns_var_map *scope_parent,
                const ns_var_map *parent)
@@ -28063,6 +28742,7 @@ style_font_px(const ns_style *s)
     return 16;
 }
 
+/* Converts a px/em/rem track length to px; FALSE for other units. */
 static gboolean
 track_length_absolute(ns_css_unit unit, double v, double font_px,
                       double root_px, double *px)
@@ -28075,6 +28755,7 @@ track_length_absolute(ns_css_unit unit, double v, double font_px,
     }
 }
 
+/* Appends a track length's computed form (px, % or calc(% +/- px)); FALSE if unresolvable. */
 static gboolean
 track_length_computed_append(GString *out, const char *tok, gsize len,
                              double font_px, double root_px)
@@ -28131,6 +28812,7 @@ track_number_start(const char *p)
     return g_ascii_isdigit(*p);
 }
 
+/* Rewrites lengths in a specified track list to computed px, leaving fr and line names. */
 static char *
 tracks_computed_text(const char *text, double font_px, double root_px)
 {
@@ -28176,6 +28858,7 @@ tracks_computed_text(const char *text, double font_px, double root_px)
     return g_string_free(out, FALSE);
 }
 
+/* Returns the computed text of a grid track list for getComputedStyle; NULL if N/A. */
 char *
 ns_css_tracks_computed_serialize(const ns_style *s, const ns_style *root,
                                  int prop)
@@ -28189,6 +28872,7 @@ ns_css_tracks_computed_serialize(const ns_style *s, const ns_style *root,
                                 style_font_px(root ? root : s));
 }
 
+/* Fills a syntax-compute context with font, line-height, viewport and container metrics. */
 static void
 syntax_ctx_for_style(ns_css_syntax_ctx *ctx, const ns_style *s, double root_px)
 {
@@ -28234,6 +28918,7 @@ syntax_ctx_for_style(ns_css_syntax_ctx *ctx, const ns_style *s, double root_px)
     ctx->current_color = NULL;
 }
 
+/* Computes typed @property values in the element's own var map in place. */
 static void
 compute_registered_vars(ns_style *s, const ns_style *parent_style,
                         double root_px)
@@ -28265,6 +28950,7 @@ compute_registered_vars(ns_style *s, const ns_style *parent_style,
     g_free(current_color);
 }
 
+/* Seeds registered custom props with initial values where inheritance supplies none. */
 static void
 var_layer_registered_defaults(GHashTable *own, const ns_var_map *parent)
 {
@@ -28285,6 +28971,7 @@ var_layer_registered_defaults(GHashTable *own, const ns_var_map *parent)
     }
 }
 
+/* Builds the element's custom property map from cascaded matches; may reuse the parent's. */
 static ns_var_map *
 build_vars_for_element(const ns_style *parent_style, GArray *var_matches)
 {
@@ -28356,6 +29043,7 @@ build_vars_for_element(const ns_style *parent_style, GArray *var_matches)
     return built;
 }
 
+/* Quotes text as a CSS string, escaping quotes, backslashes and control chars; caller frees. */
 static char *
 css_string_quote(const char *text)
 {
@@ -28375,6 +29063,7 @@ css_string_quote(const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* True for the dimension unit names and % allowed as attr() types. */
 static gboolean
 attr_unit_ident_valid(const char *unit)
 {
@@ -28394,6 +29083,7 @@ attr_unit_ident_valid(const char *unit)
 static char *substitute_attrs(const char *text, const ns_node *node, int depth,
                               gboolean *tainted);
 
+/* Evaluates attr(name type?, fallback?) against node; sets *invalid if it cannot substitute. */
 static char *
 attr_function_value(const char *args, const ns_node *node, int depth,
                     gboolean *invalid)
@@ -28484,6 +29174,7 @@ done:
     return result;
 }
 
+/* True if the '(' at open_paren opens url(), src(), image() or image-set(). */
 static gboolean
 url_function_at(const char *text, const char *open_paren)
 {
@@ -28505,6 +29196,7 @@ contains_url_function(const char *text)
     return FALSE;
 }
 
+/* Replaces attr() calls with node's attribute values, flagging URL taint; NULL if invalid. */
 static char *
 substitute_attrs(const char *text, const ns_node *node, int depth,
                  gboolean *tainted)
@@ -28570,6 +29262,7 @@ substitute_attrs(const char *text, const ns_node *node, int depth,
     return g_string_free(out, FALSE);
 }
 
+/* Validates attr() arguments: ident name, optional type, recursively valid fallback. */
 static gboolean
 attr_args_syntax_valid(const char *args)
 {
@@ -28603,6 +29296,7 @@ attr_args_syntax_valid(const char *args)
     return ok;
 }
 
+/* Checks that every attr() call in text has syntactically valid arguments. */
 static gboolean
 attr_functions_syntax_valid(const char *text)
 {
@@ -28642,6 +29336,7 @@ attr_functions_syntax_valid(const char *text)
     return TRUE;
 }
 
+/* True if any pending declaration's raw value uses attr(). */
 static gboolean
 pending_uses_attr(const GArray *pending_matches)
 {
@@ -28655,6 +29350,7 @@ pending_uses_attr(const GArray *pending_matches)
 
 static GHashTable *g_pending_parse_cache;
 
+/* Parses a substituted pending value into match entries with its cascade data; cached. */
 static gboolean
 append_pending_decls(const pending_match *pm, const char *value_text,
                      GArray *matches, GPtrArray *owned_values)
@@ -28702,6 +29398,7 @@ append_pending_decls(const pending_match *pm, const char *value_text,
     return any;
 }
 
+/* Substitutes var() and attr() in a pending value; NULL if invalid, tainted or !important. */
 static char *
 pending_substituted_value(const pending_match *pm, const ns_var_map *vars,
                           const ns_node *node)
@@ -28729,6 +29426,7 @@ pending_substituted_value(const pending_match *pm, const ns_var_map *vars,
     return substituted;
 }
 
+/* Resolves var()-dependent decls into matches in cascade order; failures become unset. */
 static void
 resolve_pending_into_matches(GArray *pending_matches,
                              const ns_var_map *vars,
@@ -28938,6 +29636,7 @@ static const char *kUaQuirks =
     "img[align=left i] { margin-right: 3px; }\n"
     "img[align=right i] { margin-left: 3px; }\n";
 
+/* Returns the lazily parsed UA stylesheet, with quirks additions for quirks-mode documents. */
 static const ns_css_stylesheet *
 ua_sheet_for(const ns_node *doc)
 {
@@ -28955,12 +29654,14 @@ ua_sheet_for(const ns_node *doc)
     return standard;
 }
 
+/* Approximates line-height: normal as 1.4375 times the font size. */
 static double
 normal_line_height_px(double font_px)
 {
     return font_px * 1.4375;
 }
 
+/* Resolves a style's line-height to px against font, root, lh and rlh bases. */
 static double
 style_line_height_px(const ns_style *s, double font_px, double root_px,
                      double lh_base, double rlh_base)
@@ -28986,6 +29687,7 @@ style_line_height_px(const ns_style *s, double font_px, double root_px,
     }
 }
 
+/* True if a calc has em, rem, lh, rlh or viewport terms still awaiting resolution. */
 static gboolean
 calc_has_deferred_units(const ns_css_value *v)
 {
@@ -29002,6 +29704,7 @@ calc_has_deferred_units(const ns_css_value *v)
     return FALSE;
 }
 
+/* True if any transform op has em or rem translate components. */
 static gboolean
 transform_has_font_units(const ns_css_transform *tf)
 {
@@ -29021,6 +29724,7 @@ calc_has_percent(const ns_css_value *v)
     return FALSE;
 }
 
+/* Folds a calc's percentage terms into px against basis, collapsing math functions. */
 static void
 calc_fold_percent(ns_css_value *v, double basis)
 {
@@ -29039,6 +29743,7 @@ calc_fold_percent(ns_css_value *v, double basis)
     v->u.calc.pct = 0;
 }
 
+/* Returns the px correction for viewport terms between parse-time and current viewport. */
 static double
 calc_viewport_refresh_px(double vw, double vh, double vmin, double vmax,
                          double parsed_w, double parsed_h)
@@ -29048,6 +29753,7 @@ calc_viewport_refresh_px(double vw, double vh, double vmin, double vmax,
            viewport_coeff_px(vw, vh, vmin, vmax, parsed_w, parsed_h);
 }
 
+/* Folds font-relative and viewport terms into px; collapses math fns unless % remain. */
 static void
 calc_fold_deferred_units(ns_css_value *v, double font_px, double root_px,
                          double lh_px, double rlh_px)
@@ -29094,6 +29800,7 @@ calc_fold_deferred_units(ns_css_value *v, double font_px, double root_px,
     v->u.calc.arg_none = 0;
 }
 
+/* Resolves a calc() font-size to px against the parent font size. */
 static double
 calc_font_size_px(const ns_css_value *fs, double parent_px, double root_px,
                   double lh_px, double rlh_px)
@@ -29105,6 +29812,7 @@ calc_font_size_px(const ns_css_value *fs, double parent_px, double root_px,
     return tmp.u.calc.px + tmp.u.calc.pct * parent_px / 100.0;
 }
 
+/* Computes font-size in px from the specified value and the parent's font metrics. */
 static double
 resolve_font_size_px(const ns_style *s, const ns_style *parent_style)
 {
@@ -29174,6 +29882,7 @@ resolve_font_size_px(const ns_style *s, const ns_style *parent_style)
     return parent_px;
 }
 
+/* Copy-on-write: replaces a shared value in out with a private copy and returns it. */
 static ns_css_value *
 ns_css_value_cow(ns_style *out, int prop)
 {
@@ -29192,6 +29901,7 @@ ns_css_value_cow(ns_style *out, int prop)
 
 #define NS_CSS_CALC_LIMIT 33554400.0
 
+/* Maps NaN to 0 and infinities to the CSS calc range limit. */
 static double
 calc_clamp_finite(double v)
 {
@@ -29200,6 +29910,7 @@ calc_clamp_finite(double v)
     return v;
 }
 
+/* True if all numeric parts of a length, calc or translate/scale transform are finite. */
 static gboolean
 calc_value_is_finite(const ns_css_value *v)
 {
@@ -29225,6 +29936,7 @@ calc_value_is_finite(const ns_css_value *v)
     return TRUE;
 }
 
+/* Clamps non-finite numbers in a length, calc or transform value in place. */
 static void
 calc_value_clamp_finite(ns_css_value *v)
 {
@@ -29255,6 +29967,7 @@ calc_value_clamp_finite(ns_css_value *v)
     }
 }
 
+/* Computes font-size in px, then folds font-relative, line and viewport units to px. */
 static void
 resolve_em_units(ns_style *out, const ns_style *parent_style, double root_px)
 {
@@ -29502,6 +30215,7 @@ value_is_revert_rule(const ns_css_value *v)
            strcmp(v->u.keyword, "revert-rule") == 0;
 }
 
+/* Finds the value a revert, revert-layer or revert-rule rolls back to in sorted matches. */
 static const ns_css_value *
 cascade_rollback_value(GArray *matches, gint before,
                        const match_entry *rollback)
@@ -29537,6 +30251,7 @@ cascade_rollback_value(GArray *matches, gint before,
     return NULL;
 }
 
+/* True for absolutely or fixed positioned, or floated, styles. */
 static gboolean
 style_is_out_of_flow(const ns_style *s)
 {
@@ -29548,6 +30263,7 @@ style_is_out_of_flow(const ns_style *s)
            strcmp(flt->u.keyword, "none") != 0;
 }
 
+/* Pre-cascades direction or writing-mode so logical props can map before the full cascade. */
 static const char *
 cascade_axis_keyword(GArray *matches, ns_css_prop prop,
                      const ns_style *parent_style, const char *initial)
@@ -29574,6 +30290,7 @@ cascade_axis_keyword(GArray *matches, ns_css_prop prop,
         ? value->u.keyword : initial;
 }
 
+/* Applies CSS blockification for the root, out-of-flow boxes and flex/grid items. */
 static ns_display
 display_after_blockification(ns_display d, const ns_style *s,
                              const ns_style *layout_parent, gboolean is_root)
@@ -29595,6 +30312,7 @@ display_after_blockification(ns_display d, const ns_style *s,
     return d;
 }
 
+/* Turns a visible overflow axis into auto when the other axis scrolls. */
 static void
 overflow_pair_normalize(ns_style *out)
 {
@@ -29615,6 +30333,7 @@ overflow_pair_normalize(ns_style *out)
     }
 }
 
+/* Returns a new copy of a property's parsed initial value, cached per thread. */
 static ns_css_value *
 initial_value_of(int prop)
 {
@@ -29628,6 +30347,7 @@ initial_value_of(int prop)
     return ns_css_value_dup(parsed[prop]);
 }
 
+/* Cascades sorted matches into out: revert, inherit/initial/unset, currentcolor, display. */
 static void
 cascade_for(GArray *matches, ns_style *out, const ns_style *parent_style,
             const ns_style *layout_parent, gboolean is_root, double root_px)
@@ -29791,6 +30511,7 @@ cascade_for(GArray *matches, ns_style *out, const ns_style *parent_style,
     resolve_em_units(out, parent_style, root_px);
 }
 
+/* Parses a color using the HTML rules for parsing a legacy color value. */
 static gboolean
 parse_legacy_color(const char *input, guint8 *r_out, guint8 *g_out, guint8 *b_out)
 {
@@ -29844,6 +30565,7 @@ parse_legacy_color(const char *input, guint8 *r_out, guint8 *g_out, guint8 *b_ou
     return TRUE;
 }
 
+/* Parses a presentational color attribute as a CSS color, falling back to legacy parsing. */
 static gboolean
 attr_is_color(const char *v, guint8 *r_out, guint8 *g_out, guint8 *b_out, guint8 *a_out)
 {
@@ -29864,6 +30586,7 @@ attr_is_color(const char *v, guint8 *r_out, guint8 *g_out, guint8 *b_out, guint8
     return ok;
 }
 
+/* Parses an HTML dimension attribute (digits, optional fraction, %); can reject zero. */
 static gboolean
 html_dimension_value(const char *s, gboolean ignore_zero, double *value,
                      gboolean *percent)
@@ -29888,6 +30611,7 @@ html_dimension_value(const char *s, gboolean ignore_zero, double *value,
     return TRUE;
 }
 
+/* Quirks mode: nowrap is ignored on cells with a nonzero pixel width attribute. */
 static gboolean
 cell_nowrap_quirk(const ns_node *cell)
 {
@@ -29899,6 +30623,7 @@ cell_nowrap_quirk(const ns_node *cell)
                                 &v, &pct) && !pct;
 }
 
+/* Appends a length declaration (one or two props) from an HTML dimension attribute. */
 static void
 append_html_dimension(GString *out, const char *attr, gboolean ignore_zero,
                       const char *prop_a, const char *prop_b)
@@ -29919,6 +30644,7 @@ enum {
     TABLE_RULES_ALL,
 };
 
+/* Maps a table rules attribute to a TABLE_RULES_* value; 0 if unrecognized. */
 static int
 table_rules_kind(const char *rules)
 {
@@ -29931,6 +30657,7 @@ table_rules_kind(const char *rules)
     return 0;
 }
 
+/* Maps a table frame attribute to its border-style presentational hint. */
 static const char *
 table_frame_border_style(const char *frame)
 {
@@ -29951,6 +30678,7 @@ table_frame_border_style(const char *frame)
     return NULL;
 }
 
+/* Returns the table owning a cell, row or row group in HTML structure, or NULL. */
 static const ns_node *
 table_of_part(const ns_node *el)
 {
@@ -29970,6 +30698,7 @@ table_of_part(const ns_node *el)
     return ns_node_is_element_named(p, "table") ? p : NULL;
 }
 
+/* Returns the selected picture source supplying width/height for img, else img itself. */
 static const ns_node *
 img_dimension_attribute_source(const ns_node *img)
 {
@@ -29990,6 +30719,7 @@ img_dimension_attribute_source(const ns_node *img)
     return img;
 }
 
+/* Maps a font size attribute (1-7, or +/- relative to 3) to a font-size keyword. */
 static const char *
 legacy_font_size_keyword(const char *s)
 {
@@ -30009,6 +30739,7 @@ legacy_font_size_keyword(const char *s)
     return keywords[CLAMP(value, 1, 7) - 1];
 }
 
+/* True for attribute names that can map to presentational hints. */
 static gboolean
 is_presentational_attr_name(const char *n)
 {
@@ -30045,6 +30776,7 @@ is_presentational_attr_name(const char *n)
     }
 }
 
+/* Builds CSS declarations for an element's HTML presentational hints; NULL if none. */
 static char *
 presentational_hints_css(const ns_node *el)
 {
@@ -30435,6 +31167,7 @@ presentational_hints_css(const ns_node *el)
 
 static GHashTable *g_decl_sheet_cache;
 
+/* Returns a cached sheet parsing decls as one universal rule, URLs resolved per doc base. */
 static const ns_css_stylesheet *
 ns_css_cached_decl_sheet(const char *decls)
 {
@@ -30477,6 +31210,7 @@ cascade_walk(ns_node *node,
 static __thread const ns_node *const *g_author_sheet_docs;
 static __thread const ns_node *g_cascade_doc;
 
+/* True if an author sheet belongs to the document currently being cascaded. */
 static gboolean
 cascade_sheet_applies(gsize sheet_index)
 {
@@ -30488,6 +31222,7 @@ cascade_sheet_applies(gsize sheet_index)
 static GPtrArray *g_host_scope_stack;
 static GPtrArray *g_adopt_scope_stack;
 
+/* True if the whitespace-separated list contains word exactly. */
 static gboolean
 word_list_contains(const char *list, const char *word)
 {
@@ -30502,6 +31237,7 @@ word_list_contains(const char *list, const char *word)
     return FALSE;
 }
 
+/* True if a shadow-scoped sheet's host scope is on the host or adopted-sheet scope stack. */
 static gboolean
 cascade_sheet_in_host_scope(const ns_css_stylesheet *sheet)
 {
@@ -30526,6 +31262,7 @@ static guint64        g_incr_struct_hash;
 static GPtrArray     *g_delta_request;
 static GPtrArray     *g_delta_out;
 
+/* Returns node's style from before the current incremental restyle, if recorded. */
 const ns_style *
 ns_css_style_before_change(const void *node)
 {
@@ -30555,12 +31292,14 @@ ns_css_incremental_serial(void)
     return g_incr_serial;
 }
 
+/* Requests that the next cascade report changed styles into changes. */
 void
 ns_css_compute_want_delta(GPtrArray *changes)
 {
     g_delta_request = changes;
 }
 
+/* FNV-style hash of the element tree shape (node and parent identity) for change detection. */
 static guint64
 incr_struct_hash(const ns_node *root)
 {
@@ -30648,6 +31387,7 @@ static gboolean       g_state_has_active;
 
 static void style_memo_forget(const ns_node *node);
 
+/* Drops all cached state and dirty marks referring to a node about to be freed. */
 void
 ns_css_forget_node(const ns_node *node)
 {
@@ -30672,6 +31412,7 @@ ns_css_forget_node(const ns_node *node)
     style_memo_forget(node);
 }
 
+/* True if the last cascade ran as an incremental pass. */
 gboolean
 ns_css_last_cascade_continued(void)
 {
@@ -30682,6 +31423,7 @@ static gboolean incr_node_matches_keys(const ns_node *n, GHashTable *keyset);
 static gboolean incr_node_matches_attr_preds(const ns_node *n,
                                              const GPtrArray *preds);
 
+/* Marks anchor and its following element siblings dirty for :has() re-evaluation. */
 static void
 incr_mark_has_region(ns_node *anchor)
 {
@@ -30693,6 +31435,7 @@ incr_mark_has_region(ns_node *anchor)
             g_hash_table_add(g_incr_dirty, n);
 }
 
+/* Adds descendant invalidation keys to node's set for targeted subtree restyle. */
 static void
 incr_desc_keys_merge(ns_node *node, GHashTable *keys)
 {
@@ -30723,6 +31466,7 @@ incr_mark_self_dirty(ns_node *node)
     g_hash_table_add(g_incr_self_dirty, node);
 }
 
+/* Marks a possible :has() anchor dirty when :has() arguments cannot be keyed. */
 static void
 incr_mark_loose_has_anchor(ns_node *anchor)
 {
@@ -30734,6 +31478,7 @@ incr_mark_loose_has_anchor(ns_node *anchor)
     }
 }
 
+/* Walks a change's ancestors and preceding siblings, dirtying possible :has() subjects. */
 static void
 incr_mark_has_subjects(ns_node *changed)
 {
@@ -30788,6 +31533,7 @@ ns_css_set_render_zoom(double zoom)
     g_incr_zoom = zoom > 0 ? zoom : 1.0;
 }
 
+/* Marks a subtree for the next incremental restyle and dirties affected :has() subjects. */
 void
 ns_css_mark_restyle_dirty(ns_node *parent)
 {
@@ -30827,6 +31573,7 @@ incr_pc_is_user_state(ns_css_pseudo k)
 
 static gboolean incr_selector_has_structural(const ns_css_selector *sel, int d);
 
+/* True if a compound or nested selector uses structural pseudo-classes; deep nesting counts. */
 static gboolean
 incr_simple_has_structural(const ns_css_simple *c, int d)
 {
@@ -30870,6 +31617,7 @@ incr_selector_has_structural(const ns_css_selector *sel, int d)
 
 static void incr_scan_selector_flags(const ns_css_selector *sel, int d);
 
+/* Records use of :nth-last-*, focus, hover and active, recursing into nested selectors. */
 static void
 incr_scan_simple_flags(const ns_css_simple *c, int d)
 {
@@ -30918,6 +31666,7 @@ incr_scan_selector_flags(const ns_css_selector *sel, int d)
         incr_scan_simple_flags(g_ptr_array_index(sel->compounds, i), d);
 }
 
+/* Adds #id, .class and %tag keys for a compound to keys; TRUE if any were added. */
 static gboolean
 incr_add_compound_keys(GHashTable *keys, const ns_css_simple *c)
 {
@@ -30951,6 +31700,7 @@ incr_attr_dep_free(gpointer data)
     g_free(data);
 }
 
+/* Deep-copies borrowed attribute predicates in place so the array owns them. */
 static void
 incr_own_attr_deps(GPtrArray *attrs)
 {
@@ -30970,6 +31720,7 @@ static gboolean
 incr_add_positive_compound_deps(GHashTable *keys, GPtrArray *attrs,
                                 const ns_css_simple *c, int depth);
 
+/* Maps a pseudo-class to the attribute whose change affects it; "" if none, NULL if unknown. */
 static const char *
 incr_state_pseudo_attr(ns_css_pseudo k)
 {
@@ -31009,6 +31760,7 @@ incr_state_pseudo_attr(ns_css_pseudo k)
     }
 }
 
+/* Records keys and attrs of compounds left of + or ~ so sibling changes can invalidate. */
 static void
 incr_collect_sib_left(const ns_css_simple *c)
 {
@@ -31052,6 +31804,7 @@ incr_collect_sib_left(const ns_css_simple *c)
 
 static void incr_collect_attr_keys_selector(const ns_css_selector *sel, int depth);
 
+/* Collects attribute names selectors depend on, including ones implied by pseudo-classes. */
 static void
 incr_collect_attr_keys_simple(const ns_css_simple *c, int depth)
 {
@@ -31107,6 +31860,7 @@ incr_collect_attr_keys_selector(const ns_css_selector *sel, int depth)
                                       depth);
 }
 
+/* Indexes a sheet's selectors into structural and sibling invalidation keys and flags. */
 static void
 incr_collect_struct_keys(const ns_css_stylesheet *sh)
 {
@@ -31175,6 +31929,7 @@ incr_collect_name_keys_group(const GPtrArray *group, int depth)
         incr_collect_name_keys_selector(g_ptr_array_index(group, i), depth);
 }
 
+/* Collects lowercased ids and classes used; [class]/[id] or :target make the set loose. */
 static void
 incr_collect_name_keys_simple(const ns_css_simple *c, int depth)
 {
@@ -31222,6 +31977,7 @@ incr_collect_name_keys_selector(const ns_css_selector *sel, int depth)
                                       depth);
 }
 
+/* Collects class and id keys from a sheet's selectors and @scope bounds. */
 static void
 incr_collect_name_keys(const ns_css_stylesheet *sh)
 {
@@ -31237,6 +31993,7 @@ incr_collect_name_keys(const ns_css_stylesheet *sh)
     }
 }
 
+/* ASCII-lowercased membership test of a length-delimited name in keys. */
 static gboolean
 incr_name_in_keys(const char *name, gsize len, GHashTable *keys)
 {
@@ -31249,6 +32006,7 @@ incr_name_in_keys(const char *name, gsize len, GHashTable *keys)
     return hit;
 }
 
+/* True if any class token in value is used by some selector. */
 static gboolean
 incr_class_tokens_in_keys(const char *value)
 {
@@ -31268,6 +32026,7 @@ incr_id_in_keys(const char *value)
     return value && incr_name_in_keys(value, strlen(value), g_id_keys);
 }
 
+/* True if a class/id change touches no names any selector uses, so restyle can be skipped. */
 static gboolean
 incr_name_change_unused(const ns_node *target, const char *name,
                         const char *old_value)
@@ -31288,6 +32047,7 @@ static void incr_desc_features_build(const ns_css_stylesheet *ua,
                                      const ns_css_stylesheet *const *author,
                                      gsize n);
 
+/* Rebuilds the incremental restyle invalidation indexes when the sheet signature changes. */
 static void
 incr_ensure_struct_keys(const ns_css_stylesheet *ua,
                         const ns_css_stylesheet *const *author, gsize n,
@@ -31350,6 +32110,7 @@ incr_ensure_struct_keys(const ns_css_stylesheet *ua,
                    g_struct_nth_last);
 }
 
+/* Tests for prefix+name (optionally lowercased) in a key set, avoiding heap use when short. */
 static gboolean
 incr_key_set_has(GHashTable *set, char prefix, const char *name, gsize len,
                  gboolean fold)
@@ -31365,6 +32126,7 @@ incr_key_set_has(GHashTable *set, char prefix, const char *name, gsize len,
     return hit;
 }
 
+/* True if n's tag, id or any class is in the key set. */
 static gboolean
 incr_node_matches_keys(const ns_node *n, GHashTable *keyset)
 {
@@ -31385,6 +32147,7 @@ incr_node_matches_keys(const ns_node *n, GHashTable *keyset)
     return FALSE;
 }
 
+/* True if any of n's attributes satisfies one of the predicates. */
 static gboolean
 incr_node_matches_attr_preds(const ns_node *n, const GPtrArray *preds)
 {
@@ -31438,6 +32201,7 @@ incr_prev_same_type_from(ns_node *from, const char *tag)
     return NULL;
 }
 
+/* Marks n self-dirty with the descendant keys for feature; FALSE if keying is unavailable. */
 static gboolean
 incr_mark_self_feature_only(ns_node *n, const char *feature)
 {
@@ -31451,6 +32215,7 @@ incr_mark_self_feature_only(ns_node *n, const char *feature)
     return TRUE;
 }
 
+/* Like incr_mark_self_feature_only, but also dirties affected :has() subjects. */
 static gboolean
 incr_mark_self_with_feature(ns_node *n, const char *feature)
 {
@@ -31459,6 +32224,7 @@ incr_mark_self_with_feature(ns_node *n, const char *feature)
     return TRUE;
 }
 
+/* Marks n for structural restyle, falling back to a full subtree restyle. */
 static void
 incr_mark_struct_node(ns_node *n)
 {
@@ -31466,6 +32232,7 @@ incr_mark_struct_node(ns_node *n)
         ns_css_mark_restyle_dirty(n);
 }
 
+/* Structurally marks up to 256 following element siblings; FALSE if more remain. */
 static gboolean
 incr_mark_following_struct(ns_node *from)
 {
@@ -31478,6 +32245,7 @@ incr_mark_following_struct(ns_node *from)
     return TRUE;
 }
 
+/* Marks parent's children for structural restyle, or the whole subtree if not keyable. */
 void
 ns_css_mark_children_restyle(ns_node *parent)
 {
@@ -31499,6 +32267,7 @@ ns_css_mark_children_restyle(ns_node *parent)
         if (c->kind == NS_NODE_ELEMENT) incr_mark_struct_node(c);
 }
 
+/* Marks up to 256 following element siblings dirty; FALSE if more remain. */
 static gboolean
 incr_mark_following_siblings(ns_node *from)
 {
@@ -31511,6 +32280,7 @@ incr_mark_following_siblings(ns_node *from)
     return TRUE;
 }
 
+/* Structurally marks the children of a parent with at most two element children. */
 static void
 incr_mark_small_family(ns_node *parent)
 {
@@ -31521,6 +32291,7 @@ incr_mark_small_family(ns_node *parent)
         if (c->kind == NS_NODE_ELEMENT) incr_mark_struct_node(c);
 }
 
+/* Marks a node whose user-action state changed, plus later siblings if selectors need it. */
 static void
 incr_mark_state_node(const ns_node *n)
 {
@@ -31541,6 +32312,7 @@ incr_chain_contains(const ns_node *chain, const ns_node *n)
     return FALSE;
 }
 
+/* Marks ancestors entering or leaving a hover/active chain, skipping shared ones. */
 static void
 incr_mark_state_chain(const ns_node *oldn, const ns_node *newn,
                       gboolean relevant)
@@ -31552,6 +32324,7 @@ incr_mark_state_chain(const ns_node *oldn, const ns_node *newn,
         if (!incr_chain_contains(oldn, b)) incr_mark_state_node(b);
 }
 
+/* Marks nodes affected by a focus move; whole ancestor chains if :focus-within is used. */
 static void
 incr_mark_state_focus(const ns_node *oldn, const ns_node *newn)
 {
@@ -31565,6 +32338,7 @@ incr_mark_state_focus(const ns_node *oldn, const ns_node *newn)
     incr_mark_state_node(newn);
 }
 
+/* Restyles parent when it became empty or single-child under a structurally keyed ancestor. */
 static void
 incr_mark_empty_transition(ns_node *parent, ns_node *added, ns_node *removed)
 {
@@ -31580,6 +32354,7 @@ incr_mark_empty_transition(ns_node *parent, ns_node *added, ns_node *removed)
         }
 }
 
+/* Invalidates structural selectors such as :empty when a text node's emptiness flips. */
 void
 ns_css_mark_text_emptiness_change(ns_node *text)
 {
@@ -31600,6 +32375,7 @@ ns_css_mark_text_emptiness_change(ns_node *text)
         }
 }
 
+/* Marks restyle needs after a child insertion or removal (structural and :has()). */
 void
 ns_css_mark_childlist_change(ns_node *parent, ns_node *added, ns_node *removed,
                              ns_node *prev_sibling, ns_node *next_sibling)
@@ -31651,6 +32427,7 @@ ns_css_mark_childlist_change(ns_node *parent, ns_node *added, ns_node *removed,
     incr_mark_empty_transition(parent, added, removed);
 }
 
+/* True if any old class token is a key used left of a sibling combinator. */
 static gboolean
 incr_old_class_is_sib(const char *old_value)
 {
@@ -31669,6 +32446,7 @@ incr_old_class_is_sib(const char *old_value)
     return hit;
 }
 
+/* True if an id/class change (old or new value) affects sibling-combinator selectors. */
 static gboolean
 incr_attr_key_change_is_sib(const ns_node *target, const char *name,
                             const char *old_value)
@@ -31699,6 +32477,7 @@ incr_lower_key(char prefix, const char *name)
     return key;
 }
 
+/* Picks one lowercased invalidation key (id, class, tag or attr) for a subject compound. */
 static char *
 incr_desc_subject_key(const ns_css_simple *c)
 {
@@ -31726,6 +32505,7 @@ incr_desc_value_free(gpointer v)
     if (v && v != DESC_ALL) g_hash_table_destroy(v);
 }
 
+/* Adds the subject keys a feature invalidates; no keys means it invalidates everything. */
 static void
 incr_desc_feature_add(char *feature, const GPtrArray *keys)
 {
@@ -31751,6 +32531,7 @@ incr_desc_feature_add(char *feature, const GPtrArray *keys)
     }
 }
 
+/* Returns keys identifying a selector subject, via its :is() arms if needed; NULL if none. */
 static GPtrArray *
 incr_desc_subject_keys(const ns_css_simple *subject)
 {
@@ -31780,6 +32561,7 @@ incr_desc_subject_keys(const ns_css_simple *subject)
     return NULL;
 }
 
+/* Returns a "*N" key when the subject is N child-combinator steps below (N <= 4). */
 static GPtrArray *
 incr_desc_depth_keys(const ns_css_selector *sel, guint from)
 {
@@ -31804,6 +32586,7 @@ static void incr_desc_collect_compound(const ns_css_simple *c,
 static void incr_desc_collect_sibling_chain(const ns_css_selector *sel,
                                             const GPtrArray *keys);
 
+/* Collects descendant features from a compound's nested :is/:not/of-S selectors. */
 static void
 incr_desc_collect_groups(const ns_css_simple *c, const GPtrArray *keys,
                          int depth, gboolean identity)
@@ -31840,6 +32623,7 @@ incr_desc_collect_groups(const ns_css_simple *c, const GPtrArray *keys,
     }
 }
 
+/* Registers a compound's id, class, attr, structural and state features against keys. */
 static void
 incr_desc_collect_features(const ns_css_simple *c, const GPtrArray *keys)
 {
@@ -31868,6 +32652,7 @@ incr_desc_collect_features(const ns_css_simple *c, const GPtrArray *keys)
     }
 }
 
+/* Collects features of a non-subject compound; deep nesting makes the index loose. */
 static void
 incr_desc_collect_compound(const ns_css_simple *c, const GPtrArray *keys,
                            int depth)
@@ -31881,6 +32666,7 @@ incr_desc_collect_compound(const ns_css_simple *c, const GPtrArray *keys,
     incr_desc_collect_groups(c, keys, depth, FALSE);
 }
 
+/* Collects features from a subject compound's nested groups; deep nesting goes loose. */
 static void
 incr_desc_collect_identity(const ns_css_simple *c, const GPtrArray *keys,
                            int depth)
@@ -31893,6 +32679,7 @@ incr_desc_collect_identity(const ns_css_simple *c, const GPtrArray *keys,
     incr_desc_collect_groups(c, keys, depth, TRUE);
 }
 
+/* Returns the last sibling combinator index; *descends if a descendant step follows it. */
 static guint
 incr_desc_last_sibling_comb(const ns_css_selector *sel, gboolean *descends)
 {
@@ -31912,6 +32699,7 @@ incr_desc_last_sibling_comb(const ns_css_selector *sel, gboolean *descends)
     return at;
 }
 
+/* Registers :struct when a sibling combinator is followed by descendant steps. */
 static void
 incr_desc_collect_sibling_chain(const ns_css_selector *sel,
                                 const GPtrArray *keys)
@@ -31921,6 +32709,7 @@ incr_desc_collect_sibling_chain(const ns_css_selector *sel,
         incr_desc_feature_add(g_strdup(":struct"), keys);
 }
 
+/* Collects descendant features of every compound in a nested selector. */
 static void
 incr_desc_collect_selector(const ns_css_selector *sel, const GPtrArray *keys,
                            int depth)
@@ -31931,6 +32720,7 @@ incr_desc_collect_selector(const ns_css_selector *sel, const GPtrArray *keys,
                                    keys, depth);
 }
 
+/* Indexes which ancestor features of a rule selector invalidate which subjects. */
 static void
 incr_desc_collect_rule_selector(const ns_css_selector *sel)
 {
@@ -31963,6 +32753,7 @@ incr_desc_collect_rule_selector(const ns_css_selector *sel)
     if (subject_keys) g_ptr_array_unref(subject_keys);
 }
 
+/* Builds descendant-invalidation features for a sheet's selectors and @scope bounds. */
 static void
 incr_desc_collect_sheet(const ns_css_stylesheet *sh)
 {
@@ -32001,6 +32792,7 @@ incr_sheet_keys_free(struct ns_css_incr_sheet_keys *k)
     g_free(k);
 }
 
+/* Returns the sheet's cached descendant-feature and class/id key sets, building them once. */
 static incr_sheet_keys *
 incr_sheet_keys_for(const ns_css_stylesheet *sh)
 {
@@ -32047,6 +32839,7 @@ incr_key_set_union(GHashTable *into, GHashTable *from)
             g_hash_table_add(into, g_strdup(key));
 }
 
+/* Merges a sheet's cached invalidation keys into the global restyle indexes. */
 static void
 incr_sheet_keys_merge(const ns_css_stylesheet *sh)
 {
@@ -32075,6 +32868,7 @@ incr_sheet_keys_merge(const ns_css_stylesheet *sh)
     }
 }
 
+/* Rebuilds the global descendant-feature index from the UA and author sheets. */
 static void
 incr_desc_features_build(const ns_css_stylesheet *ua,
                          const ns_css_stylesheet *const *author, gsize n)
@@ -32087,6 +32881,7 @@ incr_desc_features_build(const ns_css_stylesheet *ua,
     for (gsize i = 0; i < n; i++) incr_sheet_keys_merge(author[i]);
 }
 
+/* True for attributes whose changes matter only to selectors, not element state or hints. */
 static gboolean
 incr_attr_self_only_name(const char *name)
 {
@@ -32105,6 +32900,7 @@ incr_attr_self_only_name(const char *name)
     return TRUE;
 }
 
+/* Adds a feature's invalidation keys to inv (frees feature); FALSE if it invalidates all. */
 static gboolean
 incr_desc_feature_merge(GHashTable *inv, char *feature)
 {
@@ -32134,6 +32930,7 @@ incr_class_list_has(const char *list, const char *tok, gsize len)
     return FALSE;
 }
 
+/* Merges keys for classes in from but not in other; FALSE if any invalidates all. */
 static gboolean
 incr_desc_merge_class_diff(GHashTable *inv, const char *from, const char *other)
 {
@@ -32151,6 +32948,7 @@ incr_desc_merge_class_diff(GHashTable *inv, const char *from, const char *other)
     return TRUE;
 }
 
+/* Targets restyle for an attribute change via descendant keys; FALSE if full one needed. */
 static gboolean
 incr_mark_attr_self(ns_node *target, const char *name, const char *old_value)
 {
@@ -32174,6 +32972,7 @@ incr_mark_attr_self(ns_node *target, const char *name, const char *old_value)
     return ok;
 }
 
+/* Marks restyle needs after an attribute change, including sibling-combinator effects. */
 void
 ns_css_mark_attr_dirty(ns_node *target, const char *name, const char *old_value)
 {
@@ -32207,6 +33006,7 @@ ns_css_mark_attr_dirty(ns_node *target, const char *name, const char *old_value)
         ns_css_mark_restyle_dirty(target->parent ? target->parent : target);
 }
 
+/* True if any selector or intrinsic behavior may depend on the named attribute. */
 gboolean
 ns_css_attr_may_affect_style(const ns_node *target, const char *name)
 {
@@ -32230,6 +33030,7 @@ ns_css_attr_may_affect_style(const ns_node *target, const char *name)
     return affects;
 }
 
+/* True if an attribute change needs only restyle, not layout reading the attribute. */
 gboolean
 ns_css_attr_only_restyles(const ns_node *target, const char *name)
 {
@@ -32261,6 +33062,7 @@ static gboolean
 incr_add_positive_subject_deps(GHashTable *keys, GPtrArray *attrs,
                                const ns_css_selector *sel, int depth);
 
+/* Adds one positive key (id, class, attr or tag) for a compound, or for all :is() arms. */
 static gboolean
 incr_add_positive_compound_deps(GHashTable *keys, GPtrArray *attrs,
                                 const ns_css_simple *c, int depth)
@@ -32333,6 +33135,7 @@ incr_add_positive_subject_deps(GHashTable *keys, GPtrArray *attrs,
 
 static gboolean incr_selector_uses_has(const ns_css_selector *sel, int depth);
 
+/* True if a compound or nested selector uses :has(); deep nesting counts as yes. */
 static gboolean
 incr_simple_uses_has(const ns_css_simple *c, int depth)
 {
@@ -32374,6 +33177,7 @@ incr_selector_uses_has(const ns_css_selector *sel, int depth)
     return FALSE;
 }
 
+/* True if a :has() argument uses sibling combinators or nested selector groups. */
 static gboolean
 incr_has_group_uses_siblings(const GPtrArray *group)
 {
@@ -32398,6 +33202,7 @@ incr_has_group_uses_siblings(const GPtrArray *group)
     return FALSE;
 }
 
+/* Records an unkeyable :has() anchor as self, descendant-keyed or fully loose. */
 static void
 incr_note_loose_has_anchor(const ns_css_simple *c, gboolean identity,
                            const char *subject_key)
@@ -32419,6 +33224,7 @@ static gboolean incr_collect_has_anchors_selector(const ns_css_selector *sel,
                                                   int depth, gboolean identity,
                                                   const char *subject_key);
 
+/* Collects keys for compounds bearing :has(), recursing into nested selectors. */
 static gboolean
 incr_collect_has_anchors_simple(const ns_css_simple *c, int depth,
                                 gboolean identity, const char *subject_key)
@@ -32474,6 +33280,7 @@ incr_collect_has_anchors_selector(const ns_css_selector *sel, int depth,
     return found;
 }
 
+/* Indexes :has() anchors in a sheet's selectors for incremental invalidation. */
 static void
 incr_collect_has_cq_keys(const ns_css_stylesheet *sh)
 {
@@ -32501,6 +33308,7 @@ incr_u64_cmp(gconstpointer a, gconstpointer b)
     return x < y ? -1 : x > y;
 }
 
+/* Hashes sheet serials for style reuse; *out_keys_sig also covers shadow-scoped templates. */
 static guint64
 incr_sheet_sig(const ns_css_stylesheet *ua,
                const ns_css_stylesheet *const *author, gsize n,
@@ -32539,6 +33347,7 @@ incr_sheet_sig(const ns_css_stylesheet *ua,
     return styles_sig;
 }
 
+/* Hashes shadow-scoped sheets per host scope id, with their positions; NULL if none. */
 static GHashTable *
 incr_host_sheet_keys(const ns_css_stylesheet *const *author, gsize n)
 {
@@ -32565,6 +33374,7 @@ incr_host_sheet_keys(const ns_css_stylesheet *const *author, gsize n)
     return keys;
 }
 
+/* Adds host scopes whose sheet hash differs or vanished between maps to changed. */
 static void
 incr_note_changed_hosts(GHashTable *changed, GHashTable *from, GHashTable *to)
 {
@@ -32579,6 +33389,7 @@ incr_note_changed_hosts(GHashTable *changed, GHashTable *from, GHashTable *to)
     }
 }
 
+/* True if n's host scope or any of its adopted scopes is in the changed set. */
 static gboolean
 incr_host_scope_changed(const ns_node *n, GHashTable *changed)
 {
@@ -32594,6 +33405,7 @@ incr_host_scope_changed(const ns_node *n, GHashTable *changed)
     return FALSE;
 }
 
+/* Marks elements whose shadow-scoped stylesheets changed for restyle. */
 static void
 incr_mark_changed_hosts(ns_node *doc, GHashTable *prev, GHashTable *now)
 {
@@ -32649,6 +33461,7 @@ share_key_free(gpointer p)
     g_free(k);
 }
 
+/* Multiply-xor hash of a byte buffer folded to 32 bits. */
 static guint32
 share_key_hash_bytes(const guint8 *d, guint32 n)
 {
@@ -32681,6 +33494,7 @@ ns_style_vars_clone(ns_var_map *vars)
     return ns_var_map_ref(vars);
 }
 
+/* Clones a style sharing values by refcount, recursing into pseudo-element styles. */
 static ns_style *
 ns_style_clone_shared(const ns_style *s)
 {
@@ -32708,6 +33522,7 @@ ns_style_clone_shared(const ns_style *s)
     return c;
 }
 
+/* Appends a count header plus room for n entries to the share key buffer. */
 static guint8 *
 share_key_grow(GByteArray *b, guint n_entries, gsize entry_size)
 {
@@ -32724,6 +33539,7 @@ share_key_put(guint8 *p, const void *src, gsize n)
     return p + n;
 }
 
+/* Serializes match entries' cascade-order fields, rule, value and prop into the share key. */
 static void
 share_key_put_matches(GByteArray *b, const GArray *arr)
 {
@@ -32741,6 +33557,7 @@ share_key_put_matches(GByteArray *b, const GArray *arr)
     }
 }
 
+/* Serializes custom property matches' cascade-order fields, rule, name and text. */
 static void
 share_key_put_vars(GByteArray *b, const GArray *arr)
 {
@@ -32757,6 +33574,7 @@ share_key_put_vars(GByteArray *b, const GArray *arr)
     }
 }
 
+/* Serializes pending matches' cascade-order fields, inline flag, rule and decl. */
 static void
 share_key_put_pending(GByteArray *b, const GArray *arr)
 {
@@ -32782,6 +33600,7 @@ container_relative_unit(ns_css_unit unit)
            unit == NS_CSS_UNIT_CQMIN || unit == NS_CSS_UNIT_CQMAX;
 }
 
+/* True if text contains a cq* container unit (case-insensitive substring scan). */
 static gboolean
 text_has_container_unit(const char *text)
 {
@@ -32799,6 +33618,7 @@ text_has_container_unit(const char *text)
     return FALSE;
 }
 
+/* True if any match sets font-size in a container-relative unit. */
 static gboolean
 share_matches_need_container(const GArray *matches)
 {
@@ -32814,6 +33634,7 @@ share_matches_need_container(const GArray *matches)
     return FALSE;
 }
 
+/* True if any custom property value text uses a cq* unit. */
 static gboolean
 share_vars_need_container(const GArray *matches)
 {
@@ -32825,6 +33646,7 @@ share_vars_need_container(const GArray *matches)
     return FALSE;
 }
 
+/* True if any pending declaration's raw value uses a cq* unit. */
 static gboolean
 share_pending_need_container(const GArray *matches)
 {
@@ -32837,6 +33659,7 @@ share_pending_need_container(const GArray *matches)
     return FALSE;
 }
 
+/* True if the style-sharing key must include the container stack (cq units used). */
 static gboolean
 share_key_needs_container(const GArray *matches,
                           const GArray *var_matches,
@@ -32855,6 +33678,7 @@ share_key_needs_container(const GArray *matches,
     return FALSE;
 }
 
+/* Serializes parent style, root font, container context and all matches into a share key. */
 static void
 style_share_key(GByteArray *b,
                 const ns_style *parent_style, double root_px,
@@ -32886,6 +33710,7 @@ style_share_key(GByteArray *b,
     }
 }
 
+/* True for elements where display: contents acts as none (replaced, controls, outer svg). */
 static gboolean
 element_cannot_be_unboxed(const ns_node *el)
 {
@@ -32904,6 +33729,7 @@ element_cannot_be_unboxed(const ns_node *el)
     return FALSE;
 }
 
+/* Forces display: none for display: contents on elements that cannot be unboxed. */
 static gboolean
 display_contents_to_none(const ns_node *el, ns_style *s)
 {
@@ -32916,6 +33742,7 @@ display_contents_to_none(const ns_node *el, ns_style *s)
     return TRUE;
 }
 
+/* Hides noscript elements when scripting is enabled for their document. */
 static gboolean
 scripted_noscript_to_none(const ns_node *el, ns_style *s)
 {
@@ -32936,6 +33763,7 @@ display_forced_none(const ns_node *el, ns_style *s)
     return display_contents_to_none(el, s) || scripted_noscript_to_none(el, s);
 }
 
+/* Drops author box decorations on checkbox/radio inputs unless appearance is none. */
 static void
 strip_native_widget_decorations(const ns_node *el, ns_style *s)
 {
@@ -32979,6 +33807,7 @@ frame_edge_px(const ns_style *s, ns_css_prop prop)
     return v->u.length.v;
 }
 
+/* Returns a border width in px, or 0 when the border style is none or hidden. */
 static double
 frame_border_px(const ns_style *s, ns_css_prop width_prop,
                 ns_css_prop style_prop)
@@ -32991,6 +33820,7 @@ frame_border_px(const ns_style *s, ns_css_prop width_prop,
     return frame_edge_px(s, width_prop);
 }
 
+/* Derives an iframe's content-box viewport size from its px width/height style. */
 static gboolean
 frame_viewport_from_style(const ns_style *s, double *w, double *h)
 {
@@ -33023,6 +33853,7 @@ frame_viewport_from_style(const ns_style *s, double *w, double *h)
     return TRUE;
 }
 
+/* Tests for prefix plus lowercased name in a descendant invalidation key set. */
 static gboolean
 incr_desc_set_has(GHashTable *set, char prefix, const char *name, gsize len)
 {
@@ -33036,6 +33867,7 @@ incr_desc_set_has(GHashTable *set, char prefix, const char *name, gsize len)
     return hit;
 }
 
+/* True if node matches an ancestor's pending descendant-invalidation set, incl. depth keys. */
 static gboolean
 incr_desc_inv_matches(const ns_node *node, int node_depth)
 {
@@ -33069,6 +33901,7 @@ incr_desc_inv_matches(const ns_node *node, int node_depth)
     return FALSE;
 }
 
+/* True if two custom property tables have identical names and values. */
 static gboolean
 incr_var_tables_same(GHashTable *x, GHashTable *y)
 {
@@ -33095,6 +33928,7 @@ incr_var_map_skip_empty(const ns_var_map *m)
     return m;
 }
 
+/* Compares var map chains level by level, skipping empty levels, up to 16 deep. */
 static gboolean
 incr_var_maps_same(const ns_var_map *a, const ns_var_map *b)
 {
@@ -33111,6 +33945,7 @@ incr_var_maps_same(const ns_var_map *a, const ns_var_map *b)
 
 static gboolean incr_style_same(const ns_style *a, const ns_style *b);
 
+/* True if all pseudo-element sub-styles of a and b are equal. */
 static gboolean
 incr_pseudo_styles_same(const ns_style *a, const ns_style *b)
 {
@@ -33125,6 +33960,7 @@ incr_pseudo_styles_same(const ns_style *a, const ns_style *b)
     return TRUE;
 }
 
+/* Value-by-value style equality including display, currentcolor bits and vars. */
 static gboolean
 incr_style_same(const ns_style *a, const ns_style *b)
 {
@@ -33142,12 +33978,14 @@ incr_style_same(const ns_style *a, const ns_style *b)
     return incr_var_maps_same(a->vars, b->vars);
 }
 
+/* Deep style equality including pseudo-element styles. */
 gboolean
 ns_css_style_equal(const ns_style *a, const ns_style *b)
 {
     return incr_style_same(a, b) && incr_pseudo_styles_same(a, b);
 }
 
+/* Adds each key node and its ancestors to the incremental dirty-path set. */
 static void
 incr_path_add_ancestors(GHashTable *keys)
 {
@@ -33161,6 +33999,7 @@ incr_path_add_ancestors(GHashTable *keys)
             g_hash_table_add(g_incr_path, n);
 }
 
+/* Rebuilds the set of nodes on paths to any dirty, excluded or invalidated node. */
 static void
 incr_path_build(void)
 {
@@ -33173,6 +34012,7 @@ incr_path_build(void)
     incr_path_add_ancestors(g_incr_desc_inv);
 }
 
+/* Finds the nearest non-contents ancestor style below root to use as layout parent. */
 static const ns_style *
 incr_bulk_layout_parent(const ns_node *from, const ns_node *root,
                         const ns_style *root_layout_parent, GHashTable *out)
@@ -33189,6 +34029,7 @@ incr_bulk_layout_parent(const ns_node *from, const ns_node *root,
     return root_layout_parent;
 }
 
+/* Cascades a node lacking a previous style, priming the ancestor filter with its chain. */
 static void
 incr_bulk_fallback(ns_node *root, ns_node *node,
                    const ns_css_stylesheet *ua,
@@ -33219,6 +34060,7 @@ incr_bulk_fallback(ns_node *root, ns_node *node,
     g_ptr_array_free(chain, TRUE);
 }
 
+/* Reuses previous styles across a clean subtree, cascading only nodes lacking one. */
 static void
 incr_bulk_reuse(ns_node *root, const ns_css_stylesheet *ua,
                 const ns_css_stylesheet *const *author, gsize n_author,
@@ -33294,6 +34136,7 @@ style_memo_root_line(const ns_style *parent_style)
     return parent_style ? g_root_line_px : 0.0;
 }
 
+/* True if node's memo matches the share key, layout parent, root line and generation. */
 static gboolean
 style_memo_hit(const ns_node *node, const ns_style *prev,
               const share_key_t *key, const ns_style *parent_style,
@@ -33309,6 +34152,7 @@ style_memo_hit(const ns_node *node, const ns_style *prev,
            memcmp(e->data, key->data, key->len) == 0;
 }
 
+/* Records node's style with its share key for later memo hits; capped at 8192 entries. */
 static void
 style_memo_store(const ns_node *node, ns_style *style, const share_key_t *key,
                 const ns_style *parent_style, const ns_style *layout_parent)
@@ -33330,6 +34174,7 @@ style_memo_store(const ns_node *node, ns_style *style, const share_key_t *key,
     g_hash_table_replace(g_style_memo, (gpointer)node, e);
 }
 
+/* Styles a subtree via reuse, sharing, memo or full cascade, keeping scope/filter stacks. */
 static void
 cascade_walk(ns_node *node,
              const ns_css_stylesheet *ua,
@@ -33823,6 +34668,7 @@ cascade_walk(ns_node *node,
     depth--;
 }
 
+/* Appends all descendant text in tree order to out. */
 static void
 append_text_children(const ns_node *n, GString *out, int depth)
 {
@@ -33837,6 +34683,7 @@ append_text_children(const ns_node *n, GString *out, int depth)
 
 static int g_host_scope_counter;
 
+/* Returns, assigning if needed, the host scope id for a style element in a shadow root. */
 static char *
 style_host_scope_id(ns_node *style_el)
 {
@@ -33858,6 +34705,7 @@ style_host_scope_id(ns_node *style_el)
     return g_strdup(buf);
 }
 
+/* Returns, assigning if needed, a scope id on the root element of a nested frame document. */
 static char *
 style_iframe_scope_id(ns_node *style_el)
 {
@@ -33878,6 +34726,7 @@ style_iframe_scope_id(ns_node *style_el)
     return g_strdup(buf);
 }
 
+/* Rewrites :host, :host(), :host-context() and ::slotted() into host-scope attr selectors. */
 static char *
 rewrite_host_selectors(const char *css, const char *host_id)
 {
@@ -33940,6 +34789,7 @@ rewrite_host_selectors(const char *css, const char *host_id)
     return g_string_free(out, FALSE);
 }
 
+/* Returns the length of a selector's first compound, up to a top-level combinator or comma. */
 static gsize
 selector_first_compound_len(const char *s)
 {
@@ -33957,6 +34807,7 @@ selector_first_compound_len(const char *s)
     return i;
 }
 
+/* True if the first compound starts with html or :root. */
 static gboolean
 selector_first_compound_targets_root(const char *s, gsize clen)
 {
@@ -33969,6 +34820,7 @@ selector_first_compound_targets_root(const char *s, gsize clen)
     return FALSE;
 }
 
+/* Returns the compound's length before any pseudo-element (:: or legacy single colon). */
 static gsize
 selector_compound_simple_len(const char *s, gsize clen)
 {
@@ -33994,6 +34846,7 @@ selector_compound_simple_len(const char *s, gsize clen)
     return clen;
 }
 
+/* True if the first compound could match a frame's root (*, class, id, attr or pseudo). */
 static gboolean
 selector_first_compound_may_be_root(const char *s, gsize clen)
 {
@@ -34002,6 +34855,7 @@ selector_first_compound_may_be_root(const char *s, gsize clen)
     return s[0] == '.' || s[0] == '#' || s[0] == '[' || s[0] == ':';
 }
 
+/* Scopes one selector to a shadow host or frame using the scope marker attribute. */
 static void
 scope_one_selector(GString *out, const char *sel, gsize len,
                    const char *marker, const char *host_id,
@@ -34035,6 +34889,7 @@ scope_one_selector(GString *out, const char *sel, gsize len,
     g_free(s);
 }
 
+/* Rewrites every rule's selectors with the scope marker, recursing into group at-rules. */
 static void
 scope_rule_list(GString *out, const char *p, const char *end,
                 const char *marker, const char *host_id, int depth,
@@ -34120,6 +34975,7 @@ scope_rule_list(GString *out, const char *p, const char *end,
     }
 }
 
+/* Returns flattened CSS scoped to host_id through attribute markers; caller frees. */
 static char *
 scope_shadow_css(const char *flat_css, const char *host_id, gboolean frame_scope)
 {
@@ -34131,6 +34987,7 @@ scope_shadow_css(const char *flat_css, const char *host_id, gboolean frame_scope
     return g_string_free(out, FALSE);
 }
 
+/* Returns a style element's CSS if its media matches, scoped for shadow roots or frames. */
 static char *
 style_element_final_css(ns_node *style)
 {
@@ -34196,6 +35053,7 @@ typedef struct {
     GPtrArray *media;
 } ns_link_sheet_cached;
 
+/* Parses CSS while recording the media queries it evaluated, optionally forcing a layer. */
 static ns_css_stylesheet *
 css_parse_recording_media(const char *css, gssize len, const char *layer_name,
                           GPtrArray **out_media)
@@ -34234,6 +35092,7 @@ ns_style_el_cached_free(gpointer data)
     g_free(e);
 }
 
+/* Builds a merged-style cache key with an FNV hash over the CSS and base URL. */
 static ns_merged_style_key
 ns_merged_style_key_make(const char *css, gsize len, const char *base)
 {
@@ -34319,6 +35178,7 @@ ns_link_sheet_cached_free(gpointer data)
     g_free(e);
 }
 
+/* Evicts least recently used merged sheets down to 48 once the cache exceeds 64. */
 static void
 ns_merged_style_cache_trim(void)
 {
@@ -34356,6 +35216,7 @@ ns_css_relayout_leave(void)
     if (g_css_relayout_depth > 0) g_css_relayout_depth--;
 }
 
+/* Empties all parsed stylesheet caches, e.g. after media preferences change. */
 void
 ns_css_stylesheet_cache_drop(void)
 {
@@ -34365,6 +35226,7 @@ ns_css_stylesheet_cache_drop(void)
     if (g_import_sheet_cache) g_hash_table_remove_all(g_import_sheet_cache);
 }
 
+/* Bounds the stylesheet caches at the start of an outermost style pass. */
 void
 ns_css_style_element_cache_begin(void)
 {
@@ -34378,6 +35240,7 @@ ns_css_style_element_cache_begin(void)
         g_hash_table_remove_all(g_import_sheet_cache);
 }
 
+/* Returns a cached parse of merged style text per base URL; reparses if media changed. */
 ns_css_stylesheet *
 ns_css_merged_styles_cached(const char *css, gssize len, const char *base_url)
 {
@@ -34416,6 +35279,7 @@ ns_css_merged_styles_cached(const char *css, gssize len, const char *base_url)
     return sh;
 }
 
+/* Returns a URL-keyed cached parse of a linked sheet, owned by the cache. */
 ns_css_stylesheet *
 ns_css_stylesheet_parse_url_cached(const char *url, const char *css, gssize len)
 {
@@ -34439,6 +35303,7 @@ ns_css_stylesheet_parse_url_cached(const char *url, const char *css, gssize len)
     return sh;
 }
 
+/* Parses CSS bytes into a new sheet, forcing it into layer_name if given. */
 static ns_css_stylesheet *
 ns_css_stylesheet_parse_in_layer(GBytes *bytes, const char *layer_name)
 {
@@ -34450,6 +35315,7 @@ ns_css_stylesheet_parse_in_layer(GBytes *bytes, const char *layer_name)
     return sh;
 }
 
+/* Returns a cached @import sheet keyed by layer and URL; reparses on bytes/media change. */
 ns_css_stylesheet *
 ns_css_stylesheet_parse_import_cached(const char *url, const char *layer_name,
                                       GBytes *bytes)
@@ -34488,6 +35354,7 @@ ns_css_stylesheet_parse_import_cached(const char *url, const char *layer_name,
     return sh;
 }
 
+/* Finds a selector's host/adopt scope marker in ancestor compounds; FALSE if none or mixed. */
 static gboolean
 css_selector_host_scope(const ns_css_selector *sel, const char **host)
 {
@@ -34520,6 +35387,7 @@ css_selector_host_scope(const ns_css_selector *sel, const char **host)
     return FALSE;
 }
 
+/* Hashes CSS text skipping host scope ids, so identical shadow sheets share a template. */
 static guint64
 css_host_scope_template(const char *css)
 {
@@ -34541,6 +35409,7 @@ css_host_scope_template(const char *css)
     return h;
 }
 
+/* Sets the sheet's host scope when every rule is scoped to the same single host. */
 static void
 css_sheet_find_host_scope(ns_css_stylesheet *sh, const char *css)
 {
@@ -34567,6 +35436,7 @@ css_sheet_find_host_scope(ns_css_stylesheet *sh, const char *css)
     sh->host_scope_template = css_host_scope_template(css);
 }
 
+/* Returns the cached sheet for a style element, reparsing on text/media change; takes css. */
 static ns_css_stylesheet *
 style_sheet_cached_take(ns_node *style, char *css)
 {
@@ -34600,6 +35470,7 @@ ns_css_stylesheet_from_style_text_cached(ns_node *style, const char *css)
     return css ? style_sheet_cached_take(style, g_strdup(css)) : NULL;
 }
 
+/* Computes styles for doc, applying each author sheet only to its owning document. */
 GHashTable *
 ns_css_compute_scoped(ns_node *doc,
                       const ns_css_stylesheet *const *author_sheets,
@@ -34615,6 +35486,7 @@ ns_css_compute_scoped(ns_node *doc,
     return styles;
 }
 
+/* Computes styles for every node of doc, incrementally when possible; NULL in delta mode. */
 static GHashTable *
 ns_css_compute(ns_node *doc,
                const ns_css_stylesheet *const *author_sheets,
@@ -34848,6 +35720,7 @@ ns_css_compute(ns_node *doc,
     return out;
 }
 
+/* Scales a computed length font-size by factor, copy-on-write. */
 void
 ns_css_style_scale_font_size(ns_style *s, double factor)
 {

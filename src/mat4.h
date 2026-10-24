@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — 4x4 transform matrices for CSS 3D rendering.
+/* Nordstjernen Web Browser — inline 4x4 matrix helpers for CSS transforms and 3D rendering.
+ * Translate, scale, rotate, skew, perspective, multiply and point projection.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

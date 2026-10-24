@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — supervisor that restarts the browser on crash or hang.
+/* Nordstjernen Web Browser — watchdog supervisor and child-side hang/parent-death hooks.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

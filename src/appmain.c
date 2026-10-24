@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — application entry point for GUI and headless modes.
+/* Nordstjernen Web Browser — process entry point: environment setup, sandbox, then GUI or headless.
+ * Locates bundled data (Windows/macOS), picks the GSK renderer and filters GLib logging.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -59,6 +60,7 @@ ns_app_self_exe(void)
     return g_self_exe;
 }
 
+/* Resolves the absolute path of the running executable per platform, falling back to argv0. */
 static void
 init_self_exe(const char *argv0)
 {
@@ -111,6 +113,7 @@ init_self_exe(const char *argv0)
     }
 }
 
+/* GLib log writer: drops known-harmless GTK noise and mirrors messages into the debug log. */
 static GLogWriterOutput
 ns_log_writer(GLogLevelFlags log_level,
               const GLogField *fields, gsize n_fields,
@@ -150,12 +153,14 @@ ns_log_writer(GLogLevelFlags log_level,
 __declspec(dllimport) HRESULT __stdcall
 SetCurrentProcessExplicitAppUserModelID(PCWSTR AppID);
 
+/* Sets the Windows AppUserModelID so taskbar grouping and pinning work. */
 static void
 ns_win32_set_app_id(void)
 {
     (void)SetCurrentProcessExplicitAppUserModelID(L"Northstar.Browser");
 }
 
+/* Points fontconfig at the bundled fonts.conf and forces the fc Pango backend (Windows). */
 static void
 ns_win32_use_fontconfig_backend(const char *dir)
 {
@@ -180,6 +185,7 @@ ns_win32_use_fontconfig_backend(const char *dir)
 #endif
 }
 
+/* Points GTK, pixbuf loaders and CA bundle env vars at data next to the exe (Windows). */
 static void
 ns_win32_anchor_gtk_data(void)
 {
@@ -219,6 +225,7 @@ ns_win32_anchor_gtk_data(void)
     g_free(dir);
 }
 
+/* TRUE if the arguments request a console-output mode (headless, dump, eval, ...). */
 static gboolean
 ns_win32_args_need_console(int argc, char **argv)
 {
@@ -248,6 +255,7 @@ ns_win32_fd_is_bound(int fd)
     return h != NULL && h != INVALID_HANDLE_VALUE;
 }
 
+/* Attaches to the parent console and rebinds unbound stdio to it, unbuffered. */
 static void
 ns_win32_attach_parent_console(void)
 {
@@ -265,6 +273,7 @@ ns_win32_attach_parent_console(void)
 #endif
 
 #ifdef __APPLE__
+/* Points GSettings, pixbuf loaders and CA bundle env vars into the .app Resources. */
 static void
 ns_macos_anchor_gtk_data(void)
 {
@@ -309,6 +318,7 @@ ns_macos_anchor_gtk_data(void)
 #endif
 
 #ifdef __linux__
+/* TRUE if /dev/dri has a render or card node, i.e. a usable GPU. */
 static gboolean
 ns_linux_has_gpu_render_node(void)
 {
@@ -327,6 +337,7 @@ ns_linux_has_gpu_render_node(void)
 }
 #endif
 
+/* Sets GSK_RENDERER from preference unless set; auto falls back to cairo without a GPU. */
 static void
 ns_apply_gsk_renderer(const char *pref)
 {
@@ -356,6 +367,7 @@ ns_apply_gsk_renderer(const char *pref)
               "(expected one of: auto, gl, ngl, vulkan, cairo)", pref);
 }
 
+/* TRUE unless the arguments request a headless or tool mode, i.e. the GUI should run. */
 static gboolean
 ns_proc_mode_wanted(int argc, char **argv)
 {
@@ -405,6 +417,7 @@ ns_preopen_screenshot_outputs(int argc, char **argv)
     }
 }
 
+/* Initializes subsystems for a headless run, executes it and prints perf stats with --debug. */
 static int
 ns_run_headless(ns_headless_opts *hopts)
 {
@@ -472,6 +485,7 @@ ns_run_headless(ns_headless_opts *hopts)
     return rc;
 }
 
+/* Runs the GUI app on the start URL (local paths become file: URLs) and returns its status. */
 static int
 ns_run_proc_gui(const char *url, const char *gsk_renderer_override,
                 const char *session_path, gboolean recover,
@@ -501,6 +515,7 @@ ns_run_proc_gui(const char *url, const char *gsk_renderer_override,
     return status;
 }
 
+/* Entry point: watchdog supervision, sandbox setup, argument parsing, then GUI or headless. */
 int
 main(int argc, char **argv)
 {

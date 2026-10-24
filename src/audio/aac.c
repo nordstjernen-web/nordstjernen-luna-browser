@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — AAC-LC audio decoder for raw MP4 access units, written from ISO/IEC 14496-3.
+/* Nordstjernen Web Browser — AAC-LC decoder for MP4 access units, written from ISO/IEC 14496-3.
+ * Huffman spectra, dequantization, M/S, intensity, PNS, TNS and FFT-based IMDCT overlap-add.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -554,6 +555,7 @@ static guint16          short_bit_reverse[AAC_SHORT_LENGTH / 2];
 static aac_imdct_plan   long_imdct_plan;
 static aac_imdct_plan   short_imdct_plan;
 
+/* Builds a binary decode tree from codes; leaves hold -(symbol+1). FALSE on conflict. */
 static gboolean
 build_huffman_tree(aac_codebook *book, aac_huffman_node *nodes, int capacity)
 {
@@ -601,6 +603,7 @@ describe_codebook(aac_codebook *book, const guint32 *codes,
     book->nodes = NULL;
 }
 
+/* Describes the scalefactor and 11 spectral Huffman codebooks and builds their trees. */
 static gboolean
 build_codebooks(void)
 {
@@ -645,6 +648,7 @@ build_codebooks(void)
     return TRUE;
 }
 
+/* Zeroth-order modified Bessel function of the first kind, by power series. */
 static double
 bessel_i0(double x)
 {
@@ -659,6 +663,7 @@ bessel_i0(double x)
     return sum;
 }
 
+/* Computes the rising half of a Kaiser-Bessel-derived window with the given alpha. */
 static void
 build_kbd_window(float *rising_half, int half_length, double alpha)
 {
@@ -680,6 +685,7 @@ build_kbd_window(float *rising_half, int half_length, double alpha)
     }
 }
 
+/* Computes the rising half of the AAC sine window. */
 static void
 build_sine_window(float *rising_half, int half_length)
 {
@@ -688,6 +694,7 @@ build_sine_window(float *rising_half, int half_length)
         rising_half[n] = (float)sin(G_PI / window_length * (n + 0.5));
 }
 
+/* Precomputes twiddles and bit-reversal for an FFT-based IMDCT of the given length. */
 static void
 build_imdct_plan(aac_imdct_plan *plan, int length, aac_complex *pre,
                  aac_complex *post, aac_complex *fft, guint16 *bit_reverse)
@@ -723,6 +730,7 @@ build_imdct_plan(aac_imdct_plan *plan, int length, aac_complex *pre,
     plan->scale = (float)(2.0 / length / 32768.0);
 }
 
+/* One-time init of codebooks, x^(4/3) table, windows and IMDCT plans (thread-safe). */
 static void
 initialize_tables(void)
 {
@@ -752,6 +760,7 @@ bit_reader_init(aac_bit_reader *reader, const guint8 *data, gsize len)
     reader->overrun = FALSE;
 }
 
+/* Reads up to 32 bits MSB-first; on overrun sets the flag and returns 0. */
 static guint32
 read_bits(aac_bit_reader *reader, int count)
 {
@@ -782,6 +791,7 @@ read_bit(aac_bit_reader *reader)
     return (int)read_bits(reader, 1);
 }
 
+/* Advances the reader by count bits; FALSE and overrun flag if past the end. */
 static gboolean
 skip_bits(aac_bit_reader *reader, gsize count)
 {
@@ -794,6 +804,7 @@ skip_bits(aac_bit_reader *reader, gsize count)
     return TRUE;
 }
 
+/* Advances the reader to the next byte boundary. */
 static void
 byte_align(aac_bit_reader *reader)
 {
@@ -801,6 +812,7 @@ byte_align(aac_bit_reader *reader)
     if (misalignment) skip_bits(reader, 8 - misalignment);
 }
 
+/* Decodes one symbol by walking the codebook tree; -1 on invalid code or overrun. */
 static int
 read_huffman_symbol(aac_bit_reader *reader, const aac_codebook *book)
 {
@@ -816,6 +828,7 @@ read_huffman_symbol(aac_bit_reader *reader, const aac_codebook *book)
     return -1;
 }
 
+/* Maps an explicit sample rate to the nearest sampling-frequency index (14496-3 table). */
 static int
 sampling_index_for_rate(guint32 rate)
 {
@@ -828,6 +841,7 @@ sampling_index_for_rate(guint32 rate)
     return AAC_SAMPLING_INDEX_COUNT - 2;
 }
 
+/* Selects long/short scalefactor-band offset tables for the sampling index. */
 static void
 select_band_tables(ns_aac_decoder *dec)
 {
@@ -882,6 +896,7 @@ select_band_tables(ns_aac_decoder *dec)
     }
 }
 
+/* Parses an AudioSpecificConfig; returns a decoder for mono/stereo AAC-LC or NULL. */
 ns_aac_decoder *
 ns_aac_decoder_new(const guint8 *asc, gsize asc_len)
 {
@@ -941,6 +956,7 @@ ns_aac_decoder_channels(const ns_aac_decoder *dec)
     return dec ? dec->channels : 0;
 }
 
+/* Clears overlap buffers and window history and reseeds the noise generator. */
 void
 ns_aac_decoder_reset(ns_aac_decoder *dec)
 {
@@ -951,6 +967,7 @@ ns_aac_decoder_reset(ns_aac_decoder *dec)
     dec->noise_state = 0x1f2e3d4cu;
 }
 
+/* Parses ics_info: window sequence/shape, max_sfb and short-window grouping. */
 static gboolean
 read_ics_info(ns_aac_decoder *dec, aac_bit_reader *reader, aac_ics_info *info)
 {
@@ -992,6 +1009,7 @@ read_ics_info(ns_aac_decoder *dec, aac_bit_reader *reader, aac_ics_info *info)
     return !reader->overrun;
 }
 
+/* Parses section_data, assigning a codebook to each scalefactor band per group. */
 static gboolean
 read_section_data(aac_bit_reader *reader, aac_channel *channel)
 {
@@ -1020,6 +1038,7 @@ read_section_data(aac_bit_reader *reader, aac_channel *channel)
     return !reader->overrun;
 }
 
+/* Decodes differential scalefactors, intensity positions and noise energies per band. */
 static gboolean
 read_scalefactor_data(aac_bit_reader *reader, aac_channel *channel,
                       int global_gain, gboolean allow_intensity)
@@ -1068,6 +1087,7 @@ read_scalefactor_data(aac_bit_reader *reader, aac_channel *channel,
     return !reader->overrun;
 }
 
+/* Parses pulse_data positions and amplitudes for long windows. */
 static gboolean
 read_pulse_data(aac_bit_reader *reader, aac_channel *channel)
 {
@@ -1085,6 +1105,7 @@ read_pulse_data(aac_bit_reader *reader, aac_channel *channel)
     return !reader->overrun;
 }
 
+/* Converts TNS reflection coefficients to direct-form LPC by Levinson recursion. */
 static void
 reflection_to_lpc(const float *reflection, int order, float *lpc)
 {
@@ -1098,6 +1119,7 @@ reflection_to_lpc(const float *reflection, int order, float *lpc)
     }
 }
 
+/* Parses tns_data per window and converts quantized coefficients to LPC filters. */
 static gboolean
 read_tns_data(aac_bit_reader *reader, aac_channel *channel)
 {
@@ -1140,6 +1162,7 @@ read_tns_data(aac_bit_reader *reader, aac_channel *channel)
     return !reader->overrun;
 }
 
+/* Decodes an escape-codebook magnitude (prefix length, then N+4 bits); -1 on error. */
 static int
 read_escape_magnitude(aac_bit_reader *reader)
 {
@@ -1151,6 +1174,7 @@ read_escape_magnitude(aac_bit_reader *reader)
     return (1 << (prefix + 4)) + (int)read_bits(reader, prefix + 4);
 }
 
+/* Decodes one 2- or 4-value spectral tuple, applying signs and escape magnitudes. */
 static gboolean
 read_spectral_tuple(aac_bit_reader *reader, int codebook_index, int *values)
 {
@@ -1185,6 +1209,7 @@ read_spectral_tuple(aac_bit_reader *reader, int codebook_index, int *values)
     return !reader->overrun;
 }
 
+/* Decodes quantized spectral coefficients for every coded band and window. */
 static gboolean
 read_spectral_data(aac_bit_reader *reader, aac_channel *channel)
 {
@@ -1215,6 +1240,7 @@ read_spectral_data(aac_bit_reader *reader, aac_channel *channel)
     return !reader->overrun;
 }
 
+/* Parses one individual_channel_stream: gain, sections, scalefactors, pulse, TNS, spectrum. */
 static gboolean
 read_individual_channel_stream(ns_aac_decoder *dec, aac_bit_reader *reader,
                                aac_channel *channel, gboolean common_window,
@@ -1239,6 +1265,7 @@ read_individual_channel_stream(ns_aac_decoder *dec, aac_bit_reader *reader,
     return !reader->overrun;
 }
 
+/* Applies pulses, then inverse-quantizes as sign*|q|^(4/3)*2^((sf-100)/4). */
 static void
 dequantize_channel(aac_channel *channel)
 {
@@ -1282,6 +1309,7 @@ dequantize_channel(aac_channel *channel)
     }
 }
 
+/* Advances the LCG noise state and returns it as a signed sample. */
 static float
 next_noise_sample(ns_aac_decoder *dec)
 {
@@ -1289,6 +1317,7 @@ next_noise_sample(ns_aac_decoder *dec)
     return (float)(gint32)dec->noise_state;
 }
 
+/* Fills a band with random noise scaled to energy 2^(noise_energy/4) (PNS). */
 static void
 fill_noise_band(ns_aac_decoder *dec, float *coefficients, int width,
                 int noise_energy)
@@ -1307,6 +1336,7 @@ fill_noise_band(ns_aac_decoder *dec, float *coefficients, int width,
     for (int k = 0; k < width; k++) coefficients[k] *= scale;
 }
 
+/* Applies perceptual noise substitution, sharing partner noise for correlated M/S bands. */
 static void
 apply_noise_substitution(ns_aac_decoder *dec, aac_channel *channel,
                          const aac_channel *correlated_partner)
@@ -1352,6 +1382,7 @@ band_is_coded_spectrum(int codebook)
     return codebook < AAC_NOISE_CODEBOOK;
 }
 
+/* Converts M/S-coded bands of a channel pair back to left/right. */
 static void
 apply_mid_side(ns_aac_decoder *dec, aac_channel *left, aac_channel *right)
 {
@@ -1380,6 +1411,7 @@ apply_mid_side(ns_aac_decoder *dec, aac_channel *left, aac_channel *right)
     }
 }
 
+/* Reconstructs intensity-coded right-channel bands from the scaled left spectrum. */
 static void
 apply_intensity_stereo(ns_aac_decoder *dec, const aac_channel *left,
                        aac_channel *right)
@@ -1412,6 +1444,7 @@ apply_intensity_stereo(ns_aac_decoder *dec, const aac_channel *left,
     }
 }
 
+/* Runs the temporal noise shaping all-pole filters over the spectrum per window. */
 static void
 apply_tns(aac_channel *channel)
 {
@@ -1449,6 +1482,7 @@ apply_tns(aac_channel *channel)
     }
 }
 
+/* Iterative radix-2 FFT on bit-reversed input using precomputed twiddles. */
 static void
 fft_in_place(aac_complex *buffer, int size, const aac_complex *twiddle)
 {
@@ -1473,6 +1507,7 @@ fft_in_place(aac_complex *buffer, int size, const aac_complex *twiddle)
     }
 }
 
+/* IMDCT via pre-twiddle, N/4-point complex FFT and post-twiddle; output unwindowed. */
 static void
 inverse_mdct(ns_aac_decoder *dec, const aac_imdct_plan *plan,
              const float *coefficients, float *output)
@@ -1518,6 +1553,7 @@ short_window_for_shape(int shape)
     return shape ? kbd_window_short : sine_window_short;
 }
 
+/* IMDCT, windowing for the window sequence and overlap-add producing 1024 PCM samples. */
 static void
 synthesize_channel(ns_aac_decoder *dec, int channel_index)
 {
@@ -1581,6 +1617,7 @@ synthesize_channel(ns_aac_decoder *dec, int channel_index)
     dec->previous_window_shape[channel_index] = current_shape;
 }
 
+/* Skips a data_stream_element including its optional byte alignment. */
 static gboolean
 skip_data_stream_element(aac_bit_reader *reader)
 {
@@ -1592,6 +1629,7 @@ skip_data_stream_element(aac_bit_reader *reader)
     return skip_bits(reader, count * 8) && !reader->overrun;
 }
 
+/* Skips a fill_element using its escaped byte count. */
 static gboolean
 skip_fill_element(aac_bit_reader *reader)
 {
@@ -1600,6 +1638,7 @@ skip_fill_element(aac_bit_reader *reader)
     return skip_bits(reader, count * 8) && !reader->overrun;
 }
 
+/* Skips a program_config_element by computing its element lists and comment size. */
 static gboolean
 skip_program_config_element(aac_bit_reader *reader)
 {
@@ -1622,6 +1661,7 @@ skip_program_config_element(aac_bit_reader *reader)
     return skip_bits(reader, comment_bytes * 8) && !reader->overrun;
 }
 
+/* Decodes an SCE: parse, dequantize, noise substitution and TNS. */
 static gboolean
 decode_single_channel_element(ns_aac_decoder *dec, aac_bit_reader *reader)
 {
@@ -1637,6 +1677,7 @@ decode_single_channel_element(ns_aac_decoder *dec, aac_bit_reader *reader)
     return TRUE;
 }
 
+/* Decodes a CPE with optional common window, M/S, intensity stereo and TNS. */
 static gboolean
 decode_channel_pair_element(ns_aac_decoder *dec, aac_bit_reader *reader)
 {
@@ -1676,6 +1717,7 @@ decode_channel_pair_element(ns_aac_decoder *dec, aac_bit_reader *reader)
     return TRUE;
 }
 
+/* Clamps a sample to [-1, 1], mapping NaN to 0. */
 static float
 clamp_sample(float value)
 {
@@ -1685,6 +1727,7 @@ clamp_sample(float value)
     return value;
 }
 
+/* Decodes one raw AAC access unit into 1024 interleaved float frames; -1 on error. */
 int
 ns_aac_decode_frame(ns_aac_decoder *dec, const guint8 *data, gsize len,
                     float *out, int out_frames)

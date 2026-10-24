@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — internal page-engine host for the GTK shell and headless driver.
+ * Restyle/relayout scheduling, image loading, input and focus, scrolling, rendering, debug dumps.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -153,6 +154,7 @@ struct ns_browser {
 #define NS_CARET_BLINK_US (530 * 1000)
 #define NS_FRAME_TIME_MAX_LAG_US (100 * 1000)
 
+/* TRUE if target is in the subtree forest starting at root (recursive search). */
 static gboolean
 browser_doc_has_node(const ns_node *root, const ns_node *target)
 {
@@ -164,6 +166,7 @@ browser_doc_has_node(const ns_node *root, const ns_node *target)
     return FALSE;
 }
 
+/* TRUE if a cached node pointer is still attached to the current document. */
 static gboolean
 browser_node_alive(const ns_browser *browser, const ns_node *node)
 {
@@ -171,6 +174,7 @@ browser_node_alive(const ns_browser *browser, const ns_node *node)
     return browser_doc_has_node(browser->doc, node);
 }
 
+/* Clears press, hover, open-select and media-seek pointers to detached nodes. */
 static void
 browser_prune_cached_nodes(ns_browser *browser)
 {
@@ -186,6 +190,7 @@ browser_prune_cached_nodes(ns_browser *browser)
         browser->media_seek_node = NULL;
 }
 
+/* Folds box kinds and quarter-pixel geometry of a box tree into an FNV-1a hash. */
 static guint64
 layout_signature_walk(const ns_box *b, guint64 h)
 {
@@ -210,12 +215,14 @@ layout_signature_walk(const ns_box *b, guint64 h)
     return h;
 }
 
+/* FNV-1a hash of the layout tree geometry, used to detect reflow oscillation. */
 static guint64
 layout_signature(const ns_box *root)
 {
     return layout_signature_walk(root, 0xcbf29ce484222325ULL);
 }
 
+/* Resets the layout oscillation dampener state. */
 static void
 browser_damp_reset(ns_browser *b)
 {
@@ -226,6 +233,7 @@ browser_damp_reset(ns_browser *b)
 
 typedef struct { double x, y; } browser_scroll_pos;
 
+/* Records non-zero scroll offsets of boxes by DOM node before relayout. */
 static void
 browser_collect_scroll(const ns_box *b, GHashTable *map)
 {
@@ -240,6 +248,7 @@ browser_collect_scroll(const ns_box *b, GHashTable *map)
         browser_collect_scroll(c, map);
 }
 
+/* Restores saved scroll offsets onto the new box tree, clamped to the new extents. */
 static void
 browser_restore_scroll(ns_box *b, GHashTable *map)
 {
@@ -264,6 +273,7 @@ static void browser_schedule_media_events(ns_browser *b);
 
 static void browser_relayout_impl(ns_browser *b);
 
+/* Relayouts and records a trace event with the cause. */
 static void
 browser_relayout(ns_browser *b)
 {
@@ -275,6 +285,7 @@ browser_relayout(ns_browser *b)
     ns_trace_complete("layout", "relayout", start, why);
 }
 
+/* Full relayout: rebuilds styles and boxes, keeps scroll, tracks reflow oscillation. */
 static void
 browser_relayout_impl(ns_browser *b)
 {
@@ -373,6 +384,7 @@ browser_relayout_impl(ns_browser *b)
     }
 }
 
+/* Relayouts after script mutation unless the oscillation dampener defers it. */
 static gboolean
 browser_relayout_from_mutation(ns_browser *b)
 {
@@ -392,6 +404,7 @@ browser_relayout_from_mutation(ns_browser *b)
     return TRUE;
 }
 
+/* TRUE for overflow hidden or clip. */
 static gboolean
 overflow_keyword_hidden(const char *kw)
 {
@@ -399,6 +412,7 @@ overflow_keyword_hidden(const char *kw)
                   g_ascii_strcasecmp(kw, "clip") == 0);
 }
 
+/* TRUE if overflow on the axis (falling back to overflow) is hidden or clip. */
 static gboolean
 box_axis_overflow_hidden(const ns_box *b, ns_css_prop axis)
 {
@@ -408,6 +422,7 @@ box_axis_overflow_hidden(const ns_box *b, ns_css_prop axis)
     return overflow_keyword_hidden(kw);
 }
 
+/* TRUE if an html or body box hides overflow on the given axis. */
 static gboolean
 root_axis_overflow_hidden(const ns_box *b, ns_css_prop axis)
 {
@@ -424,6 +439,7 @@ root_axis_overflow_hidden(const ns_box *b, ns_css_prop axis)
 
 static int browser_images_outstanding(ns_browser *browser);
 
+/* Idle callback that fires media element load events once after layout. */
 static gboolean
 browser_fire_media_events(gpointer user_data)
 {
@@ -433,6 +449,7 @@ browser_fire_media_events(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* Schedules a one-shot dispatch of media load events if none is pending. */
 static void
 browser_schedule_media_events(ns_browser *b)
 {
@@ -441,6 +458,7 @@ browser_schedule_media_events(ns_browser *b)
             ns_engine_timeout_add(0, browser_fire_media_events, b);
 }
 
+/* TRUE while the load event should wait for images or media events (bounded). */
 static gboolean
 browser_load_waits_for_images(gpointer user_data)
 {
@@ -450,6 +468,7 @@ browser_load_waits_for_images(gpointer user_data)
            browser_images_outstanding(b) > 0;
 }
 
+/* Image arrival callback: repaints, and relayouts every 8 arrivals or when all are done. */
 static void
 browser_image_arrived(gpointer user_data)
 {
@@ -467,6 +486,7 @@ browser_image_arrived(gpointer user_data)
     }
 }
 
+/* Counts in-flight image fetches, closing finished image sessions. */
 static int
 browser_images_outstanding(ns_browser *browser)
 {
@@ -486,6 +506,7 @@ browser_images_outstanding(ns_browser *browser)
     return total;
 }
 
+/* Starts image fetches for the layout, deferring lazy images outside the viewport. */
 static void
 browser_ensure_images(ns_browser *browser)
 {
@@ -509,6 +530,7 @@ browser_ensure_images(ns_browser *browser)
     browser->has_deferred_lazy = deferred;
 }
 
+/* Blocks (up to 15s) running the engine loop until images load, then relayouts. */
 static void
 browser_wait_images(ns_browser *browser)
 {
@@ -525,6 +547,7 @@ browser_wait_images(ns_browser *browser)
 
 enum { BROWSER_JS_NONE, BROWSER_JS_RESTYLE, BROWSER_JS_RELAYOUT };
 
+/* Consumes script mutation flags and classifies the needed work as restyle or relayout. */
 static int
 browser_absorb_js_mutation(ns_browser *b)
 {
@@ -540,6 +563,7 @@ browser_absorb_js_mutation(ns_browser *b)
     return BROWSER_JS_RESTYLE;
 }
 
+/* TRUE if the node has an <svg> ancestor. */
 static gboolean
 node_in_svg(const ns_node *n)
 {
@@ -550,12 +574,14 @@ node_in_svg(const ns_node *n)
     return FALSE;
 }
 
+/* Records an old-to-new style mapping for a pseudo-element style when it changed. */
 static void
 restyle_map_pseudo(GHashTable *map, const ns_style *o, const ns_style *n)
 {
     if (o && n && o != n) g_hash_table_insert(map, (gpointer)o, (gpointer)n);
 }
 
+/* Debug (NS_LAYOUT_VERIFY): compares incremental layout to a fresh one and logs diffs. */
 static void
 browser_verify_layout(ns_browser *b, const char *what)
 {
@@ -597,6 +623,7 @@ static gboolean target_children_unrendered(GHashTable *styles,
                                            const ns_node *t);
 static void browser_damage_node(ns_browser *browser, const ns_node *node);
 
+/* Tries a restyle without relayout for script changes; TRUE if the layout was kept. */
 static gboolean
 browser_restyle(ns_browser *b)
 {
@@ -620,6 +647,7 @@ browser_restyle(ns_browser *b)
     return kept;
 }
 
+/* TRUE if the node is in a display:none subtree or inside SVG (outside foreignObject). */
 static gboolean
 node_unrendered(GHashTable *styles, const ns_node *n)
 {
@@ -633,6 +661,7 @@ node_unrendered(GHashTable *styles, const ns_node *n)
     return FALSE;
 }
 
+/* TRUE if changes under a mutation target cannot affect layout (detached, hidden, SVG). */
 static gboolean
 target_children_unrendered(GHashTable *styles, const ns_node *doc,
                            const ns_node *t)
@@ -656,6 +685,7 @@ target_children_unrendered(GHashTable *styles, const ns_node *doc,
     return node_unrendered(styles, t);
 }
 
+/* Returns the nearest <svg> element containing or equal to the node. */
 static const ns_node *
 node_svg_painter(const ns_node *n)
 {
@@ -666,6 +696,7 @@ node_svg_painter(const ns_node *n)
     return NULL;
 }
 
+/* Recomputes the cascade and patches box styles in place if no layout change; damages rects. */
 static gboolean
 browser_restyle_impl(ns_browser *b, GPtrArray *targets)
 {
@@ -835,6 +866,7 @@ browser_restyle_impl(ns_browser *b, GPtrArray *targets)
     return TRUE;
 }
 
+/* Applies pending script mutations by restyling or relayouting as needed. */
 static void
 browser_flush(gpointer user_data)
 {
@@ -849,6 +881,7 @@ browser_flush(gpointer user_data)
     }
 }
 
+/* Brings computed styles up to date for script queries without forcing relayout. */
 static void
 browser_flush_style(gpointer user_data)
 {
@@ -886,6 +919,7 @@ browser_flush_style(gpointer user_data)
     b->cascade_dirty = FALSE;
 }
 
+/* Returns the percent-decoded fragment of a URL and whether one was present. */
 static char *
 browser_url_fragment(const char *url, gboolean *has_fragment)
 {
@@ -896,6 +930,7 @@ browser_url_fragment(const char *url, gboolean *has_fragment)
     return decoded ? decoded : g_strdup(hash + 1);
 }
 
+/* Opens hidden=until-found ancestors and <details> to reveal a fragment target. */
 static gboolean
 browser_reveal_fragment_target(ns_browser *browser, ns_node *target)
 {
@@ -915,6 +950,7 @@ browser_reveal_fragment_target(ns_browser *browser, ns_node *target)
     return changed;
 }
 
+/* Finds the box generated by a node, including inline atomic boxes. */
 static const ns_box *
 browser_box_for_node(const ns_box *box, const ns_node *target)
 {
@@ -935,6 +971,7 @@ browser_box_for_node(const ns_box *box, const ns_node *target)
     return NULL;
 }
 
+/* Document y offset of a node's box or inline rect; FALSE if not laid out. */
 static gboolean
 browser_target_scroll_y(ns_browser *browser, const ns_node *target, int *out_y)
 {
@@ -953,6 +990,7 @@ browser_target_scroll_y(ns_browser *browser, const ns_node *target, int *out_y)
     return TRUE;
 }
 
+/* Queues a scroll to a node, optionally revealing it and anchoring to it. */
 static void
 browser_queue_scroll_to(ns_browser *browser, const ns_node *target,
                         gboolean reveal)
@@ -971,6 +1009,7 @@ browser_queue_scroll_to(ns_browser *browser, const ns_node *target,
     }
 }
 
+/* Keeps the scroll pinned to a fragment target while layout shifts it. */
 static void
 browser_follow_scroll_anchor(ns_browser *browser)
 {
@@ -991,6 +1030,7 @@ browser_follow_scroll_anchor(ns_browser *browser)
         browser->scroll_anchor = NULL;
 }
 
+/* Script scrollIntoView hook: queues a scroll to the node without anchoring. */
 static void
 browser_js_scroll_to(const ns_node *target, gpointer user_data)
 {
@@ -999,6 +1039,7 @@ browser_js_scroll_to(const ns_node *target, gpointer user_data)
     browser_queue_scroll_to(browser, target, FALSE);
 }
 
+/* Script hook for pushState/replaceState: updates the URL if same-origin. */
 static void
 browser_js_soft_navigate(const char *url, gboolean replace, gpointer user_data)
 {
@@ -1022,6 +1063,7 @@ browser_js_soft_navigate(const char *url, gboolean replace, gpointer user_data)
     browser->dirty = TRUE;
 }
 
+/* Script hook for fragment navigation: sets :target and scrolls to it. */
 static void
 browser_js_fragment_navigate(const char *url, gpointer user_data)
 {
@@ -1057,6 +1099,7 @@ typedef struct settle_ctx {
 
 #define NS_SETTLE_QUIET_TICKS 3
 
+/* TRUE when no layout, script, animation-frame, image or loop work is pending. */
 static gboolean
 browser_settle_quiet(ns_browser *b)
 {
@@ -1068,6 +1111,7 @@ browser_settle_quiet(ns_browser *b)
     return TRUE;
 }
 
+/* Settle loop tick: runs animations and frames, applies mutations, quits when quiet. */
 static gboolean
 settle_tick_cb(gpointer user_data)
 {
@@ -1099,6 +1143,7 @@ settle_tick_cb(gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
+/* Runs the engine loop up to settle_ms until the page goes quiet. */
 static void
 browser_settle(ns_browser *b, int settle_ms)
 {
@@ -1114,6 +1159,7 @@ browser_settle(ns_browser *b, int settle_ms)
     g_main_loop_unref(loop);
 }
 
+/* Console hook: logs a line and appends it to a capped console buffer. */
 static void
 browser_js_log(const char *line, gpointer ud)
 {
@@ -1127,6 +1173,7 @@ browser_js_log(const char *line, gpointer ud)
     g_string_append(b->console_buf, line);
     g_string_append_c(b->console_buf, '\n');
 }
+/* Script window.scrollTo hook: clamps to page extents and queues the scroll. */
 static void
 browser_js_viewport_scroll(double *x, double *y, gpointer user_data)
 {
@@ -1148,6 +1195,7 @@ browser_js_viewport_scroll(double *x, double *y, gpointer user_data)
     b->scroll_anchor = NULL;
 }
 
+/* Script hook requesting a full repaint. */
 static void
 browser_js_repaint(gpointer user_data)
 {
@@ -1157,6 +1205,7 @@ browser_js_repaint(gpointer user_data)
     browser->damage_full = TRUE;
 }
 
+/* TRUE if the node's root is the browser's document. */
 static gboolean
 browser_node_in_document(const ns_browser *browser, const ns_node *node)
 {
@@ -1165,6 +1214,7 @@ browser_node_in_document(const ns_browser *browser, const ns_node *node)
     return n == browser->doc;
 }
 
+/* Marks a node for partial repaint, unless a full repaint is already pending. */
 static void
 browser_damage_node(ns_browser *browser, const ns_node *node)
 {
@@ -1183,6 +1233,7 @@ browser_js_repaint_node(const ns_node *node, gpointer user_data)
     if (browser) browser_damage_node(browser, node);
 }
 
+/* Script DOM mutation hook: schedules relayout or restyle and cascade refresh. */
 static void
 browser_js_mutated(gpointer user_data)
 {
@@ -1200,6 +1251,7 @@ browser_js_mutated(gpointer user_data)
     browser->cascade_dirty = TRUE;
 }
 
+/* Policy check for page-initiated navigation to drive paths, file:, about: and view-source:. */
 static gboolean
 browser_allows_navigation_url(ns_browser *b, const char *url)
 {
@@ -1226,6 +1278,7 @@ browser_allows_navigation_url(ns_browser *b, const char *url)
     return b && b->base_url && g_str_has_prefix(b->base_url, "file:");
 }
 
+/* Resolves an href against the page and applies navigation policy; NULL if refused. */
 static char *
 browser_resolve_navigation(ns_browser *b, const char *href)
 {
@@ -1238,6 +1291,7 @@ browser_resolve_navigation(ns_browser *b, const char *href)
     return abs;
 }
 
+/* Script navigation hook: records the resolved, policy-checked URL as pending. */
 static void browser_js_navigate(const char *url, gboolean reload, gpointer ud)
 {
     (void)reload;
@@ -1248,6 +1302,7 @@ static void browser_js_navigate(const char *url, gboolean reload, gpointer ud)
     g_clear_pointer(&b->pending_nav_initiator, g_free);
 }
 
+/* Script download hook: queues "url\tfilename" for the shell if navigation is allowed. */
 static void browser_js_download(const char *url, const char *filename, gpointer ud)
 {
     ns_browser *b = ud;
@@ -1264,6 +1319,7 @@ static void browser_js_download(const char *url, const char *filename, gpointer 
 
 #define NS_PENDING_CLIPBOARD_MAX 1048576
 
+/* Script clipboard hook: stages text (up to 1 MiB) for the shell to copy. */
 static gboolean
 browser_js_clipboard_write(const char *text, gpointer ud)
 {
@@ -1277,6 +1333,7 @@ browser_js_clipboard_write(const char *text, gpointer ud)
 
 static void browser_sync_js_selection(ns_browser *browser);
 
+/* Script execCommand hook for selectAll and unselect. */
 static gboolean
 browser_js_selection_cmd(const char *command, gpointer ud)
 {
@@ -1296,6 +1353,7 @@ browser_js_selection_cmd(const char *command, gpointer ud)
     return ok;
 }
 
+/* Initializes engine subsystems: config, networking, caches, history, fonts, spelling. */
 int
 ns_browser_init(void)
 {
@@ -1312,6 +1370,7 @@ ns_browser_init(void)
     return 0;
 }
 
+/* Converts an existing local path argument into a file:// URL; NULL otherwise. */
 static char *
 resolve_local_path(const char *url)
 {
@@ -1325,6 +1384,7 @@ resolve_local_path(const char *url)
     return file_url;
 }
 
+/* Finds the content of the first <meta http-equiv=refresh> in the document. */
 static const char *
 browser_find_meta_refresh(const ns_node *n, int depth)
 {
@@ -1343,6 +1403,7 @@ browser_find_meta_refresh(const ns_node *n, int depth)
     return NULL;
 }
 
+/* Schedules a Refresh header or meta refresh navigation, policy-checked. */
 static void
 browser_arm_declarative_refresh(ns_browser *b, const char *header_value)
 {
@@ -1378,6 +1439,7 @@ browser_content_type_is_html(const char *content_type)
     return browser_content_type_starts(content_type, "text/html");
 }
 
+/* TRUE for JSON media types, including +json suffixes. */
 static gboolean
 browser_content_type_is_json(const char *content_type)
 {
@@ -1386,6 +1448,7 @@ browser_content_type_is_json(const char *content_type)
            (content_type && strstr(content_type, "+json") != NULL);
 }
 
+/* Wraps plain text in an HTML <pre> document titled with the URL; caller frees. */
 static char *
 browser_text_document(const char *url, const char *text)
 {
@@ -1408,6 +1471,7 @@ browser_text_document(const char *url, const char *text)
     return html;
 }
 
+/* Rewrites image, JSON and non-HTML text responses into HTML viewer documents. */
 static void
 browser_prepare_document_response(ns_response *resp)
 {
@@ -1444,6 +1508,7 @@ browser_prepare_document_response(ns_response *resp)
     resp->content_type = g_strdup("text/html; charset=utf-8");
 }
 
+/* TRUE if raw headers mention no-store (case-insensitive). */
 static gboolean
 headers_have_no_store(const char *raw)
 {
@@ -1457,6 +1522,7 @@ headers_have_no_store(const char *raw)
 static void browser_js_form_submit(const ns_node *form, const ns_node *submitter,
                                    gpointer user_data);
 
+/* Creates a browser for a parsed document: cascade, JS hooks, scripts, layout, settle. */
 static ns_browser *
 browser_build_from_doc(ns_node *doc, char *base, int viewport_width,
                        double viewport_height, int settle_ms,
@@ -1551,6 +1617,7 @@ browser_build_from_doc(ns_node *doc, char *base, int viewport_width,
 static char *g_pending_referrer;
 static gboolean g_pending_user_activated;
 
+/* Sets the referrer and user-activation flag consumed by the next open. */
 void
 ns_browser_set_next_navigation(const char *referrer, int user_activated)
 {
@@ -1559,6 +1626,7 @@ ns_browser_set_next_navigation(const char *referrer, int user_activated)
     g_pending_user_activated = user_activated != 0;
 }
 
+/* Loads a URL (Safe Browsing, HTTPS-First, error pages) and builds the page browser. */
 static ns_browser *
 browser_open_common(const char *url, int viewport_width, double viewport_height,
                     int settle_ms,
@@ -1759,6 +1827,7 @@ ns_browser_open_post_viewport(const char *url, int viewport_width,
                                body, body_len, content_type);
 }
 
+/* Returns the page's rendered text; malloc'd, caller frees with free(). */
 char *
 ns_browser_render_text(ns_browser *browser)
 {
@@ -1774,6 +1843,7 @@ ns_browser_render_text(ns_browser *browser)
     return text;
 }
 
+/* Serializes the DOM tree for debugging; caller frees. */
 char *
 ns_browser_dump_dom(ns_browser *browser)
 {
@@ -1782,6 +1852,7 @@ ns_browser_dump_dom(ns_browser *browser)
     return out ? g_string_free(out, FALSE) : NULL;
 }
 
+/* Serializes the box tree for debugging; caller frees. */
 char *
 ns_browser_dump_layout(ns_browser *browser)
 {
@@ -1791,6 +1862,7 @@ ns_browser_dump_layout(ns_browser *browser)
     return g_string_free(out, FALSE);
 }
 
+/* Counts DOM nodes in a sibling forest, depth-limited to 1024. */
 static int
 node_count_walk(const ns_node *n, int depth)
 {
@@ -1801,6 +1873,7 @@ node_count_walk(const ns_node *n, int depth)
     return c;
 }
 
+/* Counts boxes in a sibling forest. */
 static int
 box_count_walk(const ns_box *b)
 {
@@ -1810,6 +1883,7 @@ box_count_walk(const ns_box *b)
     return c;
 }
 
+/* Appends process thread names (Linux /proc only) to a performance report. */
 static void
 perf_dump_threads(GString *out)
 {
@@ -1843,6 +1917,7 @@ perf_dump_threads(GString *out)
 #endif
 }
 
+/* Builds a text performance report: document, layout, JS stats and threads. */
 char *
 ns_browser_dump_performance(ns_browser *browser)
 {
@@ -1880,6 +1955,7 @@ ns_browser_dump_performance(ns_browser *browser)
     return g_string_free(out, FALSE);
 }
 
+/* Waits for images, then renders the page to a PNG or (by .pdf extension) PDF file. */
 int
 ns_browser_render_image(ns_browser *browser, const char *path)
 {
@@ -1902,6 +1978,7 @@ ns_browser_render_image(ns_browser *browser, const char *path)
     return rc;
 }
 
+/* Relayouts for print media and @page size, records pages, then restores the screen layout. */
 GPtrArray *
 ns_browser_print_pages(ns_browser *browser, ns_print_setup *out_setup)
 {
@@ -1948,6 +2025,7 @@ ns_browser_print_pages(ns_browser *browser, ns_print_setup *out_setup)
     return pages;
 }
 
+/* Monotonic frame timestamp from the shell's frame clock, bounded in lag and non-decreasing. */
 static gint64
 browser_frame_now(ns_browser *browser)
 {
@@ -1959,6 +2037,7 @@ browser_frame_now(ns_browser *browser)
     return t;
 }
 
+/* Collects damage rects of animated nodes; FALSE if any rendered node lacks a box. */
 static gboolean
 browser_anim_rects(ns_browser *b, GHashTable *nodes, GArray *out)
 {
@@ -1979,6 +2058,7 @@ browser_anim_rects(ns_browser *b, GHashTable *nodes, GArray *out)
     return ok;
 }
 
+/* Ticks animations, damaging only the animated nodes' rects when that suffices. */
 static gboolean
 browser_anim_tick(ns_browser *browser, gint64 now)
 {
@@ -2018,6 +2098,7 @@ browser_anim_tick(ns_browser *browser, gint64 now)
     return ticked;
 }
 
+/* Runs one frame: refresh, animations, rAF, event loop within budget, restyle/relayout. */
 int
 ns_browser_tick(ns_browser *browser, int budget_ms)
 {
@@ -2145,6 +2226,7 @@ ns_browser_set_frame_time(ns_browser *browser, gint64 frame_time_us)
     if (browser) browser->frame_time_us = frame_time_us;
 }
 
+/* TRUE while the page needs continuous frames (animations, rAF, animated images). */
 int
 ns_browser_continuous(ns_browser *browser)
 {
@@ -2158,6 +2240,7 @@ ns_browser_continuous(ns_browser *browser)
     return 0;
 }
 
+/* TRUE if any pending layout, paint, navigation, script or animation work needs a frame. */
 int
 ns_browser_needs_frame(ns_browser *browser)
 {
@@ -2178,6 +2261,7 @@ ns_browser_needs_frame(ns_browser *browser)
     return 0;
 }
 
+/* Monotonic time of the next scheduled refresh navigation, or 0. */
 gint64
 ns_browser_next_wake_us(ns_browser *browser)
 {
@@ -2185,6 +2269,7 @@ ns_browser_next_wake_us(ns_browser *browser)
     return browser->refresh_due_us;
 }
 
+/* TRUE while the page is still changing (layout, images, script, animations, refresh). */
 static int
 ns_browser_animating(ns_browser *browser)
 {
@@ -2204,6 +2289,7 @@ ns_browser_animating(ns_browser *browser)
     return 0;
 }
 
+/* Resizes the CSS viewport, dispatching resize to script and relayouting. */
 int
 ns_browser_set_viewport(ns_browser *browser, int css_width, double css_height)
 {
@@ -2222,6 +2308,7 @@ ns_browser_set_viewport(ns_browser *browser, int css_width, double css_height)
     return 0;
 }
 
+/* Scrollable page extent, honoring overflow hidden on html/body. */
 int
 ns_browser_page_size(ns_browser *browser, int *out_width, int *out_height)
 {
@@ -2242,6 +2329,7 @@ ns_browser_page_size(ns_browser *browser, int *out_width, int *out_height)
     return 0;
 }
 
+/* Returns the html or body style that declares scroll-snap-type, if any. */
 static const ns_style *
 viewport_snap_style(ns_browser *browser)
 {
@@ -2257,6 +2345,7 @@ viewport_snap_style(ns_browser *browser)
     return NULL;
 }
 
+/* Applies viewport scroll snapping to a proposed scroll position; 1 if it moved. */
 int
 ns_browser_snap_document(ns_browser *browser, double viewport_w,
                          double viewport_h, int prev_x, int prev_y,
@@ -2285,6 +2374,7 @@ ns_browser_snap_document(ns_browser *browser, double viewport_w,
     return 1;
 }
 
+/* Rescans paint hazards (fixed bands, sticky, 3D) once per layout generation. */
 static void
 browser_scan_hazards(ns_browser *browser)
 {
@@ -2295,6 +2385,7 @@ browser_scan_hazards(ns_browser *browser)
     browser->hazards_gen = browser->layout_gen;
 }
 
+/* Takes accumulated damage as viewport rects; returns 1 if a full repaint is needed. */
 int
 ns_browser_take_damage(ns_browser *browser, int scroll_x, int scroll_y,
                        GArray *out_rects)
@@ -2335,6 +2426,7 @@ ns_browser_take_damage(ns_browser *browser, int scroll_x, int scroll_y,
     return full ? 1 : 0;
 }
 
+/* Reports fixed bands for scroll blitting; 0 if sticky, 3D or fixed backgrounds forbid it. */
 int
 ns_browser_scroll_blit_bands(ns_browser *browser, GArray *out_bands)
 {
@@ -2346,6 +2438,7 @@ ns_browser_scroll_blit_bands(ns_browser *browser, GArray *out_bands)
     return 1;
 }
 
+/* Paints one clipped device rect of the page at the scroll offset and scale. */
 static void
 browser_paint_rect(ns_browser *browser, cairo_surface_t *surf, int scroll_x,
                    int scroll_y, double scale, int x, int y, int w, int h)
@@ -2365,6 +2458,7 @@ browser_paint_rect(ns_browser *browser, cairo_surface_t *surf, int scroll_x,
     cairo_destroy(cr);
 }
 
+/* Renders the viewport (or given rects) into a caller ARGB32 buffer with padding. */
 int
 ns_browser_render_argb32_rects(ns_browser *browser, int scroll_x, int scroll_y,
                                int width, int height, int pad, double scale,
@@ -2442,6 +2536,7 @@ browser_node_is_hyperlink(const ns_node *n)
            ns_node_is_element_named(n, "area");
 }
 
+/* Resolved href of a link at or near a point (6px probe ring); caller frees. */
 char *
 ns_browser_link_at(ns_browser *browser, int x, int y)
 {
@@ -2465,6 +2560,7 @@ ns_browser_link_at(ns_browser *browser, int x, int y)
     return NULL;
 }
 
+/* CSS cursor keyword at a point, or "text" over editable/selectable text; caller frees. */
 char *
 ns_browser_cursor_at(ns_browser *browser, int x, int y)
 {
@@ -2518,6 +2614,7 @@ ns_browser_cursor_at(ns_browser *browser, int x, int y)
     return NULL;
 }
 
+/* Publishes the current selection text and viewport bounds to script. */
 static void
 browser_sync_js_selection(ns_browser *browser)
 {
@@ -2536,6 +2633,7 @@ browser_sync_js_selection(ns_browser *browser)
     g_free(text);
 }
 
+/* Finds the media element whose native control is under a point and the seek fraction. */
 static const ns_node *
 browser_media_control_at(ns_browser *browser, const ns_node *node,
                          int x, int y, ns_media_control *control,
@@ -2562,6 +2660,7 @@ browser_media_control_at(ns_browser *browser, const ns_node *node,
     return NULL;
 }
 
+/* Continues a seek-bar drag on the active media element; FALSE if none. */
 static gboolean
 browser_media_seek_drag(ns_browser *browser, int x)
 {
@@ -2581,6 +2680,7 @@ browser_media_seek_drag(ns_browser *browser, int x)
     return TRUE;
 }
 
+/* Performs a selection action by kind (anchor, extend, clear, all, copy, word, block). */
 char *
 ns_browser_select(ns_browser *browser, int kind, int x, int y)
 {
@@ -2609,6 +2709,7 @@ ns_browser_select(ns_browser *browser, int kind, int x, int y)
     return NULL;
 }
 
+/* Dispatches a pointer event and its mouse counterpart to a target. */
 static void
 browser_hover_dispatch(ns_browser *b, const ns_node *target, int x, int y,
                        const char *ptr_type, const char *mouse_type,
@@ -2627,6 +2728,7 @@ browser_hover_dispatch(ns_browser *b, const ns_node *target, int x, int y,
                                FALSE, FALSE, FALSE, FALSE, related, NULL);
 }
 
+/* Updates hover: dispatches over/out/enter/leave/move and restyles for :hover (throttled). */
 int
 ns_browser_hover(ns_browser *browser, int x, int y)
 {
@@ -2691,6 +2793,7 @@ ns_browser_hover(ns_browser *browser, int x, int y)
     return 0;
 }
 
+/* Scrolls the scrollable box under a point, applying snap and firing scroll; 1 if consumed. */
 int
 ns_browser_scroll_at(ns_browser *browser, int x, int y, int dx, int dy)
 {
@@ -2722,6 +2825,7 @@ ns_browser_scroll_at(ns_browser *browser, int x, int y, int dx, int dy)
     return consumed;
 }
 
+/* Computes vertical scrollbar track and thumb geometry for a scrolling box. */
 static gboolean
 sb_vgeom(const ns_box *b, double *track_x, double *track_w,
          double *track_y, double *track_h, double *thumb_y, double *thumb_h)
@@ -2747,6 +2851,7 @@ sb_vgeom(const ns_box *b, double *track_x, double *track_w,
     return TRUE;
 }
 
+/* Finds the scrolling box generated by a node, for re-finding it after relayout. */
 static ns_box *
 box_find_scrollable_by_dom(ns_box *root, const ns_node *node)
 {
@@ -2759,6 +2864,7 @@ box_find_scrollable_by_dom(ns_box *root, const ns_node *node)
     return NULL;
 }
 
+/* Starts a vertical scrollbar drag at a point; clicks on the track jump the thumb there. */
 int
 ns_browser_scrollbar_press(ns_browser *browser, int x, int y)
 {
@@ -2794,6 +2900,7 @@ ns_browser_scrollbar_press(ns_browser *browser, int x, int y)
     return 1;
 }
 
+/* Moves the dragged scrollbar thumb to y and fires scroll; 1 if the offset changed. */
 int
 ns_browser_scrollbar_drag(ns_browser *browser, int x, int y)
 {
@@ -2823,6 +2930,7 @@ ns_browser_scrollbar_drag(ns_browser *browser, int x, int y)
     return 1;
 }
 
+/* Ends any scrollbar drag. */
 void
 ns_browser_scrollbar_release(ns_browser *browser)
 {
@@ -2832,6 +2940,7 @@ ns_browser_scrollbar_release(ns_browser *browser)
     browser->sb_node = NULL;
 }
 
+/* Dispatches dragenter/dragover then drop (if accepted) or dragleave for dropped files. */
 int
 ns_browser_drop_files(ns_browser *browser, int x, int y,
                       const char *const *paths, int n_paths)
@@ -2880,6 +2989,7 @@ ns_browser_drop_files(ns_browser *browser, int x, int y,
     return 0;
 }
 
+/* Returns and clears buffered console output; caller frees. */
 char *
 ns_browser_console_drain(ns_browser *browser)
 {
@@ -2890,6 +3000,7 @@ ns_browser_console_drain(ns_browser *browser)
     return out;
 }
 
+/* Evaluates devtools console source in the page and applies resulting layout changes. */
 char *
 ns_browser_eval(ns_browser *browser, const char *src)
 {
@@ -2905,6 +3016,7 @@ ns_browser_eval(ns_browser *browser, const char *src)
     return res;
 }
 
+/* Dispatches contextmenu at a point; 1 if the page prevented the default menu. */
 int
 ns_browser_contextmenu(ns_browser *browser, int x, int y)
 {
@@ -2928,6 +3040,7 @@ ns_browser_contextmenu(ns_browser *browser, int x, int y)
     return prevented ? 1 : 0;
 }
 
+/* Media URL under a point for opening externally (page URL for streams); caller frees. */
 char *
 ns_browser_media_at(ns_browser *browser, int x, int y, int *out_is_video,
                     int *out_stream)
@@ -2999,6 +3112,7 @@ ns_browser_media_at(ns_browser *browser, int x, int y, int *out_is_video,
     return abs;
 }
 
+/* Find-in-page: counts matches and selects the next/previous match by direction. */
 int
 ns_browser_find(ns_browser *browser, const char *query, int case_sensitive,
                 int direction, int from_y, int *out_total, int *out_current,
@@ -3062,6 +3176,7 @@ ns_browser_find(ns_browser *browser, const char *query, int case_sensitive,
     return 0;
 }
 
+/* Takes the pending form POST body and content type; caller frees both. */
 char *
 ns_browser_take_post(ns_browser *browser, size_t *out_len, char **out_ct)
 {
@@ -3078,6 +3193,7 @@ ns_browser_take_post(ns_browser *browser, size_t *out_len, char **out_ct)
     return body;
 }
 
+/* Builds the form data set via script's entry list or the static collector. */
 static void
 browser_collect_form_entries(ns_browser *b, const ns_node *form,
                              const ns_node *clicked, GString *out,
@@ -3091,6 +3207,7 @@ browser_collect_form_entries(ns_browser *b, const ns_node *form,
     ns_form_collect_inputs(form, b->doc, b->doc, out, first, clicked);
 }
 
+/* Builds a GET/POST form submission per method/action, charset, CSP and frame identity. */
 static void
 browser_perform_form_navigation(ns_browser *b, const ns_node *form,
                                 const ns_node *clicked)
@@ -3181,6 +3298,7 @@ browser_perform_form_navigation(ns_browser *b, const ns_node *form,
     b->pending_nav = full;
 }
 
+/* Script form.submit()/requestSubmit hook: performs the form navigation. */
 static void
 browser_js_form_submit(const ns_node *form, const ns_node *submitter,
                        gpointer user_data)
@@ -3190,6 +3308,7 @@ browser_js_form_submit(const ns_node *form, const ns_node *submitter,
     browser_perform_form_navigation(b, form, submitter ? submitter : form);
 }
 
+/* Implicit/explicit submission: validates, fires submit, then navigates unless cancelled. */
 static void
 browser_submit_form(ns_browser *b, const ns_node *clicked)
 {
@@ -3225,6 +3344,7 @@ browser_hit_node(ns_browser *browser, int x, int y)
     return ns_box_hit_dom(browser->layout, (double)x, (double)y);
 }
 
+/* Pointer down: clears selection, fires pointerdown/mousedown, media controls, focus. */
 char *
 ns_browser_press(ns_browser *browser, int x, int y, int mods)
 {
@@ -3319,6 +3439,7 @@ ns_browser_press(ns_browser *browser, int x, int y, int mods)
     return nav;
 }
 
+/* TRUE for a single-choice <select> shown as a dropdown (no multiple, size <= 1). */
 static gboolean
 ns_is_dropdown_select(const ns_node *n)
 {
@@ -3332,6 +3453,7 @@ ns_is_dropdown_select(const ns_node *n)
 static void browser_input_replace(ns_browser *b, ns_node *node, gsize del_start,
                                   gsize del_end, const char *insert);
 
+/* Applies a clicked <datalist> option to the focused input and fires change. */
 static gboolean
 browser_datalist_click(ns_browser *browser, const ns_node *node)
 {
@@ -3358,6 +3480,7 @@ browser_datalist_click(ns_browser *browser, const ns_node *node)
     return TRUE;
 }
 
+/* Handles clicks on list-box options, open dropdown options and dropdown toggles. */
 static gboolean
 browser_dropdown_click(ns_browser *browser, const ns_node *node)
 {
@@ -3404,6 +3527,7 @@ browser_dropdown_click(ns_browser *browser, const ns_node *node)
     return FALSE;
 }
 
+/* Pointer up: fires pointerup/mouseup/click, then select, summary, form or link actions. */
 char *
 ns_browser_release_click(ns_browser *browser, int *out_changed)
 {
@@ -3508,6 +3632,7 @@ ns_browser_release_click(ns_browser *browser, int *out_changed)
     return nav;
 }
 
+/* Replaces a byte range of a control's value, firing beforeinput (cancellable) and input. */
 static void
 browser_input_replace(ns_browser *b, ns_node *node, gsize del_start,
                       gsize del_end, const char *insert)
@@ -3543,6 +3668,7 @@ browser_input_replace(ns_browser *b, ns_node *node, gsize del_start,
     }
 }
 
+/* Applies an editing key (Backspace, arrows, Enter, text) to a focused control's value. */
 static gboolean
 browser_edit_key(ns_browser *b, ns_node *node, const char *key, int mods)
 {
@@ -3627,6 +3753,7 @@ browser_edit_key(ns_browser *b, ns_node *node, const char *key, int mods)
     return FALSE;
 }
 
+/* Code point of a single printable character key, else 0 (for keypress). */
 static int
 browser_key_char_code(const char *key)
 {
@@ -3639,6 +3766,7 @@ browser_key_char_code(const char *key)
     return g_unichar_iscntrl(ch) ? 0 : (int)ch;
 }
 
+/* TRUE if the element's accesskey token list contains key (case-insensitive). */
 static gboolean
 browser_accesskey_matches(const ns_node *el, const char *key)
 {
@@ -3656,6 +3784,7 @@ browser_accesskey_matches(const ns_node *el, const char *key)
     return FALSE;
 }
 
+/* Finds the first non-inert element with a matching accesskey outside templates. */
 static const ns_node *
 browser_find_accesskey(const ns_node *n, const char *key, int depth)
 {
@@ -3673,6 +3802,7 @@ browser_find_accesskey(const ns_node *n, const char *key, int depth)
     return NULL;
 }
 
+/* Keyboard handling for a focused <select>: arrows, Home/End, open/close, typeahead. */
 static gboolean
 browser_select_key(ns_browser *browser, ns_node *select, const char *key,
                    int mods)
@@ -3703,6 +3833,7 @@ browser_select_key(ns_browser *browser, ns_node *select, const char *key,
     return FALSE;
 }
 
+/* Dispatches key events and default actions: text input, accesskey, Tab, select, edit. */
 char *
 ns_browser_key_full(ns_browser *browser, int kind, const char *key,
                     const char *code, int keycode, int mods,
@@ -3836,6 +3967,7 @@ ns_browser_key_full(ns_browser *browser, int kind, const char *key,
     return nav;
 }
 
+/* 1 if the focused node has an editable value. */
 static int
 ns_browser_focused_editable(ns_browser *browser)
 {
@@ -3845,6 +3977,7 @@ ns_browser_focused_editable(ns_browser *browser)
     return f && ns_node_editable_value(f) ? 1 : 0;
 }
 
+/* Updates caret blink phase (530ms) for the focused field; 1 if repaint is needed. */
 int
 ns_browser_set_caret_blink_active(ns_browser *browser, int active)
 {
@@ -3881,6 +4014,7 @@ ns_browser_caret_blinking(ns_browser *browser)
     return browser && browser->caret_blink_active ? 1 : 0;
 }
 
+/* Document title with whitespace collapsed; malloc'd, NULL if empty. */
 char *
 ns_browser_title(ns_browser *browser)
 {
@@ -3920,6 +4054,7 @@ ns_browser_url(ns_browser *browser)
     return strdup(browser->base_url);
 }
 
+/* Returns 1 once after script pushed a new history URL. */
 int
 ns_browser_take_url_pushed(ns_browser *browser)
 {
@@ -3936,6 +4071,7 @@ ns_browser_security(ns_browser *browser, const char **out_ip)
     return browser ? browser->security : NS_SEC_NONE;
 }
 
+/* Takes the pending navigation's initiator URL; malloc'd, caller frees. */
 char *
 ns_browser_take_pending_initiator(ns_browser *browser)
 {
@@ -3945,6 +4081,7 @@ ns_browser_take_pending_initiator(ns_browser *browser)
     return out;
 }
 
+/* Takes the pending navigation URL; malloc'd, caller frees. */
 char *
 ns_browser_take_pending_nav(ns_browser *browser)
 {
@@ -3954,6 +4091,7 @@ ns_browser_take_pending_nav(ns_browser *browser)
     return out;
 }
 
+/* Takes a pending scroll request; returns 1 if there was one. */
 int
 ns_browser_take_pending_scroll(ns_browser *browser, int *out_scroll_x,
                                int *out_scroll_y)
@@ -3997,6 +4135,7 @@ ns_browser_take_pending_camera(ns_browser *browser)
     return ns_camera_take_pending_origin();
 }
 
+/* Records the user's camera decision for an origin and resolves pending page requests. */
 void
 ns_browser_resolve_camera(ns_browser *browser, const char *origin, int allow)
 {
@@ -4016,6 +4155,7 @@ ns_browser_bfcache_eligible(ns_browser *browser)
     return browser && browser->bfcache_ok;
 }
 
+/* Fires pagehide (persisted) and suspends media before caching the page. */
 void
 ns_browser_bfcache_park(ns_browser *browser)
 {
@@ -4026,6 +4166,7 @@ ns_browser_bfcache_park(ns_browser *browser)
     }
 }
 
+/* Restores a cached page: applies the viewport and fires pageshow (persisted). */
 void
 ns_browser_bfcache_restore(ns_browser *browser, int viewport_width,
                            double viewport_height)

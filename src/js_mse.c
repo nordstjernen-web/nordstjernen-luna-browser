@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — native side of the MediaSource and SourceBuffer bindings.
+/* Nordstjernen Web Browser — native helpers behind the JS MediaSource and SourceBuffer shim.
+ * Maps script-side ids and blob URLs to mse.c sources; append, remove and buffered ranges.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -25,6 +26,7 @@ mse_handle_free(gpointer data)
     g_free(handle);
 }
 
+/* Lazily creates the realm's id-to-handle and blob-URL-to-source tables. */
 static void
 mse_ensure_tables(ns_js *js)
 {
@@ -44,6 +46,7 @@ mse_find(JSContext *ctx, uint32_t id)
     return g_hash_table_lookup(js->mse_objects, GUINT_TO_POINTER(id));
 }
 
+/* Looks up an MSE handle by the numeric id passed from script. */
 static mse_handle *
 mse_lookup(JSContext *ctx, JSValueConst id_value)
 {
@@ -52,6 +55,7 @@ mse_lookup(JSContext *ctx, JSValueConst id_value)
     return mse_find(ctx, id);
 }
 
+/* Registers a source (and optional buffer) under a new numeric id for script use. */
 static guint
 mse_register(ns_js *js, ns_mse_source *source, ns_mse_buffer *buffer)
 {
@@ -64,6 +68,7 @@ mse_register(ns_js *js, ns_mse_source *source, ns_mse_buffer *buffer)
     return id;
 }
 
+/* Gets the bytes of an ArrayBuffer or view; *holder keeps the backing buffer alive. */
 static gboolean
 mse_bytes(JSContext *ctx, JSValueConst value, const guint8 **data, size_t *len,
           JSValue *holder)
@@ -98,6 +103,7 @@ mse_bytes(JSContext *ctx, JSValueConst value, const guint8 **data, size_t *len,
     return TRUE;
 }
 
+/* Converts flat [start, end] range pairs to a JS array; frees the GArray. */
 static JSValue
 ranges_to_array(JSContext *ctx, GArray *ranges)
 {
@@ -109,6 +115,7 @@ ranges_to_array(JSContext *ctx, GArray *ranges)
     return array;
 }
 
+/* Builds the {status, offset, ranges} result returned to the JS SourceBuffer shim. */
 static JSValue
 mse_append_result(JSContext *ctx, const char *status, double offset,
                   GArray *ranges)
@@ -138,6 +145,7 @@ js_mse_type_supported(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_NewBool(ctx, ok);
 }
 
+/* __ndMseCreate: creates a native MediaSource and returns its id. */
 static JSValue
 js_mse_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -152,6 +160,7 @@ js_mse_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_NewUint32(ctx, id);
 }
 
+/* __ndMseBindUrl: maps an object URL to a MediaSource for media element src. */
 static JSValue
 js_mse_bind_url(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -172,6 +181,7 @@ js_mse_bind_url(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return JS_TRUE;
 }
 
+/* __ndMseAddBuffer: adds a SourceBuffer of a MIME type; returns its id or 0. */
 static JSValue
 js_mse_add_buffer(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv)
@@ -191,6 +201,7 @@ js_mse_add_buffer(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_NewUint32(ctx, mse_register(js, handle->source, buffer));
 }
 
+/* __ndMseRemoveBuffer: detaches and frees a SourceBuffer by id. */
 static JSValue
 js_mse_remove_buffer(JSContext *ctx, JSValueConst this_val, int argc,
                      JSValueConst *argv)
@@ -206,6 +217,7 @@ js_mse_remove_buffer(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_TRUE;
 }
 
+/* __ndMseAppend: appends bytes with offset, mode and window; returns status and ranges. */
 static JSValue
 js_mse_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -237,6 +249,7 @@ js_mse_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
                              ns_mse_buffer_ranges(handle->buffer));
 }
 
+/* __ndMseRemove: removes a time range and returns the remaining buffered ranges. */
 static JSValue
 js_mse_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -288,6 +301,7 @@ js_mse_set_ended(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* __ndMseSetLiveSeekableRange: sets, or clears without range args, the live range. */
 static JSValue
 js_mse_set_live_seekable_range(JSContext *ctx, JSValueConst this_val, int argc,
                                JSValueConst *argv)
@@ -307,6 +321,7 @@ js_mse_set_live_seekable_range(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* MediaSource bound to an object URL in this realm (borrowed), or NULL. */
 ns_mse_source *
 ns_js_mse_source_for_url(ns_js *js, const char *url)
 {
@@ -314,6 +329,7 @@ ns_js_mse_source_for_url(ns_js *js, const char *url)
     return g_hash_table_lookup(js->mse_urls, url);
 }
 
+/* Drops all MediaSource handles and URL bindings of the realm. */
 void
 ns_js_mse_teardown(ns_js *js)
 {
@@ -322,6 +338,7 @@ ns_js_mse_teardown(ns_js *js)
     g_clear_pointer(&js->mse_objects, g_hash_table_destroy);
 }
 
+/* Installs the __ndMse* native helpers used by the JS MediaSource shim. */
 void
 ns_js_mse_install(JSContext *ctx, JSValueConst global)
 {

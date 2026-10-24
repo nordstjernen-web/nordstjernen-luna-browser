@@ -20,6 +20,7 @@ struct ns_vp9_decoder {
     vpx_codec_ctx_t codec;
 };
 
+/* Converts a libvpx image (8-bit or high bit depth YUV) to a BGRA texture. */
 static ns_texture *
 image_to_texture(const vpx_image_t *image)
 {
@@ -71,6 +72,7 @@ ns_vp9_decoder_free(ns_vp9_decoder *decoder)
     g_free(decoder);
 }
 
+/* Drains pending frames from the decoder after a seek or stream end. */
 void
 ns_vp9_decoder_flush(ns_vp9_decoder *decoder)
 {
@@ -80,6 +82,7 @@ ns_vp9_decoder_flush(ns_vp9_decoder *decoder)
     while (vpx_codec_get_frame(&decoder->codec, &iter) != NULL) {}
 }
 
+/* Decodes one VP9 sample; returns the last output frame as a texture when wanted. */
 ns_texture *
 ns_vp9_decoder_decode(ns_vp9_decoder *decoder, GBytes *sample,
                       gboolean want_texture)

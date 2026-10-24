@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — minimalist MathML presentation layout and paint.
+/* Nordstjernen Web Browser — measures and paints a <math> subtree for layout and paint.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

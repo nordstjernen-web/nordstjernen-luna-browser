@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — SQLite-backed IndexedDB storage.
+/* Nordstjernen Web Browser — SQLite storage backend for IndexedDB, one database file per name.
+ * Native __nd_idb object the JS IndexedDB shim calls; per-origin quota and handle cache.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -51,6 +52,7 @@ ns_idb_db_destroy(ns_idb_db *h)
     g_free(h);
 }
 
+/* Cache destroy notify: frees the handle now, or marks it evicted if a call has it pinned. */
 static void
 ns_idb_db_free(ns_idb_db *h)
 {
@@ -62,6 +64,7 @@ ns_idb_db_free(ns_idb_db *h)
     ns_idb_db_destroy(h);
 }
 
+/* Pins a handle for the current outermost backend call so re-entry cannot free it. */
 static ns_idb_db *
 ns_idb_pin(ns_idb_db *h)
 {
@@ -72,6 +75,7 @@ ns_idb_pin(ns_idb_db *h)
     return h;
 }
 
+/* Drops the current call's pins, destroying handles evicted while pinned. */
 static void
 ns_idb_release_pins(void)
 {
@@ -91,6 +95,7 @@ ns_idb_cache_evict(const char *key)
         g_hash_table_remove(g_idb_handles, key);
 }
 
+/* Evicts the least recently used handle once over 16, preferring on-disk over in-memory. */
 static void
 ns_idb_cache_trim(void)
 {
@@ -126,12 +131,14 @@ ns_idb_throw(JSContext *ctx, const char *name, const char *message)
                                 "%s", message ? message : "");
 }
 
+/* Throws an UnknownError DOMException carrying the SQLite error message. */
 static JSValue
 ns_idb_throw_sql(JSContext *ctx, sqlite3 *db)
 {
     return ns_idb_throw(ctx, "UnknownError", db ? sqlite3_errmsg(db) : "SQLite error");
 }
 
+/* Frees n possibly-NULL QuickJS C strings passed as varargs. */
 static void
 ns_idb_free_cstrings(JSContext *ctx, int n, ...)
 {
@@ -150,6 +157,7 @@ ns_idb_hash_string(const char *input)
     return g_compute_checksum_for_string(G_CHECKSUM_SHA256, input, -1);
 }
 
+/* Creates and returns the 0700 per-partition IndexedDB directory; NULL when private. */
 static char *
 ns_idb_partition_dir(JSContext *ctx)
 {
@@ -166,6 +174,7 @@ ns_idb_partition_dir(JSContext *ctx)
     return dir;
 }
 
+/* SQLite path for a database name (SHA-256 named file), or ":memory:" in private mode. */
 static char *
 ns_idb_path_for_name(JSContext *ctx, const char *name)
 {
@@ -188,6 +197,7 @@ ns_idb_exec(sqlite3 *db, const char *sql)
 #define NS_IDB_MAX_PAGES 65536
 #define NS_IDB_MAX_ORIGIN_PAGES (256 * 1024)
 
+/* Applies pragmas (WAL, page cap) and creates the meta/stores/records/index tables. */
 static gboolean
 ns_idb_schema(sqlite3 *db)
 {
@@ -242,6 +252,7 @@ ns_idb_schema(sqlite3 *db)
 #define NS_IDB_OPEN_FLAGS (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
 #endif
 
+/* Handle cache key of storage partition and database name; caller frees. */
 static char *
 ns_idb_cache_key(JSContext *ctx, const char *name)
 {
@@ -251,6 +262,7 @@ ns_idb_cache_key(JSContext *ctx, const char *name)
     return g_strdup_printf("%s\x1f%s", partition, name);
 }
 
+/* Returns a pinned, cached SQLite handle for the database, opening and migrating on miss. */
 static ns_idb_db *
 ns_idb_open_db(JSContext *ctx, const char *name)
 {
@@ -284,6 +296,7 @@ ns_idb_open_db(JSContext *ctx, const char *name)
     return h;
 }
 
+/* Upserts a key/value row in the database's meta table. */
 static gboolean
 ns_idb_set_meta(sqlite3 *db, const char *key, const char *value)
 {
@@ -300,6 +313,7 @@ ns_idb_set_meta(sqlite3 *db, const char *key, const char *value)
     return ok;
 }
 
+/* Reads a meta table value; caller frees, NULL if missing. */
 static char *
 ns_idb_get_meta(sqlite3 *db, const char *key)
 {
@@ -317,6 +331,7 @@ ns_idb_get_meta(sqlite3 *db, const char *key)
     return out;
 }
 
+/* Stored database version from meta, 0 if unset. */
 static int64_t
 ns_idb_get_version(sqlite3 *db)
 {
@@ -325,6 +340,7 @@ ns_idb_get_version(sqlite3 *db)
     return g_ascii_strtoll(v, NULL, 10);
 }
 
+/* Deserializes a stored record blob with JS_ReadObject; undefined on failure. */
 static JSValue
 ns_idb_read_value(JSContext *ctx, const void *blob, int len)
 {
@@ -337,6 +353,7 @@ ns_idb_read_value(JSContext *ctx, const void *blob, int len)
     return v;
 }
 
+/* Serializes a JS value with JS_WriteObject and binds it as a blob parameter. */
 static gboolean
 ns_idb_bind_value(JSContext *ctx, sqlite3_stmt *st, int index, JSValueConst value)
 {
@@ -349,6 +366,7 @@ ns_idb_bind_value(JSContext *ctx, sqlite3_stmt *st, int index, JSValueConst valu
     return rc == SQLITE_OK;
 }
 
+/* Builds the JS description of all object stores and their indexes. */
 static JSValue
 ns_idb_store_array(sqlite3 *db, JSContext *ctx)
 {
@@ -398,6 +416,7 @@ ns_idb_store_array(sqlite3 *db, JSContext *ctx)
     return arr;
 }
 
+/* Builds {name, version, stores} for a database, recording its name on first open. */
 static JSValue
 ns_idb_info_for(JSContext *ctx, ns_idb_db *h, const char *name)
 {
@@ -416,6 +435,7 @@ ns_idb_arg_string(JSContext *ctx, JSValueConst v)
     return JS_ToCString(ctx, v);
 }
 
+/* Converts the db name and n string args, opening the db; on failure frees and sets *error. */
 static ns_idb_db *
 ns_idb_open_from_args(JSContext *ctx, JSValueConst *argv, int n,
                       const char **args, JSValue *error)
@@ -435,6 +455,7 @@ ns_idb_open_from_args(JSContext *ctx, JSValueConst *argv, int n,
     return NULL;
 }
 
+/* Runs a one-parameter statement bound to a store name; throws on SQLite failure. */
 static JSValue
 ns_idb_exec_with_store(JSContext *ctx, ns_idb_db *h, const char *sql,
                        const char *store)
@@ -449,6 +470,7 @@ ns_idb_exec_with_store(JSContext *ctx, ns_idb_db *h, const char *sql,
     return ok ? JS_TRUE : ns_idb_throw_sql(ctx, h->db);
 }
 
+/* Opens a database by name and returns its info; consumes the name C string. */
 static JSValue
 ns_idb_info_named(JSContext *ctx, const char *name)
 {
@@ -460,6 +482,7 @@ ns_idb_info_named(JSContext *ctx, const char *name)
     return out;
 }
 
+/* Backend open(name): opens or creates the database and returns its info. */
 static JSValue
 ns_idb_backend_open(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -471,6 +494,7 @@ ns_idb_backend_open(JSContext *ctx, JSValueConst this_val,
     return ns_idb_info_named(ctx, name);
 }
 
+/* Backend setVersion(name, version): persists the database version. */
 static JSValue
 ns_idb_backend_set_version(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -492,6 +516,7 @@ ns_idb_backend_set_version(JSContext *ctx, JSValueConst this_val,
     return JS_NewBool(ctx, ok);
 }
 
+/* Backend createStore: inserts an object store; ConstraintError if it exists. */
 static JSValue
 ns_idb_backend_create_store(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -525,6 +550,7 @@ ns_idb_backend_create_store(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend deleteStore: removes a store, cascading to its records and indexes. */
 static JSValue
 ns_idb_backend_delete_store(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -542,6 +568,7 @@ ns_idb_backend_delete_store(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend createIndex: registers an index definition; ConstraintError if it exists. */
 static JSValue
 ns_idb_backend_create_index(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -579,6 +606,7 @@ ns_idb_backend_create_index(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend deleteIndex: removes an index and, by cascade, its entries. */
 static JSValue
 ns_idb_backend_delete_index(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -605,6 +633,7 @@ ns_idb_backend_delete_index(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend nextKey: atomically takes and increments the store's key generator. */
 static JSValue
 ns_idb_backend_next_key(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -650,6 +679,7 @@ ns_idb_backend_next_key(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Inserts precomputed {name, key} index entries for a record; rejects non-string data. */
 static gboolean
 ns_idb_insert_index_entries(JSContext *ctx, sqlite3 *db,
                             const char *store, const char *primary_key,
@@ -699,6 +729,7 @@ ns_idb_insert_index_entries(JSContext *ctx, sqlite3 *db,
     return ok;
 }
 
+/* Page count of a SQLite database, used for quota accounting. */
 static gint64
 ns_idb_db_pages(sqlite3 *db)
 {
@@ -711,6 +742,7 @@ ns_idb_db_pages(sqlite3 *db)
     return pages;
 }
 
+/* Per-origin page quota, overridable via NS_IDB_MAX_ORIGIN_PAGES. */
 static gint64
 ns_idb_max_origin_pages(void)
 {
@@ -733,6 +765,7 @@ typedef struct ns_idb_sibling_pages {
 
 static GHashTable *g_idb_sibling_pages;
 
+/* Sums pages of the partition's other database files, opened read-only. */
 static gint64
 ns_idb_scan_sibling_pages(const char *dir, const char *current_path)
 {
@@ -756,6 +789,7 @@ ns_idb_scan_sibling_pages(const char *dir, const char *current_path)
     return total;
 }
 
+/* Total pages used by the origin: current db plus sibling dbs cached for 5 s. */
 static gint64
 ns_idb_origin_pages(JSContext *ctx, sqlite3 *current, const char *current_path)
 {
@@ -779,6 +813,7 @@ ns_idb_origin_pages(JSContext *ctx, sqlite3 *current, const char *current_path)
     return total + cached->pages;
 }
 
+/* Backend put/add: writes a record and index entries, bumps key gen, enforces quota. */
 static JSValue
 ns_idb_backend_put(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -876,6 +911,7 @@ ns_idb_backend_put(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend get(db, store, key): deserialized record value or undefined. */
 static JSValue
 ns_idb_backend_get(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -903,6 +939,7 @@ ns_idb_backend_get(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend records(db, store): all {key, value} rows of a store. */
 static JSValue
 ns_idb_backend_records(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -936,6 +973,7 @@ ns_idb_backend_records(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* Backend indexRecords: index entries, optionally one key and/or keys only. */
 static JSValue
 ns_idb_backend_index_records(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -993,6 +1031,7 @@ ns_idb_backend_index_records(JSContext *ctx, JSValueConst this_val,
     return arr;
 }
 
+/* Backend deleteRecord(db, store, key). */
 static JSValue
 ns_idb_backend_delete_record(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -1019,6 +1058,7 @@ ns_idb_backend_delete_record(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* Backend clear(db, store): deletes all records of a store. */
 static JSValue
 ns_idb_backend_clear(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -1047,6 +1087,7 @@ ns_idb_backend_info(JSContext *ctx, JSValueConst this_val,
     return ns_idb_info_named(ctx, name);
 }
 
+/* Backend deleteDatabase: evicts the cached handle and unlinks db, -wal and -shm files. */
 static JSValue
 ns_idb_backend_delete_database(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv)
@@ -1069,6 +1110,7 @@ ns_idb_backend_delete_database(JSContext *ctx, JSValueConst this_val,
     return JS_TRUE;
 }
 
+/* Backend databases(): {name, version} of each database file in the partition. */
 static JSValue
 ns_idb_backend_databases(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
@@ -1175,6 +1217,7 @@ ns_idb_plain_copy(JSContext *ctx, JSValueConst v, int depth)
     return out;
 }
 
+/* Magic trampoline: plain-copies arguments, then runs a backend function under the lock. */
 static JSValue
 ns_idb_backend_call(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv, int magic)
@@ -1204,6 +1247,7 @@ ns_idb_backend_call(JSContext *ctx, JSValueConst this_val, int argc,
     return r;
 }
 
+/* Exposes a backend function on obj through the locking trampoline. */
 static void
 ns_idb_bind(JSContext *ctx, JSValueConst obj, const char *name,
             JSCFunction *fn, int argc)
@@ -1218,6 +1262,7 @@ ns_idb_bind(JSContext *ctx, JSValueConst obj, const char *name,
     g_assert_not_reached();
 }
 
+/* Installs the native __nd_idb backend object used by the JS IndexedDB layer. */
 void
 ns_idb_install(JSContext *ctx, JSValueConst global)
 {

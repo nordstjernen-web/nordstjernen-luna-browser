@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — WebAssembly JS API implemented over the vendored WAMR interpreter.
+ * Module, Instance, Memory, Table and Global objects, import binding and value conversion.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -144,6 +145,7 @@ ns_wasm_linkage_init(ns_wasm_linkage *linkage)
     linkage->provided_table = JS_UNDEFINED;
 }
 
+/* Frees import bindings, symbol blocks, strings and provided memory/table refs. */
 static void
 ns_wasm_linkage_clear(JSRuntime *rt, ns_wasm_linkage *linkage)
 {
@@ -172,6 +174,7 @@ ns_wasm_linkage_clear(JSRuntime *rt, ns_wasm_linkage *linkage)
     linkage->provided_table = JS_UNDEFINED;
 }
 
+/* Marks import-binding JS functions and provided memory/table for the QuickJS GC. */
 static void
 ns_wasm_linkage_gc_mark(JSRuntime *rt, const ns_wasm_linkage *linkage,
                         JS_MarkFunc *mark_func)
@@ -186,6 +189,7 @@ ns_wasm_linkage_gc_mark(JSRuntime *rt, const ns_wasm_linkage *linkage,
     JS_MarkValue(rt, linkage->provided_table, mark_func);
 }
 
+/* One-time WAMR init with the system allocator; ND_WASM_LOG enables verbose logging. */
 static gpointer
 ns_wasm_runtime_init_once(gpointer data)
 {
@@ -203,6 +207,7 @@ ns_wasm_runtime_init_once(gpointer data)
     return GINT_TO_POINTER(1);
 }
 
+/* Initializes WAMR once and the per-thread env on first use; FALSE if init failed. */
 static gboolean
 ns_wasm_runtime_ready(void)
 {
@@ -225,6 +230,7 @@ ns_wasm_memdup_bytes(const guint8 *bytes, size_t len)
     return g_memdup2(bytes, len);
 }
 
+/* Throws a WebAssembly.<class_name> error (e.g. LinkError), falling back to TypeError. */
 static JSValue
 ns_wasm_throw_named(JSContext *ctx, const char *class_name, const char *msg)
 {
@@ -249,6 +255,7 @@ ns_wasm_throw_named(JSContext *ctx, const char *class_name, const char *msg)
                              msg ? msg : "wasm error");
 }
 
+/* Copies a TypedArray/DataView view or ArrayBuffer into a new buffer; caller frees. */
 static guint8 *
 ns_wasm_copy_buffer_source(JSContext *ctx, JSValueConst v, size_t *out_len)
 {
@@ -287,6 +294,7 @@ ns_wasm_copy_buffer_source(JSContext *ctx, JSValueConst v, size_t *out_len)
     return NULL;
 }
 
+/* Propagates a pending exception or throws a TypeError with msg. */
 static JSValue
 ns_wasm_buffer_source_error(JSContext *ctx, const char *msg)
 {
@@ -295,6 +303,7 @@ ns_wasm_buffer_source_error(JSContext *ctx, const char *msg)
     return JS_ThrowTypeError(ctx, "%s", msg);
 }
 
+/* Converts v with ToIndex and range-checks it to uint32; -1 with exception on failure. */
 static int
 ns_wasm_to_u32_index(JSContext *ctx, JSValueConst v, uint32_t *out,
                      const char *what)
@@ -310,6 +319,7 @@ ns_wasm_to_u32_index(JSContext *ctx, JSValueConst v, uint32_t *out,
     return 0;
 }
 
+/* Boxes a JS value with a new reference for use as a wasm externref. */
 static ns_wasm_ref *
 ns_wasm_ref_box(JSContext *ctx, JSValueConst v)
 {
@@ -327,6 +337,7 @@ ns_wasm_ref_cleanup(void *p)
     g_free(r);
 }
 
+/* Registers a boxed externref with the instance and its cleanup; frees the box on failure. */
 static gboolean
 ns_wasm_ref_register(wasm_module_inst_t inst, ns_wasm_ref *r, uint32_t *out_idx)
 {
@@ -356,6 +367,7 @@ ns_wasm_instance_opaque(JSValueConst v)
     return JS_GetOpaque(v, ns_wasm_instance_class_id);
 }
 
+/* Converts a JS value to a wasm_val_t of the given kind (BigInt for i64, boxed externref). */
 static int
 ns_wasm_js_to_val(JSContext *ctx, ns_wasm_instance *wi, JSValueConst v,
                   wasm_valkind_t kind, wasm_val_t *out)
@@ -406,6 +418,7 @@ ns_wasm_js_to_val(JSContext *ctx, ns_wasm_instance *wi, JSValueConst v,
     }
 }
 
+/* Converts a wasm value to JS (BigInt for i64, unboxed JS value for externref). */
 static JSValue
 ns_wasm_val_to_js(JSContext *ctx, const wasm_val_t *val)
 {
@@ -425,6 +438,7 @@ ns_wasm_val_to_js(JSContext *ctx, const wasm_val_t *val)
     }
 }
 
+/* Converts a call outcome to JS: rethrows a pending import exception or a RuntimeError trap. */
 static JSValue
 ns_wasm_call_result(JSContext *ctx, ns_wasm_instance *wi, gboolean ok,
                     guint n_results, const wasm_val_t *results)
@@ -462,6 +476,7 @@ ns_wasm_call_result(JSContext *ctx, ns_wasm_instance *wi, gboolean ok,
     return arr;
 }
 
+/* Calls an exported wasm function with JS args (externrefs converted last). */
 static JSValue
 ns_wasm_call_function(JSContext *ctx, ns_wasm_instance *wi,
                       wasm_function_inst_t func, int argc, JSValueConst *argv)
@@ -536,6 +551,7 @@ ns_wasm_func_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
         JS_MarkValue(rt, f->instance, mark_func);
 }
 
+/* Call handler for exported wasm function objects. */
 static JSValue
 ns_wasm_func_call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
                   int argc, JSValueConst *argv, int flags)
@@ -556,6 +572,7 @@ static const JSClassDef ns_wasm_func_class = {
     .call = ns_wasm_func_call,
 };
 
+/* Wraps a wasm function instance as a callable JS object with its arity as length. */
 static JSValue
 ns_wasm_make_func(JSContext *ctx, JSValueConst instance,
                   wasm_function_inst_t func)
@@ -578,6 +595,7 @@ ns_wasm_make_func(JSContext *ctx, JSValueConst instance,
     return obj;
 }
 
+/* Detaches and drops the cached ArrayBuffer view of a Memory, as after a grow. */
 static void
 ns_wasm_memory_detach_buffer(ns_wasm_memory *m)
 {
@@ -618,6 +636,7 @@ static const JSClassDef ns_wasm_memory_class = {
     .gc_mark = ns_wasm_memory_gc_mark,
 };
 
+/* Memory.buffer: returns the cached ArrayBuffer, recreating it if base or size changed. */
 static JSValue
 ns_wasm_memory_buffer_get(JSContext *ctx, JSValueConst this_val)
 {
@@ -656,6 +675,7 @@ ns_wasm_memory_buffer_get(JSContext *ctx, JSValueConst this_val)
     return JS_DupValue(ctx, m->buffer);
 }
 
+/* Memory.grow(delta): grows staging or instance memory; returns the old page count. */
 static JSValue
 ns_wasm_memory_grow(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv)
@@ -713,6 +733,7 @@ static const JSCFunctionListEntry ns_wasm_memory_proto_funcs[] = {
                        JS_PROP_CONFIGURABLE),
 };
 
+/* WAMR enlarge callback: detaches the instance Memory's stale ArrayBuffer. */
 static void
 ns_wasm_on_memory_grown(wasm_module_inst_t inst, void *user_data)
 {
@@ -759,6 +780,7 @@ ns_wasm_instance_detach_memory(ns_wasm_instance *wi)
     ns_wasm_memory_detach_buffer(m);
 }
 
+/* Returns the Table's opaque and owning instance, throwing if either is gone. */
 static ns_wasm_table *
 ns_wasm_table_opaque(JSContext *ctx, JSValueConst this_val,
                      ns_wasm_instance **out_wi)
@@ -792,6 +814,7 @@ ns_wasm_table_length_get(JSContext *ctx, JSValueConst this_val)
     return JS_NewUint32(ctx, size);
 }
 
+/* Table.get(i): returns a wasm function wrapper for funcref tables or the externref value. */
 static JSValue
 ns_wasm_table_get(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv)
@@ -827,6 +850,7 @@ ns_wasm_table_get(JSContext *ctx, JSValueConst this_val, int argc,
     return ns_wasm_ref_to_js(ctx, obj);
 }
 
+/* Table.set(i, v): stores externrefs; funcref tables accept only null from JS. */
 static JSValue
 ns_wasm_table_set(JSContext *ctx, JSValueConst this_val, int argc,
                   JSValueConst *argv)
@@ -866,6 +890,7 @@ ns_wasm_table_set(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* Table.grow(delta, init): grows the table, filling with an externref; returns old size. */
 static JSValue
 ns_wasm_table_grow(JSContext *ctx, JSValueConst this_val, int argc,
                    JSValueConst *argv)
@@ -948,6 +973,7 @@ static const JSClassDef ns_wasm_global_class = {
     .gc_mark = ns_wasm_global_gc_mark,
 };
 
+/* Looks up the exported global instance behind a WebAssembly.Global, throwing if gone. */
 static gboolean
 ns_wasm_global_resolve(JSContext *ctx, JSValueConst this_val,
                        wasm_global_inst_t *out)
@@ -970,6 +996,7 @@ ns_wasm_global_resolve(JSContext *ctx, JSValueConst this_val,
     return TRUE;
 }
 
+/* Converts a JS value to a numeric wasm value of kind; undefined yields zero. */
 static int
 ns_wasm_global_convert(JSContext *ctx, wasm_valkind_t kind, JSValueConst v,
                        wasm_val_t *out)
@@ -1006,6 +1033,7 @@ ns_wasm_global_standalone_get(JSContext *ctx, const ns_wasm_global *g)
     return ns_wasm_val_to_js(ctx, &g->val);
 }
 
+/* Global.value getter for standalone globals and exported instance globals. */
 static JSValue
 ns_wasm_global_value_get(JSContext *ctx, JSValueConst this_val)
 {
@@ -1029,6 +1057,7 @@ ns_wasm_global_value_get(JSContext *ctx, JSValueConst this_val)
     }
 }
 
+/* Global.value setter; throws on immutable globals, writes instance global data in place. */
 static JSValue
 ns_wasm_global_value_set(JSContext *ctx, JSValueConst this_val,
                          JSValueConst val)
@@ -1105,6 +1134,7 @@ static const JSCFunctionListEntry ns_wasm_global_proto_funcs[] = {
                        JS_PROP_CONFIGURABLE),
 };
 
+/* Unloads the WAMR module and frees its linkage and copied bytes. */
 static void
 ns_wasm_module_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -1133,6 +1163,7 @@ static const JSClassDef ns_wasm_module_class = {
     .gc_mark = ns_wasm_module_gc_mark,
 };
 
+/* Detaches memory, destroys the exec env, deinstantiates and drops all JS refs. */
 static void
 ns_wasm_instance_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -1174,6 +1205,7 @@ static const JSClassDef ns_wasm_instance_class = {
     .gc_mark = ns_wasm_instance_gc_mark,
 };
 
+/* Records a JS exception as the instance's pending exception and sets a wasm trap. */
 static void
 ns_wasm_native_fail(JSContext *ctx, ns_wasm_instance *wi,
                     wasm_module_inst_t inst, const char *msg)
@@ -1192,6 +1224,7 @@ ns_wasm_native_fail(JSContext *ctx, ns_wasm_instance *wi,
         wasm_runtime_set_exception(inst, msg ? msg : "wasm import failed");
 }
 
+/* WAMR native trampoline: converts args, calls the bound JS import, converts the result. */
 static void
 ns_wasm_native_dispatch(wasm_exec_env_t exec_env, uint64_t *args)
 {
@@ -1318,6 +1351,7 @@ ns_wasm_native_dispatch(wasm_exec_env_t exec_env, uint64_t *args)
     JS_FreeValue(ctx, ret);
 }
 
+/* Maps a wasm value kind to its WAMR native signature character. */
 static char
 ns_wasm_signature_char(wasm_valkind_t kind)
 {
@@ -1346,6 +1380,7 @@ ns_wasm_kind_supported(wasm_valkind_t kind)
            kind == WASM_F64 || kind == WASM_EXTERNREF;
 }
 
+/* Throws LinkError unless an import's params and single result use supported kinds. */
 static gboolean
 ns_wasm_check_import_func_type(JSContext *ctx, wasm_func_type_t type)
 {
@@ -1373,6 +1408,7 @@ ns_wasm_check_import_func_type(JSContext *ctx, wasm_func_type_t type)
     return TRUE;
 }
 
+/* Reads a numeric WebAssembly.Global's current value; FALSE for ref or missing globals. */
 static gboolean
 ns_wasm_global_current_value(JSValueConst v, wasm_val_t *out)
 {
@@ -1412,6 +1448,7 @@ ns_wasm_global_current_value(JSValueConst v, wasm_val_t *out)
     }
 }
 
+/* Resolves the import object: binds JS functions, links globals, records memory/table. */
 static gboolean
 ns_wasm_bind_imports(JSContext *ctx, wasm_module_t module,
                      ns_wasm_linkage *linkage, JSValueConst import_object)
@@ -1528,6 +1565,7 @@ ns_wasm_bind_imports(JSContext *ctx, wasm_module_t module,
     return TRUE;
 }
 
+/* Registers dispatch natives per import module once and resolves symbols; LinkError on miss. */
 static gboolean
 ns_wasm_link_import_symbols(JSContext *ctx, ns_wasm_module *mod)
 {
@@ -1639,6 +1677,7 @@ ns_wasm_link_import_symbols(JSContext *ctx, ns_wasm_module *mod)
     return TRUE;
 }
 
+/* Calls Object.freeze on obj via the global Object constructor. */
 static void
 ns_wasm_freeze(JSContext *ctx, JSValueConst obj)
 {
@@ -1654,6 +1693,7 @@ ns_wasm_freeze(JSContext *ctx, JSValueConst obj)
     JS_FreeValue(ctx, global);
 }
 
+/* Builds the frozen null-prototype exports object of functions, memory, tables and globals. */
 static JSValue
 ns_wasm_build_exports(JSContext *ctx, JSValueConst instance_obj,
                       ns_wasm_instance *wi, ns_wasm_module *mod)
@@ -1755,6 +1795,7 @@ ns_wasm_build_exports(JSContext *ctx, JSValueConst instance_obj,
     return exports;
 }
 
+/* Copies and loads wasm bytes into a WebAssembly.Module; throws CompileError on failure. */
 static JSValue
 ns_wasm_module_from_bytes(JSContext *ctx, const guint8 *bytes, size_t len)
 {
@@ -1795,6 +1836,7 @@ ns_wasm_module_from_bytes(JSContext *ctx, const guint8 *bytes, size_t len)
     return obj;
 }
 
+/* Orders data-segment ranges by start offset. */
 static int
 ns_wasm_segment_range_cmp(gconstpointer a, gconstpointer b)
 {
@@ -1804,6 +1846,7 @@ ns_wasm_segment_range_cmp(gconstpointer a, gconstpointer b)
     return 0;
 }
 
+/* Copies staged Memory bytes into instance memory, skipping active data-segment ranges. */
 static gboolean
 ns_wasm_copy_staging_around_segments(ns_wasm_instance *wi, guint8 *base,
                                      size_t size, const guint8 *staging,
@@ -1846,6 +1889,7 @@ ns_wasm_copy_staging_around_segments(ns_wasm_instance *wi, guint8 *base,
     return TRUE;
 }
 
+/* Moves an imported Memory's staging into the instance memory and binds imported Table. */
 static void
 ns_wasm_adopt_provided_imports(JSContext *ctx, JSValueConst instance_obj,
                                ns_wasm_instance *wi)
@@ -1886,6 +1930,7 @@ ns_wasm_adopt_provided_imports(JSContext *ctx, JSValueConst instance_obj,
     }
 }
 
+/* Instantiates a Module with an import object; rejects re-entrant instantiation of a module. */
 static JSValue
 ns_wasm_instance_create(JSContext *ctx, JSValueConst module_obj,
                         JSValueConst import_object)
@@ -2036,6 +2081,7 @@ ns_wasm_instance_ctor(JSContext *ctx, JSValueConst new_target, int argc,
                                    argc > 1 ? argv[1] : JS_UNDEFINED);
 }
 
+/* WebAssembly.Global constructor for numeric, externref and funcref standalone globals. */
 static JSValue
 ns_wasm_global_ctor(JSContext *ctx, JSValueConst new_target, int argc,
                     JSValueConst *argv)
@@ -2101,6 +2147,7 @@ ns_wasm_global_ctor(JSContext *ctx, JSValueConst new_target, int argc,
     return obj;
 }
 
+/* WebAssembly.Memory constructor; holds pages in a staging buffer until instantiation. */
 static JSValue
 ns_wasm_memory_ctor(JSContext *ctx, JSValueConst new_target, int argc,
                     JSValueConst *argv)
@@ -2150,6 +2197,7 @@ ns_wasm_memory_ctor(JSContext *ctx, JSValueConst new_target, int argc,
     return obj;
 }
 
+/* WebAssembly.Table constructor; records the element kind, bound to an instance later. */
 static JSValue
 ns_wasm_table_ctor(JSContext *ctx, JSValueConst new_target, int argc,
                    JSValueConst *argv)
@@ -2176,6 +2224,7 @@ ns_wasm_table_ctor(JSContext *ctx, JSValueConst new_target, int argc,
     return obj;
 }
 
+/* Returns a promise settled with value, or rejected with the pending exception; takes value. */
 static JSValue
 ns_wasm_resolved_promise(JSContext *ctx, JSValue value)
 {
@@ -2202,6 +2251,7 @@ ns_wasm_resolved_promise(JSContext *ctx, JSValue value)
     return promise;
 }
 
+/* WebAssembly.compile: compiles synchronously and returns a settled promise. */
 static JSValue
 ns_wasm_compile(JSContext *ctx, JSValueConst this_val, int argc,
                 JSValueConst *argv)
@@ -2220,6 +2270,7 @@ ns_wasm_compile(JSContext *ctx, JSValueConst this_val, int argc,
     return ns_wasm_resolved_promise(ctx, module);
 }
 
+/* WebAssembly.instantiate: settled promise of an Instance or {module, instance} pair. */
 static JSValue
 ns_wasm_instantiate(JSContext *ctx, JSValueConst this_val, int argc,
                     JSValueConst *argv)
@@ -2267,6 +2318,7 @@ ns_wasm_instantiate(JSContext *ctx, JSValueConst this_val, int argc,
     return ns_wasm_resolved_promise(ctx, pair);
 }
 
+/* WebAssembly.validate: returns whether WAMR can load the bytes. */
 static JSValue
 ns_wasm_validate(JSContext *ctx, JSValueConst this_val, int argc,
                  JSValueConst *argv)
@@ -2313,6 +2365,7 @@ ns_wasm_kind_name(uint8_t kind)
     }
 }
 
+/* WebAssembly.Module.exports: returns an array of {name, kind} descriptors. */
 static JSValue
 ns_wasm_module_exports_static(JSContext *ctx, JSValueConst this_val, int argc,
                              JSValueConst *argv)
@@ -2339,6 +2392,7 @@ ns_wasm_module_exports_static(JSContext *ctx, JSValueConst this_val, int argc,
     return arr;
 }
 
+/* WebAssembly.Module.imports: returns an array of {module, name, kind} descriptors. */
 static JSValue
 ns_wasm_module_imports_static(JSContext *ctx, JSValueConst this_val, int argc,
                              JSValueConst *argv)
@@ -2382,6 +2436,7 @@ static const char ns_wasm_bootstrap_js[] =
     "    W.compile(await (await src).arrayBuffer());"
     "})();";
 
+/* Allocates a class id and registers the class on the runtime if not yet registered. */
 static void
 ns_wasm_register_class(JSRuntime *rt, JSClassID *class_id,
                        const JSClassDef *def)
@@ -2391,6 +2446,7 @@ ns_wasm_register_class(JSRuntime *rt, JSClassID *class_id,
         JS_NewClass(rt, *class_id, def);
 }
 
+/* Installs the WebAssembly namespace, classes and JS bootstrap (no-op without WAMR). */
 void
 ns_wasm_install(JSContext *ctx, JSValueConst global)
 {

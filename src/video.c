@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — MPEG-1 video decoding for <video>, streamed over the vendored pl_mpeg.
+/* Nordstjernen Web Browser — video streams for <video>: MPEG-1 via pl_mpeg, or MSE-fed decoding.
+ * MSE streams feed coded frames to a decode worker and present through a video layer.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -50,6 +51,7 @@ struct ns_video_stream {
     gboolean         waiting;
 };
 
+/* TRUE if data starts with an MPEG-1 program stream pack header (00 00 01 BA). */
 static gboolean
 bytes_are_program_stream(const guchar *data, gsize len)
 {
@@ -57,6 +59,7 @@ bytes_are_program_stream(const guchar *data, gsize len)
            data[2] == 0x01 && data[3] == 0xBA;
 }
 
+/* TRUE if data starts with an MPEG-1 video sequence header (00 00 01 B3). */
 static gboolean
 bytes_are_elementary_stream(const guchar *data, gsize len)
 {
@@ -71,6 +74,7 @@ ns_video_bytes_are_mpeg1(const guchar *data, gsize len)
            bytes_are_elementary_stream(data, len);
 }
 
+/* Counts MPEG picture start codes, used to estimate elementary stream duration. */
 static guint
 count_pictures(const guchar *data, gsize len)
 {
@@ -83,6 +87,7 @@ count_pictures(const guchar *data, gsize len)
     return pictures;
 }
 
+/* Opens the MPEG-1 data as a program or elementary stream; reports framerate and duration. */
 static gboolean
 stream_open(ns_video_stream *s, double *framerate, double *duration_s)
 {
@@ -116,6 +121,7 @@ stream_open(ns_video_stream *s, double *framerate, double *duration_s)
     return TRUE;
 }
 
+/* Decodes the next video frame from the program or elementary stream. */
 static plm_frame_t *
 stream_next(ns_video_stream *s)
 {
@@ -123,6 +129,7 @@ stream_next(ns_video_stream *s)
     return plm_video_decode(s->elementary);
 }
 
+/* Decodes forward until the frame covering time t; returns the last decoded frame. */
 static plm_frame_t *
 stream_decode_until(ns_video_stream *s, double t)
 {
@@ -135,6 +142,7 @@ stream_decode_until(ns_video_stream *s, double t)
     return last;
 }
 
+/* Seeks to time t, falling back to rewinding and decoding forward. */
 static plm_frame_t *
 stream_seek(ns_video_stream *s, double t)
 {
@@ -148,6 +156,7 @@ stream_seek(ns_video_stream *s, double t)
     return stream_decode_until(s, t);
 }
 
+/* Converts a decoded frame to a new BGRA texture and makes it the shown frame. */
 static gboolean
 stream_present(ns_video_stream *s, plm_frame_t *frame)
 {
@@ -169,6 +178,7 @@ stream_present(ns_video_stream *s, plm_frame_t *frame)
     return TRUE;
 }
 
+/* Opens an in-memory MPEG-1 video (dimension-capped) and decodes its first frame. */
 ns_video_stream *
 ns_video_stream_new(const guchar *data, gsize len)
 {
@@ -195,6 +205,7 @@ ns_video_stream_new(const guchar *data, gsize len)
     return s;
 }
 
+/* Creates a video stream fed from MSE source buffers via a decode worker and layer. */
 ns_video_stream *
 ns_video_stream_new_mse(ns_mse_source *source)
 {
@@ -206,6 +217,7 @@ ns_video_stream_new_mse(ns_mse_source *source)
     return s;
 }
 
+/* Decoded-picture queue depth: about 48 MiB of frames, clamped to 4..12. */
 static guint
 mse_decode_ahead(const ns_video_stream *s)
 {
@@ -216,6 +228,7 @@ mse_decode_ahead(const ns_video_stream *s)
                         (gsize)NS_VIDEO_DECODE_AHEAD_MAX);
 }
 
+/* Adopts the layer's latest texture; TRUE if a repaint is needed (not composited/resized). */
 static gboolean
 mse_sync_texture(ns_video_stream *s, gboolean composited)
 {
@@ -237,6 +250,7 @@ mse_sync_texture(ns_video_stream *s, gboolean composited)
     return !composited || resized;
 }
 
+/* Index of the last frame fed to the decoder, or -1 if unknown or since evicted. */
 static gssize
 mse_fed_index(ns_video_stream *s, ns_mse_buffer *buffer)
 {
@@ -246,6 +260,7 @@ mse_fed_index(ns_video_stream *s, ns_mse_buffer *buffer)
     return at && fabs(at->pts - s->fed_pts) < 1e-6 ? last : -1;
 }
 
+/* Decides if decoding must restart from a keyframe (seek back, far jump, lost position). */
 static gboolean
 mse_needs_restart(ns_video_stream *s, ns_mse_buffer *buffer, gssize last,
                   gssize target, gboolean shown)
@@ -261,6 +276,7 @@ mse_needs_restart(ns_video_stream *s, ns_mse_buffer *buffer, gssize last,
            ns_mse_buffer_keyframe_at_or_before(buffer, target) > last;
 }
 
+/* Pushes coded frames to the worker from the last fed (or a keyframe) to 3 s past target. */
 static void
 mse_feed(ns_video_stream *s, ns_mse_buffer *buffer, gssize target, gboolean shown)
 {
@@ -293,6 +309,7 @@ mse_feed(ns_video_stream *s, ns_mse_buffer *buffer, gssize target, gboolean show
                            s->fed_pts, goal_pts);
 }
 
+/* MSE playback step: syncs the layer texture, presents the target frame, feeds the decoder. */
 static gboolean
 mse_show(ns_video_stream *s, double t)
 {
@@ -330,6 +347,7 @@ ns_video_stream_layer(const ns_video_stream *s)
     return s ? s->layer : NULL;
 }
 
+/* Passes the media clock (and seek generation) to the video layer. */
 void
 ns_video_stream_set_clock(ns_video_stream *s, const ns_video_clock *clock)
 {
@@ -338,6 +356,7 @@ ns_video_stream_set_clock(ns_video_stream *s, const ns_video_clock *clock)
     ns_video_layer_set_clock(s->layer, clock);
 }
 
+/* Reports presented and dropped frame counts from the decode worker. */
 gboolean
 ns_video_stream_frame_counts(const ns_video_stream *s, guint *presented,
                              guint *dropped)
@@ -381,6 +400,7 @@ ns_video_stream_height(const ns_video_stream *s)
     return s ? s->height : 0;
 }
 
+/* Duration in ms; MSE streams with unknown or infinite duration report 24 h. */
 int
 ns_video_stream_duration_ms(const ns_video_stream *s)
 {
@@ -405,6 +425,7 @@ ns_video_stream_bytes(const ns_video_stream *s)
     return s && s->bytes ? g_bytes_ref(s->bytes) : NULL;
 }
 
+/* Approximate memory use: encoded bytes plus one BGRA frame. */
 gsize
 ns_video_stream_memory(const ns_video_stream *s)
 {
@@ -425,6 +446,7 @@ ns_video_stream_texture(const ns_video_stream *s)
     return s ? s->texture : NULL;
 }
 
+/* Shows the frame for phase_ms, decoding forward up to 2 s or seeking; TRUE if changed. */
 gboolean
 ns_video_stream_show(ns_video_stream *s, int phase_ms)
 {

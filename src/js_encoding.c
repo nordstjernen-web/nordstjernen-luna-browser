@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — TextDecoder and TextEncoder from the Encoding Standard (QuickJS).
+ * Built on encoding.c's streaming decoders, with fatal and ignoreBOM options and encodeInto.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -39,6 +40,7 @@ static JSClassDef ns_text_encoder_class = {
     "TextEncoder", .finalizer = NULL,
 };
 
+/* Sets data/len to [offset, offset+length) of an ArrayBuffer if in bounds; else leaves them. */
 static gboolean
 ns_view_bytes(JSContext *ctx, JSValueConst buffer, uint64_t offset,
               uint64_t length, const uint8_t **data, size_t *len)
@@ -112,6 +114,7 @@ ns_js_buffer_source_bytes(JSContext *ctx, JSValueConst v, const uint8_t **data,
     return TRUE;
 }
 
+/* Reads a boolean dictionary member (false if dict is undefined/null); -1 on exception. */
 static int
 ns_dictionary_bool(JSContext *ctx, JSValueConst dict, const char *key,
                    gboolean *out)
@@ -125,6 +128,7 @@ ns_dictionary_bool(JSContext *ctx, JSValueConst dict, const char *key,
     return 0;
 }
 
+/* Throws TypeError if the options argument is present but not an object. */
 static JSValue
 ns_check_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int index,
                     const char *what)
@@ -135,6 +139,7 @@ ns_check_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int index,
     return JS_ThrowTypeError(ctx, "%s: options must be an object", what);
 }
 
+/* Creates an instance of class_id using new_target's prototype (subclassing support). */
 static JSValue
 ns_new_instance(JSContext *ctx, JSValueConst new_target, JSClassID class_id)
 {
@@ -147,6 +152,7 @@ ns_new_instance(JSContext *ctx, JSValueConst new_target, JSClassID class_id)
     return obj;
 }
 
+/* TextDecoder(label, {fatal, ignoreBOM}); RangeError for unknown or replacement labels. */
 static JSValue
 ns_text_decoder_ctor(JSContext *ctx, JSValueConst new_target,
                      int argc, JSValueConst *argv)
@@ -180,6 +186,7 @@ ns_text_decoder_ctor(JSContext *ctx, JSValueConst new_target,
     return obj;
 }
 
+/* TextDecoder.decode() with streaming state and BOM stripping for UTF-8/UTF-16. */
 static JSValue
 ns_text_decoder_decode(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -230,6 +237,7 @@ ns_text_decoder_decode(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* TextDecoder.encoding getter: the lowercase encoding name. */
 static JSValue
 ns_text_decoder_get_encoding(JSContext *ctx, JSValueConst this_val)
 {
@@ -265,6 +273,7 @@ ns_text_encoder_ctor(JSContext *ctx, JSValueConst new_target,
     return ns_new_instance(ctx, new_target, ns_text_encoder_class_id);
 }
 
+/* Throws "Illegal invocation" unless this is a TextEncoder. */
 static gboolean
 ns_text_encoder_check(JSContext *ctx, JSValueConst this_val)
 {
@@ -280,6 +289,7 @@ ns_text_encoder_get_encoding(JSContext *ctx, JSValueConst this_val)
     return JS_NewString(ctx, "utf-8");
 }
 
+/* Converts a JS string to UTF-8, replacing lone surrogates with U+FFFD; caller frees. */
 static char *
 ns_usv_string_utf8(JSContext *ctx, JSValueConst v, size_t *out_len)
 {
@@ -303,6 +313,7 @@ ns_usv_string_utf8(JSContext *ctx, JSValueConst v, size_t *out_len)
     return out;
 }
 
+/* TextEncoder.encode(): returns a new Uint8Array of the UTF-8 bytes. */
 static JSValue
 ns_text_encoder_encode(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -317,6 +328,7 @@ ns_text_encoder_encode(JSContext *ctx, JSValueConst this_val,
     return r;
 }
 
+/* TextEncoder.encodeInto(): writes whole UTF-8 sequences, returns {read, written}. */
 static JSValue
 ns_text_encoder_encode_into(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -381,6 +393,7 @@ static const JSCFunctionListEntry ns_text_encoder_proto_funcs[] = {
                        JS_PROP_CONFIGURABLE),
 };
 
+/* Registers a class and defines its global constructor with the prototype functions. */
 static void
 ns_encoding_install_interface(JSContext *ctx, JSValueConst global,
                               const char *name, JSCFunction *ctor,
@@ -398,6 +411,7 @@ ns_encoding_install_interface(JSContext *ctx, JSValueConst global,
                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* Installs the TextDecoder and TextEncoder interfaces on the global object. */
 void
 ns_encoding_install(JSContext *ctx, JSValueConst global)
 {

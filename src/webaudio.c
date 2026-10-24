@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — offline Web Audio graph rendering (QuickJS).
+/* Nordstjernen Web Browser — offline Web Audio graph rendering for OfflineAudioContext.
+ * Renders oscillator, buffer source, gain, biquad, delay, compressor and waveshaper nodes.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -21,6 +22,7 @@ typedef struct ns_wa_walk {
 static void ns_wa_render(JSContext *ctx, JSValueConst node, uint32_t frames,
                          double rate, float *out, ns_wa_walk *walk);
 
+/* Reads a numeric property, returning dflt when missing or not convertible. */
 static double
 ns_wa_num(JSContext *ctx, JSValueConst obj, const char *name, double dflt)
 {
@@ -32,6 +34,7 @@ ns_wa_num(JSContext *ctx, JSValueConst obj, const char *name, double dflt)
     return d;
 }
 
+/* Reads an AudioParam's .value from node[name], or dflt. */
 static double
 ns_wa_param(JSContext *ctx, JSValueConst node, const char *name, double dflt)
 {
@@ -42,6 +45,7 @@ ns_wa_param(JSContext *ctx, JSValueConst node, const char *name, double dflt)
     return d;
 }
 
+/* Returns a property as a newly allocated string ("" if absent); caller frees. */
 static char *
 ns_wa_str(JSContext *ctx, JSValueConst obj, const char *name)
 {
@@ -53,6 +57,7 @@ ns_wa_str(JSContext *ctx, JSValueConst obj, const char *name)
     return r;
 }
 
+/* Borrows a Float32Array's aligned data pointer and element count; NULL if invalid. */
 static float *
 ns_wa_float32(JSContext *ctx, JSValueConst arr, uint32_t *count)
 {
@@ -69,6 +74,7 @@ ns_wa_float32(JSContext *ctx, JSValueConst arr, uint32_t *count)
     return (float *)(void *)(base + off);
 }
 
+/* Converts a source node's start/stop times into a frame range within the render. */
 static void
 ns_wa_window(JSContext *ctx, JSValueConst node, uint32_t frames, double rate,
              uint32_t *first, uint32_t *last)
@@ -89,6 +95,7 @@ ns_wa_window(JSContext *ctx, JSValueConst node, uint32_t frames, double rate,
     if (*last < *first) *last = *first;
 }
 
+/* Renders a sine/square/sawtooth/triangle oscillator with detune, clamped to Nyquist. */
 static void
 ns_wa_oscillator(JSContext *ctx, JSValueConst node, uint32_t frames,
                  double rate, float *out)
@@ -118,6 +125,7 @@ ns_wa_oscillator(JSContext *ctx, JSValueConst node, uint32_t frames,
     g_free(type);
 }
 
+/* Renders channel 0 of an AudioBufferSourceNode with playbackRate, resampling and loop. */
 static void
 ns_wa_buffer_source(JSContext *ctx, JSValueConst node, uint32_t frames,
                     double rate, float *out)
@@ -154,6 +162,7 @@ ns_wa_buffer_source(JSContext *ctx, JSValueConst node, uint32_t frames,
     JS_FreeValue(ctx, buf);
 }
 
+/* Renders each connected input node and mixes them into out. */
 static void
 ns_wa_sum_inputs(JSContext *ctx, JSValueConst node, uint32_t frames,
                  double rate, float *out, ns_wa_walk *walk)
@@ -179,6 +188,7 @@ ns_wa_sum_inputs(JSContext *ctx, JSValueConst node, uint32_t frames,
     JS_FreeValue(ctx, ins);
 }
 
+/* Applies a soft-knee dynamics compressor with attack/release envelope smoothing. */
 static void
 ns_wa_compressor(JSContext *ctx, JSValueConst node, uint32_t frames,
                  double rate, float *out)
@@ -212,6 +222,7 @@ ns_wa_compressor(JSContext *ctx, JSValueConst node, uint32_t frames,
     }
 }
 
+/* Applies a biquad filter (Audio EQ Cookbook coefficients); lowpass by default. */
 static void
 ns_wa_biquad(JSContext *ctx, JSValueConst node, uint32_t frames,
              double rate, float *out)
@@ -257,6 +268,7 @@ ns_wa_biquad(JSContext *ctx, JSValueConst node, uint32_t frames,
     }
 }
 
+/* Delays the buffer by delayTime, zero-filling the start. */
 static void
 ns_wa_delay(JSContext *ctx, JSValueConst node, uint32_t frames,
             double rate, float *out)
@@ -272,6 +284,7 @@ ns_wa_delay(JSContext *ctx, JSValueConst node, uint32_t frames,
     memset(out, 0, d * sizeof(float));
 }
 
+/* Maps samples through the WaveShaper curve with linear interpolation. */
 static void
 ns_wa_waveshaper(JSContext *ctx, JSValueConst node, uint32_t frames,
                  float *out)
@@ -294,6 +307,7 @@ ns_wa_waveshaper(JSContext *ctx, JSValueConst node, uint32_t frames,
     JS_FreeValue(ctx, curve);
 }
 
+/* Recursively renders a node by _kind, bounded by depth and a total render budget. */
 static void
 ns_wa_render(JSContext *ctx, JSValueConst node, uint32_t frames,
              double rate, float *out, ns_wa_walk *walk)
@@ -335,6 +349,7 @@ ns_wa_render(JSContext *ctx, JSValueConst node, uint32_t frames,
     g_free(kind);
 }
 
+/* Renders the audio graph feeding destination into out, clamped to [-1, 1]. */
 gboolean
 ns_webaudio_render_offline(JSContext *ctx, JSValueConst destination,
                            uint32_t frames, double rate, float *out)

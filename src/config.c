@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — flat key/value config loader.
+/* Nordstjernen Web Browser — runtime config: parses, saves and dumps the key = value settings file.
+ * Table-driven defaults, NS_* environment overrides (not persisted on save), proxy masking.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -33,6 +34,7 @@ set_string(char **slot, const char *value)
 
 typedef struct { const char *name; int val; } ns_enum_choice;
 
+/* Maps a value to an enum by ASCII case-insensitive name; dflt if empty or unknown. */
 static int
 parse_enum(const char *v, const ns_enum_choice *choices, gsize n, int dflt)
 {
@@ -42,6 +44,7 @@ parse_enum(const char *v, const ns_enum_choice *choices, gsize n, int dflt)
     return dflt;
 }
 
+/* Parses true/yes/on/1 or false/no/off/0; dflt otherwise. */
 static gboolean
 parse_bool(const char *v, gboolean dflt)
 {
@@ -52,6 +55,7 @@ parse_bool(const char *v, gboolean dflt)
     return parse_enum(v, map, G_N_ELEMENTS(map), dflt) ? TRUE : FALSE;
 }
 
+/* Parses a decimal int, saturating to the int range; dflt if not a number. */
 static int
 parse_int(const char *v, int dflt)
 {
@@ -64,6 +68,7 @@ parse_int(const char *v, int dflt)
     return (int)n;
 }
 
+/* Parses a referer_policy setting, accepting aliases like none, default and full. */
 static ns_referer_policy
 parse_referer_policy(const char *v, ns_referer_policy dflt)
 {
@@ -79,6 +84,7 @@ parse_referer_policy(const char *v, ns_referer_policy dflt)
     return (ns_referer_policy)parse_enum(v, map, G_N_ELEMENTS(map), dflt);
 }
 
+/* Parses a cookie_policy setting (always, first-party, never and aliases). */
 static ns_cookie_policy
 parse_cookie_policy(const char *v, ns_cookie_policy dflt)
 {
@@ -92,6 +98,7 @@ parse_cookie_policy(const char *v, ns_cookie_policy dflt)
     return (ns_cookie_policy)parse_enum(v, map, G_N_ELEMENTS(map), dflt);
 }
 
+/* Parses a color_scheme setting (auto/system, light, dark). */
 static ns_color_scheme_pref
 parse_color_scheme(const char *v, ns_color_scheme_pref dflt)
 {
@@ -104,6 +111,7 @@ parse_color_scheme(const char *v, ns_color_scheme_pref dflt)
     return (ns_color_scheme_pref)parse_enum(v, map, G_N_ELEMENTS(map), dflt);
 }
 
+/* Parses a reduced_motion setting (auto/system, no-preference/off, reduce/on). */
 static ns_reduced_motion_pref
 parse_reduced_motion(const char *v, ns_reduced_motion_pref dflt)
 {
@@ -181,6 +189,7 @@ static const cfg_field cfg_fields[] = {
 #undef FI
 #undef FE
 
+/* Resets every table-driven setting to its compiled-in default. */
 static void
 apply_default(ns_config *c)
 {
@@ -199,6 +208,7 @@ apply_default(ns_config *c)
     }
 }
 
+/* Applies one key = value setting via the field table; unknown keys are ignored. */
 static void
 apply_pair(ns_config *c, const char *key, const char *value)
 {
@@ -219,6 +229,7 @@ apply_pair(ns_config *c, const char *key, const char *value)
     }
 }
 
+/* Loads key = value lines from the config file, skipping blanks and # comments. */
 static void
 load_file(ns_config *c, const char *path)
 {
@@ -275,6 +286,7 @@ static GHashTable *g_env_overridden;
 
 static char *cfg_field_format(const ns_config *c, const char *key);
 
+/* Remembers a setting's file value before an environment override replaces it. */
 static void
 note_env_override(const ns_config *c, const char *key)
 {
@@ -286,6 +298,7 @@ note_env_override(const ns_config *c, const char *key)
     if (v) g_hash_table_insert(g_env_overridden, g_strdup(key), v);
 }
 
+/* Applies NS_* environment overrides on top of the file settings. */
 static void
 apply_env(ns_config *c)
 {
@@ -307,6 +320,7 @@ apply_env(ns_config *c)
     }
 }
 
+/* Loads defaults, the user config file and environment overrides once. */
 void
 ns_config_init(void)
 {
@@ -320,6 +334,7 @@ ns_config_init(void)
     apply_env(&g_cfg);
 }
 
+/* Frees config strings and resets the global config. */
 void
 ns_config_shutdown(void)
 {
@@ -387,6 +402,7 @@ static const char *const reduced_motion_names[] = {
     [NS_REDUCED_MOTION_PREF_REDUCE]        = "reduce",
 };
 
+/* Config-file name for a referer policy, defaulting to strict-origin-when-cross-origin. */
 static const char *
 referer_policy_name(ns_referer_policy p)
 {
@@ -395,6 +411,7 @@ referer_policy_name(ns_referer_policy p)
     return referer_policy_names[p];
 }
 
+/* Config-file name for a cookie policy, defaulting to first-party. */
 static const char *
 cookie_policy_name(ns_cookie_policy p)
 {
@@ -403,6 +420,7 @@ cookie_policy_name(ns_cookie_policy p)
     return cookie_policy_names[p];
 }
 
+/* Config-file name for a color scheme preference, defaulting to auto. */
 static const char *
 color_scheme_name(ns_color_scheme_pref p)
 {
@@ -411,6 +429,7 @@ color_scheme_name(ns_color_scheme_pref p)
     return color_scheme_names[p];
 }
 
+/* Config-file name for a reduced motion preference, defaulting to auto. */
 static const char *
 reduced_motion_name(ns_reduced_motion_pref p)
 {
@@ -452,6 +471,7 @@ cfg_field_format(const ns_config *c, const char *key)
     return NULL;
 }
 
+/* Writes all settings to the config file (mode 0600), keeping file values for env overrides. */
 gboolean
 ns_config_save(GError **error)
 {
@@ -487,6 +507,7 @@ ns_config_save(GError **error)
     return ok;
 }
 
+/* Formats the effective configuration as text with proxies masked; caller frees. */
 char *
 ns_config_dump(void)
 {

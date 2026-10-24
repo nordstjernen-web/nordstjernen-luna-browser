@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — minimalist MathML presentation layout and paint.
+/* Nordstjernen Web Browser — small MathML presentation renderer drawing with Pango and cairo.
+ * Tokens, scripts, fractions, radicals, under/over, tables and fenced rows.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -14,6 +15,7 @@
 #define NS_MATH_MAX_DEPTH 64
 #define NS_MATH_MAX_CELLS 4096
 
+/* Returns a lazily created process-wide Pango context for MathML text. */
 static NsPangoContext *
 math_pango_ctx(void)
 {
@@ -47,6 +49,7 @@ tag_is(const ns_node *n, const char *name)
     return t[0] && g_ascii_strcasecmp(t, name) == 0;
 }
 
+/* True for element nodes and non-blank text nodes. */
 static gboolean
 node_is_renderable(const ns_node *n)
 {
@@ -56,6 +59,7 @@ node_is_renderable(const ns_node *n)
     return FALSE;
 }
 
+/* Stores up to max renderable children in out; returns the total count. */
 static int
 collect_args(const ns_node *n, const ns_node **out, int max)
 {
@@ -68,6 +72,7 @@ collect_args(const ns_node *n, const ns_node **out, int max)
     return c;
 }
 
+/* Creates a serif Pango layout at fpx pixels, optionally italic; caller unrefs. */
 static NsPangoLayout *
 token_layout(const char *text, double fpx, gboolean italic)
 {
@@ -85,6 +90,7 @@ token_layout(const char *text, double fpx, gboolean italic)
     return l;
 }
 
+/* Measures a token's width, ascent and descent, drawing it at baseline by when cr is set. */
 static double
 render_token(cairo_t *cr, const char *text, double fpx, gboolean italic,
              double x, double by, double *asc, double *desc)
@@ -110,6 +116,7 @@ render_token(cairo_t *cr, const char *text, double fpx, gboolean italic,
 static double mrender(cairo_t *cr, const ns_node *n, double fpx, int depth,
                       double x, double by, double *asc, double *desc);
 
+/* Lays out children left to right (skipping annotations); returns width and max extents. */
 static double
 render_seq(cairo_t *cr, const ns_node *parent, double fpx, int depth,
            double x, double by, double *asc, double *desc)
@@ -132,6 +139,7 @@ render_seq(cairo_t *cr, const ns_node *parent, double fpx, int depth,
     return cx - x;
 }
 
+/* Side spacing for an <mo> operator: tight for brackets and commas, wider otherwise. */
 static double
 mo_spacing(const char *t, double fpx)
 {
@@ -144,6 +152,7 @@ mo_spacing(const char *t, double fpx)
     return fpx * 0.18;
 }
 
+/* Renders <msup>/<msub>: base plus a 72%-size script raised or lowered. */
 static double
 render_msup_msub(cairo_t *cr, const ns_node *n, double fpx, int depth,
                  double x, double by, double *asc, double *desc, gboolean sup)
@@ -172,6 +181,7 @@ render_msup_msub(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return bw + sw;
 }
 
+/* Renders <msubsup> with stacked subscript and superscript after the base. */
 static double
 render_msubsup(cairo_t *cr, const ns_node *n, double fpx, int depth,
                double x, double by, double *asc, double *desc)
@@ -196,6 +206,7 @@ render_msubsup(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return bw + MAX(subw, supw);
 }
 
+/* Renders <mfrac>: centered numerator and denominator around a rule on the math axis. */
 static double
 render_mfrac(cairo_t *cr, const ns_node *n, double fpx, int depth,
              double x, double by, double *asc, double *desc)
@@ -230,6 +241,7 @@ render_mfrac(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return width;
 }
 
+/* Draws a radical sign over a radicand of the given size; returns total width. */
 static double
 render_radical(cairo_t *cr, double fpx, double rw, double ra, double rd,
                double x, double by, double *out_left)
@@ -253,6 +265,7 @@ render_radical(cairo_t *cr, double fpx, double rw, double ra, double rd,
     return surd + rw + pad + top_gap;
 }
 
+/* Renders <msqrt> as a radical over the children laid out in sequence. */
 static double
 render_msqrt(cairo_t *cr, const ns_node *n, double fpx, int depth,
              double x, double by, double *asc, double *desc)
@@ -267,6 +280,7 @@ render_msqrt(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return total;
 }
 
+/* Renders <mroot> with a small index tucked before the radical. */
 static double
 render_mroot(cairo_t *cr, const ns_node *n, double fpx, int depth,
              double x, double by, double *asc, double *desc)
@@ -291,6 +305,7 @@ render_mroot(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return (ox - x) + total;
 }
 
+/* Renders <mover>/<munder>/<munderover> with centered scripts above and below. */
 static double
 render_under_over(cairo_t *cr, const ns_node *n, double fpx, int depth,
                   double x, double by, double *asc, double *desc,
@@ -334,6 +349,7 @@ render_under_over(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return width;
 }
 
+/* Renders <mtable> as a grid of centered cells vertically centered on the math axis. */
 static double
 render_mtable(cairo_t *cr, const ns_node *n, double fpx, int depth,
               double x, double by, double *asc, double *desc)
@@ -409,6 +425,7 @@ render_mtable(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return total_w;
 }
 
+/* Renders <mfenced> with open/close delimiters and per-gap separators. */
 static double
 render_mfenced(cairo_t *cr, const ns_node *n, double fpx, int depth,
                double x, double by, double *asc, double *desc)
@@ -458,6 +475,7 @@ render_mfenced(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return cx - x;
 }
 
+/* Measures (cr NULL) or paints a MathML node at baseline by; returns its advance width. */
 static double
 mrender(cairo_t *cr, const ns_node *n, double fpx, int depth,
         double x, double by, double *asc, double *desc)
@@ -540,6 +558,7 @@ mrender(cairo_t *cr, const ns_node *n, double fpx, int depth,
     return render_seq(cr, n, fpx, depth, x, by, asc, desc);
 }
 
+/* Measures a <math> subtree's width, ascent and descent at font_px. */
 void
 ns_math_measure(const ns_node *math, double font_px,
                 double *out_w, double *out_ascent, double *out_descent)
@@ -551,6 +570,7 @@ ns_math_measure(const ns_node *math, double font_px,
     if (out_descent) *out_descent = d;
 }
 
+/* Paints a <math> subtree with its top-left at (x, y) in the given color. */
 void
 ns_math_paint(cairo_t *cr, const ns_node *math, double x, double y,
               double font_px, double r, double g, double b, double a)

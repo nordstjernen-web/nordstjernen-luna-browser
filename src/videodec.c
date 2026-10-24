@@ -1,4 +1,4 @@
-/* Nordstjernen Web Browser — the video decoders behind Media Source Extensions, chosen by codec.
+/* Nordstjernen Web Browser — MSE video decoder dispatch over the AV1, H.264 and VP9 backends.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -23,6 +23,7 @@ codec_is_h264(const char *codec)
     return strcmp(codec, "avc1") == 0 || strcmp(codec, "avc3") == 0;
 }
 
+/* Returns TRUE if a decoder is available for av01, vp09 or avc1/avc3. */
 gboolean
 ns_video_decoder_supports(const char *codec)
 {
@@ -33,6 +34,7 @@ ns_video_decoder_supports(const char *codec)
     return FALSE;
 }
 
+/* Creates an AV1, H.264 or VP9 decoder for the codec, or NULL if unsupported. */
 ns_video_decoder *
 ns_video_decoder_new(const char *codec)
 {
@@ -67,6 +69,7 @@ ns_video_decoder_flush(ns_video_decoder *decoder)
     ns_h264_decoder_flush(decoder->h264);
 }
 
+/* Decodes one sample with the active backend; returns a texture if requested. */
 ns_texture *
 ns_video_decoder_decode(ns_video_decoder *decoder, GBytes *sample,
                         GBytes *config, gint64 timestamp, gboolean want_texture)

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — the one table canPlayType, mediaCapabilities and MSE answer from.
+ * Maps MIME type and codecs= to probably/maybe/no by the built decoders; picks the <source>.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -90,6 +91,7 @@ have_opus(void)
 #endif
 }
 
+/* Returns TRUE if this build has the audio support a media type row requires. */
 static gboolean
 requirement_met(ns_media_requirement requirement)
 {
@@ -102,6 +104,7 @@ requirement_met(ns_media_requirement requirement)
     return FALSE;
 }
 
+/* Returns FALSE for vorbis or opus when that decoder is not built in. */
 static gboolean
 codec_decodable(const char *codec)
 {
@@ -110,6 +113,7 @@ codec_decodable(const char *codec)
     return TRUE;
 }
 
+/* Returns TRUE if codec (or a dotted profile of it) is listed for the row and decodable. */
 static gboolean
 codec_listed(const ns_media_type_row *row, const char *codec)
 {
@@ -123,6 +127,7 @@ codec_listed(const ns_media_type_row *row, const char *codec)
     return FALSE;
 }
 
+/* Finds the supported-type row for a MIME essence and media element kind. */
 static const ns_media_type_row *
 find_row(const char *mime, ns_media_element element)
 {
@@ -133,6 +138,7 @@ find_row(const char *mime, ns_media_element element)
     return NULL;
 }
 
+/* Returns the unquoted codecs= parameter from split MIME params; caller frees. */
 static char *
 codecs_parameter(char **params)
 {
@@ -153,6 +159,7 @@ codecs_parameter(char **params)
     return NULL;
 }
 
+/* Answers canPlayType for mp4/webm video outside the table via the MSE codec check. */
 static ns_media_answer
 progressive_type_support(const char *type, const char *mime, char **params)
 {
@@ -165,6 +172,7 @@ progressive_type_support(const char *type, const char *mime, char **params)
     return answer;
 }
 
+/* canPlayType/isTypeSupported: returns probably, maybe or cannot for a MIME type. */
 ns_media_answer
 ns_media_type_support(const char *type, ns_media_element element,
                       ns_media_source source)
@@ -213,6 +221,7 @@ ns_media_answer_string(ns_media_answer answer)
     return "";
 }
 
+/* Picks the media resource: src attribute, else the first playable <source> child. */
 const char *
 ns_media_select_source(const ns_node *element)
 {

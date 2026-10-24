@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — native ShadowRealm over the QuickJS C API.
+ * Child context in the same runtime; callables cross as wrapped functions; importValue is a stub.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -83,6 +84,7 @@ realm_wrapped_call(JSContext *ctx, JSValueConst this_val, int argc,
     return realm_wrap_value(ctx, realm_obj, res);
 }
 
+/* Wraps a value crossing into dst: primitives pass, callables get wrappers, objects throw. */
 static JSValue
 realm_wrap_value(JSContext *dst, JSValueConst realm_obj, JSValue v)
 {
@@ -99,6 +101,7 @@ realm_wrap_value(JSContext *dst, JSValueConst realm_obj, JSValue v)
         "ShadowRealm: evaluation result must be a primitive or a callable");
 }
 
+/* ShadowRealm constructor: creates a fresh child context in the same runtime. */
 static JSValue
 ns_shadowrealm_ctor(JSContext *ctx, JSValueConst new_target,
                     int argc, JSValueConst *argv)
@@ -119,6 +122,7 @@ ns_shadowrealm_ctor(JSContext *ctx, JSValueConst new_target,
     return obj;
 }
 
+/* ShadowRealm.prototype.evaluate: evals in the child realm (CSP eval check), wraps result. */
 static JSValue
 ns_shadowrealm_evaluate(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -149,6 +153,7 @@ ns_shadowrealm_evaluate(JSContext *ctx, JSValueConst this_val,
     return realm_wrap_value(ctx, this_val, res);
 }
 
+/* ShadowRealm.prototype.importValue stub returning a rejected promise. */
 static JSValue
 ns_shadowrealm_importValue(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -176,6 +181,7 @@ realm_bind(JSContext *ctx, JSValueConst obj, const char *name,
     JS_SetPropertyStr(ctx, obj, name, JS_NewCFunction(ctx, fn, name, argc));
 }
 
+/* Installs a native ShadowRealm global when the engine does not provide one. */
 void
 ns_js_realm_install(JSContext *ctx, JSValueConst global)
 {

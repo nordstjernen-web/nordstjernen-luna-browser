@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — supervisor that restarts the browser on crash or hang.
+/* Nordstjernen Web Browser — supervisor process that restarts the browser on crash or hang.
+ * Respawns with backoff and recovery mode; the child runs a main-loop heartbeat hang monitor.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -45,6 +46,7 @@
 static gint g_beat;
 static int  g_hang_secs;
 
+/* Main-loop heartbeat that the hang thread watches for progress. */
 static gboolean
 ns_watchdog_beat(gpointer user_data)
 {
@@ -53,6 +55,7 @@ ns_watchdog_beat(gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
+/* Exits the process with the hang code once the heartbeat stalls past the hang limit. */
 static gpointer
 ns_watchdog_hang_thread(gpointer user_data)
 {
@@ -79,6 +82,7 @@ ns_watchdog_hang_thread(gpointer user_data)
     return NULL;
 }
 
+/* Linux: makes the child get SIGTERM when the supervisor dies; exits if already orphaned. */
 void
 ns_watchdog_child_guard_parent_death(void)
 {
@@ -89,6 +93,7 @@ ns_watchdog_child_guard_parent_death(void)
 #endif
 }
 
+/* Starts the heartbeat and hang thread; limit is the JS budget plus a minimum. */
 void
 ns_watchdog_child_arm_hang_monitor(int js_budget_ms)
 {
@@ -101,6 +106,7 @@ ns_watchdog_child_arm_hang_monitor(int js_budget_ms)
     g_thread_unref(g_thread_new("nd-watchdog", ns_watchdog_hang_thread, NULL));
 }
 
+/* Returns the text after prefix in the first matching argv entry, or NULL. */
 static const char *
 ns_watchdog_arg_value(int argc, char **argv, const char *prefix)
 {
@@ -125,6 +131,7 @@ ns_watchdog_is_child(int argc, char **argv)
     return FALSE;
 }
 
+/* Returns TRUE if the supervisor launched this child to recover a crashed session. */
 gboolean
 ns_watchdog_child_is_recovery(void)
 {
@@ -132,6 +139,7 @@ ns_watchdog_child_is_recovery(void)
     return v && g_strcmp0(v, "1") == 0;
 }
 
+/* Returns TRUE for command-line modes that run once and must not be supervised. */
 static gboolean
 ns_watchdog_is_oneshot(const char *arg)
 {
@@ -143,6 +151,7 @@ ns_watchdog_is_oneshot(const char *arg)
            g_str_has_prefix(arg, "--inspect-at=");
 }
 
+/* Decides whether to run under the watchdog from flags, one-shot modes and default. */
 gboolean
 ns_watchdog_should_supervise(int argc, char **argv, gboolean enabled_by_default)
 {
@@ -172,6 +181,7 @@ typedef struct {
     int         exit_status;
 } ns_watchdog;
 
+/* Windows: shows a startup-failure message box naming the diagnostic log. */
 static void
 ns_watchdog_report_failure(const char *detail)
 {
@@ -196,6 +206,7 @@ ns_watchdog_report_failure(const char *detail)
 #endif
 }
 
+/* Terminates the child: SIGTERM, SIGKILL when forced, or TerminateProcess on Windows. */
 static void
 ns_watchdog_kill(GPid pid, gboolean force)
 {
@@ -216,6 +227,7 @@ typedef struct {
     size_t cap;
 } ns_watchdog_wbuf;
 
+/* Grows a wide-char buffer for extra chars plus NUL; FALSE on overflow. */
 static gboolean
 ns_watchdog_wbuf_reserve(ns_watchdog_wbuf *b, size_t extra)
 {
@@ -251,6 +263,7 @@ ns_watchdog_wbuf_append_many(ns_watchdog_wbuf *b, wchar_t ch, size_t count)
     return TRUE;
 }
 
+/* Appends arg quoted per the MSVC CommandLineToArgvW backslash rules. */
 static gboolean
 ns_watchdog_wbuf_append_quoted(ns_watchdog_wbuf *b, const wchar_t *arg)
 {
@@ -280,6 +293,7 @@ ns_watchdog_wbuf_append_quoted(ns_watchdog_wbuf *b, const wchar_t *arg)
     return ns_watchdog_wbuf_append_char(b, L'"');
 }
 
+/* Builds a quoted UTF-16 Windows command line from argv; caller frees. */
 static wchar_t *
 ns_watchdog_build_command_line(char **argv)
 {
@@ -307,6 +321,7 @@ ns_watchdog_restore_recover_env(const wchar_t *old)
     SetEnvironmentVariableW(L"NS_WATCHDOG_RECOVER", old && *old ? old : NULL);
 }
 
+/* Starts the child with CreateProcessW, setting NS_WATCHDOG_RECOVER only for that launch. */
 static gboolean
 ns_watchdog_spawn_win32(ns_watchdog *wd, gboolean recover, GPid *pid,
                         GError **err)
@@ -354,6 +369,7 @@ ns_watchdog_spawn_win32(ns_watchdog *wd, gboolean recover, GPid *pid,
 }
 #endif
 
+/* Respawns the child; only the first retry of a crash streak runs in recovery mode. */
 static gboolean
 ns_watchdog_respawn_cb(gpointer user_data)
 {
@@ -363,6 +379,7 @@ ns_watchdog_respawn_cb(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* Schedules a respawn after backoff, giving up after too many failures in a burst. */
 static void
 ns_watchdog_schedule_restart(ns_watchdog *wd)
 {
@@ -385,6 +402,7 @@ ns_watchdog_schedule_restart(ns_watchdog *wd)
     g_timeout_add(NS_WATCHDOG_BACKOFF_MS, ns_watchdog_respawn_cb, wd);
 }
 
+/* Child-exit handler: stops on clean exit or termination signals, else restarts. */
 static void
 ns_watchdog_child_exited(GPid pid, gint status, gpointer user_data)
 {
@@ -434,6 +452,7 @@ ns_watchdog_child_exited(GPid pid, gint status, gpointer user_data)
     ns_watchdog_schedule_restart(wd);
 }
 
+/* Launches the browser child (optionally in recovery mode) and watches for its exit. */
 static gboolean
 ns_watchdog_spawn(ns_watchdog *wd, gboolean recover)
 {
@@ -481,6 +500,7 @@ ns_watchdog_force_kill_cb(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* SIGINT/SIGTERM handler: asks the child to stop, force-killing after a grace period. */
 static gboolean
 ns_watchdog_signal_cb(gpointer user_data)
 {
@@ -500,6 +520,7 @@ ns_watchdog_signal_cb(gpointer user_data)
 }
 #endif
 
+/* Builds child argv without watchdog flags, adding the child flag and session path. */
 static char **
 ns_watchdog_build_child_argv(const char *self_exe, int argc, char **argv,
                              const char *session_path)
@@ -520,6 +541,7 @@ ns_watchdog_build_child_argv(const char *self_exe, int argc, char **argv,
     return (char **)g_ptr_array_free(args, FALSE);
 }
 
+/* Supervisor main: runs and restarts the browser child; returns its final exit status. */
 int
 ns_watchdog_run_supervisor(const char *self_exe, int argc, char **argv)
 {

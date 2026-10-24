@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — HTML canvas 2D, Path2D, ImageBitmap, DOMMatrix (QuickJS).
+ * Cairo-backed: gradients, shadows, compositing, ImageData, OffscreenCanvas, PNG toBlob.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -104,6 +105,7 @@ ns_canvas_state_free(gpointer data)
     g_free(st);
 }
 
+/* Destroys a cairo context now, or defers it while canvas calls are in flight. */
 static void
 ns_canvas_retire(ns_js *js, cairo_t *cr)
 {
@@ -117,6 +119,7 @@ ns_canvas_retire(ns_js *js, cairo_t *cr)
     g_ptr_array_add(js->canvas_retired, cr);
 }
 
+/* Reallocates the backing surface at w x h and resets 2D context state to spec defaults. */
 static void
 ns_canvas_state_reset(ns_js *js, ns_canvas_state *st, int w, int h)
 {
@@ -150,6 +153,7 @@ ns_image_bitmap_is(JSValueConst v)
     return JS_GetOpaque(v, ns_image_bitmap_class_id) != NULL;
 }
 
+/* ImageBitmap.close(): releases the bitmap surface and zeroes its dimensions. */
 static JSValue
 ns_image_bitmap_close(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -164,6 +168,7 @@ ns_image_bitmap_close(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Wraps a surface (takes ownership) in an ImageBitmap object; returns null if empty. */
 static JSValue
 ns_image_bitmap_make(JSContext *ctx, cairo_surface_t *surf, int w, int h,
                      gboolean origin_clean)
@@ -185,6 +190,7 @@ ns_image_bitmap_make(JSContext *ctx, cairo_surface_t *surf, int w, int h,
     return obj;
 }
 
+/* Converts ImageData RGBA bytes to a new premultiplied ARGB32 surface; NULL on bad input. */
 static cairo_surface_t *
 ns_image_bitmap_from_imagedata(JSContext *ctx, JSValueConst src,
                                int *out_w, int *out_h)
@@ -239,6 +245,7 @@ ns_image_bitmap_from_imagedata(JSContext *ctx, JSValueConst src,
     return surf;
 }
 
+/* Copies the rw x rh region at (sx, sy) of src into a new surface; caller owns result. */
 static cairo_surface_t *
 ns_image_bitmap_crop(cairo_surface_t *src, int sx, int sy, int rw, int rh)
 {
@@ -254,6 +261,7 @@ ns_image_bitmap_crop(cairo_surface_t *src, int sx, int sy, int rw, int rh)
     return out;
 }
 
+/* Copies a Blob's internal _b byte array into a new buffer (max 256 MiB); caller frees. */
 static guint8 *
 ns_blob_byte_array(JSContext *ctx, JSValueConst src, gsize *out_len)
 {
@@ -279,6 +287,7 @@ ns_blob_byte_array(JSContext *ctx, JSValueConst src, gsize *out_len)
     return out;
 }
 
+/* Decodes a Blob's encoded image bytes into a new ARGB32 surface; NULL on failure. */
 static cairo_surface_t *
 ns_image_bitmap_from_blob(JSContext *ctx, JSValueConst src, int *out_w, int *out_h)
 {
@@ -317,6 +326,7 @@ ns_image_bitmap_from_blob(JSContext *ctx, JSValueConst src, int *out_w, int *out
     return surf;
 }
 
+/* Rejects the promise with an InvalidStateError DOMException and frees both resolvers. */
 static void
 ns_reject_image_decode(JSContext *ctx, JSValue resolvers[2])
 {
@@ -344,6 +354,7 @@ ns_reject_image_decode(JSContext *ctx, JSValue resolvers[2])
     JS_FreeValue(ctx, resolvers[1]);
 }
 
+/* Throws a DOMException with the given name, falling back to a plain Error. */
 static JSValue
 ns_canvas_throw_dom(JSContext *ctx, const char *name, const char *msg)
 {
@@ -365,6 +376,7 @@ ns_canvas_throw_dom(JSContext *ctx, const char *name, const char *msg)
     return JS_Throw(ctx, exc);
 }
 
+/* createImageBitmap(): builds a bitmap from ImageData, Blob or drawable source, with crop. */
 JSValue
 ns_window_create_image_bitmap(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
@@ -431,6 +443,7 @@ ns_window_create_image_bitmap(JSContext *ctx, JSValueConst this_val,
     return promise;
 }
 
+/* Snapshots the OffscreenCanvas surface into a new ImageBitmap, keeping origin-clean. */
 static JSValue
 ns_offscreen_transferToImageBitmap(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
@@ -458,6 +471,7 @@ ns_offscreen_transferToImageBitmap(JSContext *ctx, JSValueConst this_val,
     return ns_image_bitmap_make(ctx, copy, w, h, !st || st->origin_clean);
 }
 
+/* Reads 2D matrix components a..f from an object, defaulting to the identity. */
 static void
 ns_dommatrix_read(JSContext *ctx, JSValueConst v, double *a, double *b,
                   double *c, double *d, double *e, double *f)
@@ -473,6 +487,7 @@ ns_dommatrix_read(JSContext *ctx, JSValueConst v, double *a, double *b,
     t = JS_GetPropertyStr(ctx, v, "f"); if (!JS_IsUndefined(t) && !JS_IsNull(t)) JS_ToFloat64(ctx, f, t); JS_FreeValue(ctx, t);
 }
 
+/* Stores a..f, the m11..m42 aliases, is2D and isIdentity on a DOMMatrix object. */
 static void
 ns_dommatrix_write(JSContext *ctx, JSValueConst obj, double a, double b,
                    double c, double d, double e, double f)
@@ -495,6 +510,7 @@ ns_dommatrix_write(JSContext *ctx, JSValueConst obj, double a, double b,
         ? JS_TRUE : JS_FALSE);
 }
 
+/* DOMMatrix.multiply(): returns a new matrix this x other (post-multiplication). */
 static JSValue
 ns_dommatrix_multiply(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -514,6 +530,7 @@ ns_dommatrix_multiply(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, a, b, c, d, e, f, FALSE);
 }
 
+/* DOMMatrix.multiplySelf(): post-multiplies this by other in place and returns this. */
 static JSValue
 ns_dommatrix_multiplySelf(JSContext *ctx, JSValueConst this_val,
                           int argc, JSValueConst *argv)
@@ -529,6 +546,7 @@ ns_dommatrix_multiplySelf(JSContext *ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+/* Returns a new matrix translated by (tx, ty) in the matrix's local coordinate space. */
 static JSValue
 ns_dommatrix_translate(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -541,6 +559,7 @@ ns_dommatrix_translate(JSContext *ctx, JSValueConst this_val,
                              f + b * tx + d * ty, FALSE);
 }
 
+/* Returns a new matrix scaled by (sx, sy); sy defaults to sx. */
 static JSValue
 ns_dommatrix_scale(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -552,6 +571,7 @@ ns_dommatrix_scale(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, a * sx, b * sx, c * sy, d * sy, e, f, FALSE);
 }
 
+/* Returns a new matrix rotated by the given angle in degrees. */
 static JSValue
 ns_dommatrix_rotate(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -568,6 +588,7 @@ ns_dommatrix_rotate(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, na, nb, nc, nd, e, f, FALSE);
 }
 
+/* Returns a new inverted matrix, or an all-NaN matrix when singular. */
 static JSValue
 ns_dommatrix_inverse(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -588,6 +609,7 @@ ns_dommatrix_inverse(JSContext *ctx, JSValueConst this_val,
         (c * f - d * e) * inv, (b * e - a * f) * inv, FALSE);
 }
 
+/* Inverts the matrix in place (all NaN when singular) and returns this. */
 static JSValue
 ns_dommatrix_invertSelf(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -615,6 +637,7 @@ ns_obj_double(JSContext *ctx, JSValueConst obj, const char *key, double *out)
     JS_FreeValue(ctx, v);
 }
 
+/* Applies the 2D affine matrix to a DOMPoint-like {x,y,z,w}; z and w pass through. */
 static JSValue
 ns_dommatrix_transformPoint(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -649,6 +672,7 @@ ns_dommatrix_toString(JSContext *ctx, JSValueConst this_val,
     return JS_NewString(ctx, buf);
 }
 
+/* Creates a plain-object 2D DOMMatrix with methods; readonly omits the *Self mutators. */
 static JSValue
 ns_dommatrix_make(JSContext *ctx, double a, double b, double c, double d,
                   double e, double f, gboolean readonly)
@@ -670,6 +694,7 @@ ns_dommatrix_make(JSContext *ctx, double a, double b, double c, double d,
     return obj;
 }
 
+/* Builds a DOMMatrix from a 6-element array or a matrix-like object, else identity. */
 static JSValue
 ns_dommatrix_ctor_impl(JSContext *ctx, int argc, JSValueConst *argv,
                        gboolean readonly)
@@ -708,6 +733,7 @@ ns_window_dommatrix_readonly_ctor(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_ctor_impl(ctx, argc, argv, TRUE);
 }
 
+/* OffscreenCanvas(w, h): backs it with an orphan canvas element plus transfer/blob methods. */
 JSValue
 ns_window_offscreen_canvas_ctor(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -734,6 +760,7 @@ ns_window_offscreen_canvas_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Parses a canvas width/height attribute (1..8192), falling back to defv when invalid. */
 static int
 ns_canvas_dim_from_attr(const ns_node *el, const char *name, int defv)
 {
@@ -756,6 +783,7 @@ ns_canvas_parse_color(const char *s, double *r, double *g, double *b, double *a)
     return TRUE;
 }
 
+/* Returns the element's canvas state, creating it or resetting it when its size changed. */
 ns_canvas_state *
 ns_canvas_state_for(ns_js *js, const ns_node *el)
 {
@@ -785,6 +813,7 @@ ns_js_canvas_surface(ns_js *js, const ns_node *n)
     return st ? st->surf : NULL;
 }
 
+/* Resolves a 2D context object's backing canvas state via its _node element. */
 static ns_canvas_state *
 ns_ctx_state(JSContext *ctx, JSValueConst this_val)
 {
@@ -795,6 +824,7 @@ ns_ctx_state(JSContext *ctx, JSValueConst this_val)
     return ns_canvas_state_for(js_from_ctx(ctx), n);
 }
 
+/* Schedules a repaint of the canvas element backing a 2D context object. */
 static void
 ns_ctx_request_repaint(JSContext *ctx, JSValueConst this_val)
 {
@@ -814,6 +844,7 @@ ns_conic_stop_cmp(const void *pa, const void *pb)
     return da < db ? -1 : da > db ? 1 : 0;
 }
 
+/* Linearly interpolates the color at t across sorted conic gradient stops, clamping at ends. */
 static void
 ns_conic_color_at(const ns_conic_stop *stops, guint n, double t,
                   double *r, double *g, double *b, double *a)
@@ -841,6 +872,7 @@ ns_conic_color_at(const ns_conic_stop *stops, guint n, double t,
     }
 }
 
+/* Approximates a conic gradient as a 256-sector cairo mesh pattern around (cx, cy). */
 static cairo_pattern_t *
 ns_ctx_build_conic_pattern(JSContext *ctx, JSValueConst obj)
 {
@@ -901,6 +933,7 @@ ns_ctx_build_conic_pattern(JSContext *ctx, JSValueConst obj)
     return pat;
 }
 
+/* Builds a cairo pattern from a JS gradient/pattern object; clears origin_clean if tainted. */
 static cairo_pattern_t *
 ns_ctx_build_pattern(JSContext *ctx, JSValueConst obj, gboolean *origin_clean)
 {
@@ -1001,6 +1034,7 @@ ns_ctx_build_pattern(JSContext *ctx, JSValueConst obj, gboolean *origin_clean)
     return pat;
 }
 
+/* Returns the context's globalAlpha clamped to [0, 1]. */
 static double
 ns_ctx_global_alpha(JSContext *ctx, JSValueConst this_val)
 {
@@ -1013,6 +1047,7 @@ ns_ctx_global_alpha(JSContext *ctx, JSValueConst this_val)
     return ga;
 }
 
+/* Maps a globalCompositeOperation keyword to a cairo operator; unknown values give OVER. */
 static cairo_operator_t
 ns_ctx_parse_composite(const char *s)
 {
@@ -1046,6 +1081,7 @@ ns_ctx_parse_composite(const char *s)
     return CAIRO_OPERATOR_OVER;
 }
 
+/* Sets the cairo operator from the context's current globalCompositeOperation. */
 static void
 ns_ctx_apply_composite(JSContext *ctx, JSValueConst this_val, cairo_t *cr)
 {
@@ -1059,6 +1095,7 @@ ns_ctx_apply_composite(JSContext *ctx, JSValueConst this_val, cairo_t *cr)
     cairo_set_operator(cr, op);
 }
 
+/* Returns imageSmoothingEnabled, treating undefined or null as true. */
 static gboolean
 ns_ctx_image_smoothing(JSContext *ctx, JSValueConst this_val)
 {
@@ -1070,6 +1107,7 @@ ns_ctx_image_smoothing(JSContext *ctx, JSValueConst this_val)
     return on;
 }
 
+/* Copies JS-side 2D context properties (styles, line, font, shadow, dash) into native state. */
 static void
 ns_ctx_sync_styles(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
 {
@@ -1204,6 +1242,7 @@ ns_ctx_sync_styles(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
     JS_FreeValue(ctx, v);
 }
 
+/* True when the shadow color is visible and an offset or blur is set. */
 static gboolean
 ns_ctx_has_shadow(const ns_canvas_state *st)
 {
@@ -1211,6 +1250,7 @@ ns_ctx_has_shadow(const ns_canvas_state *st)
     return st->shadow_ox != 0 || st->shadow_oy != 0 || st->shadow_blur > 0;
 }
 
+/* Separable box blur of an ARGB32 buffer in place, radius capped at 64. */
 static void
 ns_box_blur_argb(uint8_t *data, int w, int h, int stride, int radius)
 {
@@ -1257,6 +1297,7 @@ ns_box_blur_argb(uint8_t *data, int w, int h, int stride, int radius)
     (void)span;
 }
 
+/* Runs draw, first compositing a blurred, tinted offscreen copy as the canvas shadow. */
 static void
 ns_ctx_with_shadow(ns_canvas_state *st, ns_ctx_drawfn draw, void *ud)
 {
@@ -1310,6 +1351,7 @@ ns_ctx_with_shadow(ns_canvas_state *st, ns_ctx_drawfn draw, void *ud)
     draw(st->cr, ud);
 }
 
+/* Sets the cairo source to the fill pattern or fill color scaled by globalAlpha. */
 static void
 ns_ctx_set_fill_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
 {
@@ -1319,6 +1361,7 @@ ns_ctx_set_fill_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *s
                                st->fill_a * ga);
 }
 
+/* Sets the cairo source to the stroke pattern or stroke color scaled by globalAlpha. */
 static void
 ns_ctx_set_stroke_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state *st)
 {
@@ -1328,6 +1371,7 @@ ns_ctx_set_stroke_source(JSContext *ctx, JSValueConst this_val, ns_canvas_state 
                                st->stroke_a * ga);
 }
 
+/* Shadow-aware draw callback filling a rect; offscreen passes use the plain fill color. */
 static void
 ns_draw_fillrect(cairo_t *cr, void *vud)
 {
@@ -1344,6 +1388,7 @@ ns_draw_fillrect(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
+/* Shadow-aware draw callback stroking a rect; offscreen passes use the plain stroke color. */
 static void
 ns_draw_strokerect(cairo_t *cr, void *vud)
 {
@@ -1361,6 +1406,7 @@ ns_draw_strokerect(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
+/* CanvasRenderingContext2D.fillRect() with shadow and composite operation applied. */
 static JSValue
 ns_ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1378,6 +1424,7 @@ ns_ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return JS_UNDEFINED;
 }
 
+/* CanvasRenderingContext2D.strokeRect() with shadow and composite operation applied. */
 static JSValue
 ns_ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1395,6 +1442,7 @@ ns_ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst 
     return JS_UNDEFINED;
 }
 
+/* clearRect(): clears the rectangle to transparent black under the current transform. */
 static JSValue
 ns_ctx_clearRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1448,6 +1496,7 @@ ns_ctx_lineTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
+/* arc(): appends a circular arc; throws IndexSizeError for a negative radius. */
 static JSValue
 ns_ctx_arc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1487,6 +1536,7 @@ ns_value_is_path2d(JSValueConst v)
     return JS_GetOpaque(v, ns_path2d_class_id) != NULL;
 }
 
+/* Replaces target's current path with a copy of the Path2D's recorded path. */
 static void
 ns_replay_path2d(cairo_t *target, JSValueConst path_v)
 {
@@ -1505,6 +1555,7 @@ ns_parse_fill_rule(const char *s)
     return CAIRO_FILL_RULE_WINDING;
 }
 
+/* Parses the (path?, fillRule?) overload; swaps in a Path2D and returns the saved path. */
 static cairo_path_t *
 ns_ctx_prepare_path_and_rule(JSContext *ctx, cairo_t *cr,
                              int argc, JSValueConst *argv)
@@ -1528,6 +1579,7 @@ ns_ctx_prepare_path_and_rule(JSContext *ctx, cairo_t *cr,
     return saved;
 }
 
+/* Restores a path saved by ns_ctx_prepare_path_and_rule and frees it. */
 static void
 ns_ctx_restore_path(cairo_t *cr, cairo_path_t *saved)
 {
@@ -1537,6 +1589,7 @@ ns_ctx_restore_path(cairo_t *cr, cairo_path_t *saved)
     cairo_path_destroy(saved);
 }
 
+/* Shadow-aware callback filling the current path, or the snapshot when offscreen. */
 static void
 ns_draw_fillpath(cairo_t *cr, void *vud)
 {
@@ -1556,6 +1609,7 @@ ns_draw_fillpath(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
+/* Shadow-aware callback stroking the current path, or the snapshot when offscreen. */
 static void
 ns_draw_strokepath(cairo_t *cr, void *vud)
 {
@@ -1575,6 +1629,7 @@ ns_draw_strokepath(cairo_t *cr, void *vud)
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 }
 
+/* fill([path], [fillRule]): fills with shadow, keeping the context's own current path. */
 static JSValue
 ns_ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1595,6 +1650,7 @@ ns_ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* stroke([path]): strokes with shadow, keeping the context's own current path. */
 static JSValue
 ns_ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1633,6 +1689,7 @@ static const char *ns_ctx_savable_props[] = {
     "_dashes",
 };
 
+/* save(): pushes cairo state and a snapshot of JS-side context attributes. */
 static JSValue
 ns_ctx_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1661,6 +1718,7 @@ ns_ctx_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
     return JS_UNDEFINED;
 }
 
+/* restore(): pops the attribute snapshot and cairo state; no-op on an empty stack. */
 static JSValue
 ns_ctx_restore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1716,6 +1774,7 @@ ns_ctx_rotate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *arg
     return JS_UNDEFINED;
 }
 
+/* Parses a CSS font shorthand into a Pango description; px/pt size, rest as family/style. */
 static NsPangoFontDescription *
 ns_canvas_font_desc(const char *css_font)
 {
@@ -1776,6 +1835,7 @@ ns_ctx_direction_is_rtl(JSContext *ctx, JSValueConst this_val)
     return rtl;
 }
 
+/* Lays out text and fills or strokes it per textAlign/textBaseline/direction and maxWidth. */
 static void
 ns_ctx_paint_text(JSContext *ctx, JSValueConst this_val,
                   ns_canvas_state *st, const char *text,
@@ -1849,6 +1909,7 @@ ns_ctx_paint_text(JSContext *ctx, JSValueConst this_val,
     g_object_unref(layout);
 }
 
+/* Shared fillText/strokeText body: syncs styles, paints text and requests repaint. */
 static JSValue
 ns_ctx_draw_text(JSContext *ctx, JSValueConst this_val, int argc,
                  JSValueConst *argv, gboolean stroke)
@@ -1874,6 +1935,7 @@ ns_ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *a
     return ns_ctx_draw_text(ctx, this_val, argc, argv, FALSE);
 }
 
+/* measureText(): returns a TextMetrics-like object from the Pango layout and font metrics. */
 static JSValue
 ns_ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1922,6 +1984,7 @@ ns_ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
     return obj;
 }
 
+/* quadraticCurveTo() by converting the quadratic Bezier to an equivalent cubic. */
 static JSValue
 ns_ctx_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
                         int argc, JSValueConst *argv)
@@ -1955,6 +2018,7 @@ ns_ctx_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* arcTo(): line to the tangent point plus an arc of radius r tangent to both lines. */
 static JSValue
 ns_ctx_arcTo(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
@@ -2002,6 +2066,7 @@ ns_ctx_arcTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* ellipse(): rotated, scaled unit arc; throws IndexSizeError on negative radii. */
 static JSValue
 ns_ctx_ellipse(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -2030,6 +2095,7 @@ ns_ctx_ellipse(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* clip([path], [fillRule]): intersects the clip with the path, keeping the current path. */
 static JSValue
 ns_ctx_clip(JSContext *ctx, JSValueConst this_val,
             int argc, JSValueConst *argv)
@@ -2042,6 +2108,7 @@ ns_ctx_clip(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Reads a..f from a DOMMatrix-like object into a cairo matrix; FALSE if not an object. */
 static gboolean
 ns_matrix_from_obj(JSContext *ctx, JSValueConst v, cairo_matrix_t *m)
 {
@@ -2058,6 +2125,7 @@ ns_matrix_from_obj(JSContext *ctx, JSValueConst v, cairo_matrix_t *m)
     return TRUE;
 }
 
+/* setTransform(): resets to identity, a DOMMatrix-like object, or six components. */
 static JSValue
 ns_ctx_setTransform(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -2083,6 +2151,7 @@ ns_ctx_setTransform(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* transform(a..f): multiplies the current transform by the given matrix. */
 static JSValue
 ns_ctx_transform(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -2109,6 +2178,7 @@ ns_ctx_resetTransform(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* setLineDash(): stores sanitized segments in _dashes, doubling odd-length lists. */
 static JSValue
 ns_ctx_setLineDash(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -2138,6 +2208,7 @@ ns_ctx_setLineDash(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* getLineDash(): returns a fresh copy of the stored _dashes array. */
 static JSValue
 ns_ctx_getLineDash(JSContext *ctx, JSValueConst this_val,
                    int argc, JSValueConst *argv)
@@ -2158,6 +2229,7 @@ ns_ctx_getLineDash(JSContext *ctx, JSValueConst this_val,
     return out;
 }
 
+/* addColorStop(): validates offset and color, then appends the stop to _stops. */
 static JSValue
 ns_ctx_gradient_addColorStop(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -2196,6 +2268,7 @@ ns_ctx_gradient_addColorStop(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Resolves an image source (ImageBitmap, canvas, img) to a surface reference; caller unrefs. */
 static cairo_surface_t *
 ns_ctx_drawimage_source(JSContext *ctx, JSValueConst src, int *out_w, int *out_h,
                         gboolean *origin_clean)
@@ -2279,6 +2352,7 @@ ns_ctx_drawimage_source(JSContext *ctx, JSValueConst src, int *out_w, int *out_h
     return surf;
 }
 
+/* drawImage() 3/5/9-argument forms; clips to the source rect and taints on cross-origin. */
 static JSValue
 ns_ctx_drawImage(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -2350,6 +2424,7 @@ ns_ctx_drawImage(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* createPattern(): returns a pattern descriptor object, or null if the image is unusable. */
 static JSValue
 ns_ctx_createPattern(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -2381,6 +2456,7 @@ ns_ctx_createPattern(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* createLinearGradient(): returns a gradient descriptor object with addColorStop. */
 static JSValue
 ns_ctx_createLinearGradient(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -2398,6 +2474,7 @@ ns_ctx_createLinearGradient(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* createRadialGradient(): returns a gradient descriptor; IndexSizeError on negative radii. */
 static JSValue
 ns_ctx_createRadialGradient(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -2422,6 +2499,7 @@ ns_ctx_createRadialGradient(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* createConicGradient(angle, x, y): returns a conic gradient descriptor object. */
 static JSValue
 ns_ctx_createConicGradient(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -2438,6 +2516,7 @@ ns_ctx_createConicGradient(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* Creates an empty object using ImageData.prototype when the constructor exists. */
 static JSValue
 ns_image_data_new_object(JSContext *ctx)
 {
@@ -2453,6 +2532,7 @@ ns_image_data_new_object(JSContext *ctx)
     return obj;
 }
 
+/* Builds an ImageData object around data (consumed) with width, height and colorSpace. */
 static JSValue
 ns_image_data_wrap(JSContext *ctx, int w, int h, JSValue data)
 {
@@ -2468,6 +2548,7 @@ ns_image_data_wrap(JSContext *ctx, int w, int h, JSValue data)
     return obj;
 }
 
+/* Creates ImageData of w x h backed by a Uint8ClampedArray copy of rgba, or zeros. */
 static JSValue
 ns_image_data_make(JSContext *ctx, int w, int h, const uint8_t *rgba)
 {
@@ -2495,6 +2576,7 @@ ns_image_data_make(JSContext *ctx, int w, int h, const uint8_t *rgba)
     return ns_image_data_wrap(ctx, w, h, data);
 }
 
+/* ImageData(w, h) or ImageData(Uint8ClampedArray, w[, h]) with spec size validation. */
 static JSValue
 ns_image_data_ctor(JSContext *ctx, JSValueConst new_target,
                    int argc, JSValueConst *argv)
@@ -2552,6 +2634,7 @@ ns_image_data_ctor(JSContext *ctx, JSValueConst new_target,
     return ns_image_data_wrap(ctx, (int)w, (int)h, JS_DupValue(ctx, argv[0]));
 }
 
+/* Defines the global ImageData constructor with a toStringTag-bearing prototype. */
 void
 ns_image_data_install(JSContext *ctx, JSValueConst global)
 {
@@ -2574,6 +2657,7 @@ ns_image_data_install(JSContext *ctx, JSValueConst global)
                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* createImageData(w, h) or (imagedata): new zeroed ImageData using absolute dimensions. */
 static JSValue
 ns_ctx_createImageData(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -2599,6 +2683,7 @@ ns_ctx_createImageData(JSContext *ctx, JSValueConst this_val,
     return ns_image_data_make(ctx, (int)aw, (int)ah, NULL);
 }
 
+/* getImageData(): un-premultiplied RGBA copy of a region; SecurityError if canvas tainted. */
 static JSValue
 ns_ctx_getImageData(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -2671,6 +2756,7 @@ ns_ctx_getImageData(JSContext *ctx, JSValueConst this_val,
     return result;
 }
 
+/* putImageData() with optional dirty rect; premultiplies pixels, ignoring the transform. */
 static JSValue
 ns_ctx_putImageData(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -2758,6 +2844,7 @@ ns_ctx_strokeText(JSContext *ctx, JSValueConst this_val,
     return ns_ctx_draw_text(ctx, this_val, argc, argv, TRUE);
 }
 
+/* Adds a closed rounded-rect subpath, clamping radii to half the shorter side. */
 static void
 ns_round_rect_subpath(cairo_t *cr, double x, double y, double w, double h,
                       double rtl, double rtr, double rbr, double rbl)
@@ -2779,6 +2866,7 @@ ns_round_rect_subpath(cairo_t *cr, double x, double y, double w, double h,
     cairo_close_path(cr);
 }
 
+/* Expands a roundRect radii number or 1-4 element list into corners; FALSE if any negative. */
 static gboolean
 ns_extract_radii(JSContext *ctx, JSValueConst v,
                  double *rtl, double *rtr, double *rbr, double *rbl)
@@ -2804,6 +2892,7 @@ ns_extract_radii(JSContext *ctx, JSValueConst v,
     return !(*rtl < 0 || *rtr < 0 || *rbr < 0 || *rbl < 0);
 }
 
+/* roundRect(): adds a rounded-rect subpath; RangeError on negative radii. */
 static JSValue
 ns_ctx_roundRect(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -2822,6 +2911,7 @@ ns_ctx_roundRect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* reset(): clears the bitmap and restores every context attribute to its default. */
 static JSValue
 ns_ctx_reset(JSContext *ctx, JSValueConst this_val,
              int argc, JSValueConst *argv)
@@ -2877,6 +2967,7 @@ ns_ctx_reset(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* getTransform(): returns the current cairo matrix as a new DOMMatrix. */
 static JSValue
 ns_ctx_getTransform(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -2888,6 +2979,7 @@ ns_ctx_getTransform(JSContext *ctx, JSValueConst this_val,
     return ns_dommatrix_make(ctx, m.xx, m.yx, m.xy, m.yy, m.x0, m.y0, FALSE);
 }
 
+/* isPointInPath([path], x, y, [fillRule]) via cairo_in_fill, preserving the current path. */
 static JSValue
 ns_ctx_isPointInPath(JSContext *ctx, JSValueConst this_val,
                      int argc, JSValueConst *argv)
@@ -2916,6 +3008,7 @@ ns_ctx_isPointInPath(JSContext *ctx, JSValueConst this_val,
     return in ? JS_TRUE : JS_FALSE;
 }
 
+/* isPointInStroke([path], x, y) via cairo_in_stroke with the current line width. */
 static JSValue
 ns_ctx_isPointInStroke(JSContext *ctx, JSValueConst this_val,
                        int argc, JSValueConst *argv)
@@ -2939,6 +3032,7 @@ ns_ctx_isPointInStroke(JSContext *ctx, JSValueConst this_val,
     return in ? JS_TRUE : JS_FALSE;
 }
 
+/* Fetches the Path2D's recording context into out; throws TypeError if not a Path2D. */
 static JSValue
 ns_path2d_get_cr(JSContext *ctx, JSValueConst this_val, cairo_t **out)
 {
@@ -2960,6 +3054,7 @@ ns_path2d_moveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Path2D.lineTo(), implicitly moving to the point when there is no current point. */
 static JSValue
 ns_path2d_lineTo(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -3001,6 +3096,7 @@ ns_path2d_bezierCurveTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Path2D.quadraticCurveTo() by converting the quadratic Bezier to a cubic. */
 static JSValue
 ns_path2d_quadraticCurveTo(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
@@ -3040,6 +3136,7 @@ ns_path2d_arc(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Path2D.arcTo(): tangent line plus an arc of radius r fitted between the two lines. */
 static JSValue
 ns_path2d_arcTo(JSContext *ctx, JSValueConst this_val,
                 int argc, JSValueConst *argv)
@@ -3082,6 +3179,7 @@ ns_path2d_arcTo(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Path2D.ellipse(): appends a rotated, scaled unit-circle arc. */
 static JSValue
 ns_path2d_ellipse(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -3122,6 +3220,7 @@ ns_path2d_rect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Path2D.roundRect(); RangeError on negative radii. */
 static JSValue
 ns_path2d_roundRect(JSContext *ctx, JSValueConst this_val,
                     int argc, JSValueConst *argv)
@@ -3141,6 +3240,7 @@ ns_path2d_roundRect(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Path2D.addPath(path, [matrix]): appends another path, optionally transformed. */
 static JSValue
 ns_path2d_addPath(JSContext *ctx, JSValueConst this_val,
                   int argc, JSValueConst *argv)
@@ -3188,6 +3288,7 @@ ns_path2d_attach_methods(JSContext *ctx, JSValueConst obj)
     ns_bind_fn(ctx, obj, "addPath",         ns_path2d_addPath,         2);
 }
 
+/* Skips whitespace and commas in SVG path data. */
 static const char *
 ns_svg_skip_ws(const char *p)
 {
@@ -3195,6 +3296,7 @@ ns_svg_skip_ws(const char *p)
     return p;
 }
 
+/* Reads the next number from SVG path data, advancing *pp; FALSE if none. */
 static gboolean
 ns_svg_read_number(const char **pp, double *out)
 {
@@ -3207,6 +3309,7 @@ ns_svg_read_number(const char **pp, double *out)
     return TRUE;
 }
 
+/* Appends an SVG elliptical arc using the SVG 1.1 endpoint-to-center conversion (F.6.5). */
 static void
 ns_path2d_arc_svg(cairo_t *cr, double x1, double y1,
                   double rx, double ry, double phi_deg,
@@ -3252,6 +3355,7 @@ ns_path2d_arc_svg(cairo_t *cr, double x1, double y1,
     cairo_restore(cr);
 }
 
+/* Parses SVG path data (MLHVZCSQTA, abs/rel) into cairo path ops; stops at bad input. */
 static void
 ns_path2d_parse_svg(cairo_t *cr, const char *d)
 {
@@ -3371,6 +3475,7 @@ ns_path2d_parse_svg(cairo_t *cr, const char *d)
     }
 }
 
+/* Path2D([path | svgPathData]): new path on a recording surface, copied or parsed. */
 JSValue
 ns_path2d_ctor(JSContext *ctx, JSValueConst this_val,
                int argc, JSValueConst *argv)
@@ -3396,6 +3501,7 @@ ns_path2d_ctor(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* getContextAttributes(): returns stored _attrs or default 2D attributes. */
 static JSValue
 ns_ctx_get_attrs(JSContext *ctx, JSValueConst this_val,
                  int argc, JSValueConst *argv)
@@ -3428,6 +3534,7 @@ ns_ctx_draw_focus_if_needed(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* Gets or sets a context attribute in a hidden "\xff"-prefixed backing property. */
 static JSValue
 ns_ctx_attr_slot(JSContext *ctx, JSValueConst this_val, int magic,
                  JSValueConst *set)
@@ -3511,6 +3618,7 @@ static const ns_ctx_method_def ns_ctx_methods[] = {
     { "drawFocusIfNeeded", ns_ctx_draw_focus_if_needed, 2 },
 };
 
+/* Prototype method trampoline; counts in-flight calls and drops retired contexts at zero. */
 static JSValue
 ns_ctx_method(JSContext *ctx, JSValueConst this_val, int argc,
               JSValueConst *argv, int magic)
@@ -3523,6 +3631,7 @@ ns_ctx_method(JSContext *ctx, JSValueConst this_val, int argc,
     return ret;
 }
 
+/* Returns the CanvasRenderingContext2D prototype, installing accessors and methods once. */
 static JSValue
 ns_ctx_prototype(JSContext *ctx)
 {
@@ -3565,6 +3674,7 @@ ns_ctx_prototype(JSContext *ctx)
     return proto;
 }
 
+/* canvas.getContext("2d", attrs): creates a 2D context object; null for other types. */
 JSValue
 ns_element_getContext(JSContext *ctx, JSValueConst this_val,
                       int argc, JSValueConst *argv)
@@ -3640,6 +3750,7 @@ ns_element_getContext(JSContext *ctx, JSValueConst this_val,
     return obj;
 }
 
+/* cairo PNG stream callback appending bytes to a GByteArray closure. */
 cairo_status_t
 ns_canvas_png_write(void *closure, const unsigned char *data, unsigned int length)
 {
@@ -3647,6 +3758,7 @@ ns_canvas_png_write(void *closure, const unsigned char *data, unsigned int lengt
     return CAIRO_STATUS_SUCCESS;
 }
 
+/* Encodes a surface as PNG and wraps it in a Blob-like object; null on failure. */
 JSValue
 ns_canvas_blob_from_surface(JSContext *ctx, cairo_surface_t *surface)
 {
@@ -3674,6 +3786,7 @@ ns_canvas_blob_from_surface(JSContext *ctx, cairo_surface_t *surface)
     return blob;
 }
 
+/* OffscreenCanvas.convertToBlob(): promise of a PNG Blob; rejects when tainted. */
 static JSValue
 ns_offscreen_convertToBlob(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)

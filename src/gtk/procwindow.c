@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — GTK single-page browser shell around the page view.
+/* Nordstjernen Web Browser — GTK browser window around the page view: toolbar and address bar.
+ * Address suggestions, TLS indicator, bookmarks, downloads, fullscreen notice, session saving.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -30,6 +31,7 @@
 static int g_initial_win_w;
 static int g_initial_win_h;
 
+/* Feeds monitor size, scale, pointer/hover caps and reduced-motion into CSS media queries. */
 static void
 configure_media_inputs(void)
 {
@@ -87,6 +89,7 @@ configure_media_inputs(void)
     }
 }
 
+/* Infers dark vs light desktop theme from the luma of the widget's foreground color. */
 static ns_css_color_scheme
 desktop_color_scheme(GtkWidget *styled)
 {
@@ -134,6 +137,7 @@ typedef struct {
     GtkWidget      *downloads_list;
 } ProcWindow;
 
+/* Returns the localized brand name plus version from a lazily filled static buffer. */
 static const char *
 ns_brand_versioned(void)
 {
@@ -167,6 +171,7 @@ procwindow_free(gpointer data)
     g_free(pw);
 }
 
+/* Adds the GResource icon path and share/data icon dirs relative to the executable. */
 static void
 install_icon_search_paths(void)
 {
@@ -193,6 +198,7 @@ install_icon_search_paths(void)
     g_free(dir);
 }
 
+/* Installs app-wide GTK CSS for the status bar, fullscreen notice, headerbar and toolbar. */
 static void
 install_status_css(void)
 {
@@ -415,6 +421,7 @@ set_accessible_label(GtkWidget *w, const char *label)
                                    GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
 }
 
+/* Returns the GtkImage inside a toolbar button, looking into an icon+label box if present. */
 static GtkImage *
 toolbar_button_image(GtkWidget *button)
 {
@@ -432,6 +439,7 @@ toolbar_button_icon_size(GtkWidget *button, int pixels)
         gtk_image_set_pixel_size(img, pixels);
 }
 
+/* Creates a frameless toolbar button with icon, optional label, tooltip and a11y label. */
 static GtkWidget *
 toolbar_button(const char *icon, const char *label, const char *tooltip,
                GCallback cb, gpointer data)
@@ -466,6 +474,7 @@ current_view(ProcWindow *pw)
     return pw->view;
 }
 
+/* Turns address-bar input into a URL: keeps schemes, maps local paths, searches, else https. */
 static char *
 normalize_url(const char *input)
 {
@@ -501,6 +510,7 @@ set_loading_ui(ProcWindow *pw, gboolean loading)
         gtk_widget_set_sensitive(pw->stop, loading);
 }
 
+/* Returns the URL with any userinfo ("user:pass@") removed; caller frees. */
 static char *
 address_display_url(const char *url)
 {
@@ -516,6 +526,7 @@ address_display_url(const char *url)
     return g_strdup_printf("%.*s%s", (int)(authority - url), url, at + 1);
 }
 
+/* Sets address-bar text without triggering the suggestion popover. */
 static void
 address_set_text_quiet(ProcWindow *pw, const char *text)
 {
@@ -532,6 +543,7 @@ set_address_text(ProcWindow *pw, const char *url)
     g_free(shown);
 }
 
+/* Sets the address-bar TLS icon and tooltip with state, host and server IP. */
 static void
 update_security_indicator(ProcWindow *pw, NsProcView *v)
 {
@@ -588,6 +600,7 @@ current_page_bookmarked(ProcWindow *pw)
            ns_bookmarks_contains(pw->bookmarks, url);
 }
 
+/* Switches the bookmarks button icon and tooltip by whether the current page is bookmarked. */
 static void
 update_bookmark_indicator(ProcWindow *pw)
 {
@@ -603,6 +616,7 @@ update_bookmark_indicator(ProcWindow *pw)
                                       : ns_i18n("Bookmarks"));
 }
 
+/* Applies the configured or desktop color scheme and reloads the page if it changed. */
 static void
 apply_color_scheme(ProcWindow *pw)
 {
@@ -627,6 +641,7 @@ on_theme_changed(GObject *settings, GParamSpec *pspec, gpointer ud)
     apply_color_scheme(ud);
 }
 
+/* Shows the zoom-percent button when zoom is not 100%, hiding it otherwise. */
 static void
 update_zoom_indicator(ProcWindow *pw, NsProcView *v)
 {
@@ -652,6 +667,7 @@ on_zoom_indicator_clicked(GtkButton *b, gpointer ud)
         ns_proc_view_zoom_reset(v);
 }
 
+/* Refreshes address bar, window title, back/forward and security/zoom/bookmark indicators. */
 static void
 update_chrome(ProcWindow *pw)
 {
@@ -744,6 +760,7 @@ download_pulse(gpointer ud)
     return G_SOURCE_CONTINUE;
 }
 
+/* Main-thread completion of a download: updates its row and frees the NsDownload. */
 static gboolean
 download_finish_idle(gpointer ud)
 {
@@ -784,6 +801,7 @@ download_url_allowed(const char *url)
     return FALSE;
 }
 
+/* Thread body: fetches the URL, rechecks the final URL, writes the file and tags its origin. */
 static gpointer
 download_worker(gpointer ud)
 {
@@ -809,6 +827,7 @@ download_worker(gpointer ud)
     return NULL;
 }
 
+/* Builds a downloads-list row; with d, adds a progress bar and wires d's widgets. */
 static GtkWidget *
 download_row_new(const char *name, gboolean done, const char *open_path,
                  NsDownload *d)
@@ -845,6 +864,7 @@ download_row_new(const char *name, gboolean done, const char *open_path,
     return row;
 }
 
+/* Lists up to 25 regular files from the downloads dir, or an empty-state label. */
 static void
 downloads_populate_recent(ProcWindow *pw)
 {
@@ -880,6 +900,7 @@ downloads_populate_recent(ProcWindow *pw)
     }
 }
 
+/* Hides the downloads window on close instead of destroying it. */
 static gboolean
 downloads_win_close(GtkWindow *win, gpointer ud)
 {
@@ -888,6 +909,7 @@ downloads_win_close(GtkWindow *win, gpointer ud)
     return TRUE;
 }
 
+/* Presents the downloads window, creating it with its folder button and list on first use. */
 static void
 show_downloads_window(ProcWindow *pw)
 {
@@ -931,6 +953,7 @@ show_downloads_window(ProcWindow *pw)
     gtk_window_present(GTK_WINDOW(win));
 }
 
+/* Rejects empty, dot-prefixed or path-containing download file names. */
 static gboolean
 download_name_acceptable(const char *name)
 {
@@ -938,6 +961,7 @@ download_name_acceptable(const char *name)
            !strchr(name, '/') && !strchr(name, '\\');
 }
 
+/* Picks a safe unique file name in the downloads dir and starts a background download. */
 static void
 pw_start_download(ProcWindow *pw, const char *url, const char *suggested)
 {
@@ -995,6 +1019,7 @@ pw_hide_fullscreen_notice(ProcWindow *pw)
     gtk_widget_set_visible(pw->fullscreen_notice, FALSE);
 }
 
+/* Shows the "host is now full screen, press Esc" notice for five seconds. */
 static void
 pw_show_fullscreen_notice(ProcWindow *pw)
 {
@@ -1036,6 +1061,7 @@ pw_render_status(ProcWindow *pw)
     gtk_widget_set_visible(pw->status, *base != '\0');
 }
 
+/* Sets the status bar text with no expiry, cancelling any pending timeout. */
 static void
 pw_set_status_persistent(ProcWindow *pw, const char *text)
 {
@@ -1058,6 +1084,7 @@ pw_status_expire(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Sets the status bar text and schedules it to clear after five seconds. */
 static void
 pw_set_status(ProcWindow *pw, const char *text)
 {
@@ -1074,6 +1101,7 @@ pw_set_status(ProcWindow *pw, const char *text)
         ? g_timeout_add_seconds(5, pw_status_expire, pw) : 0;
 }
 
+/* Dispatches view events (title, URL, status, history, loading, zoom, download) to chrome. */
 static void
 on_view_notify(NsProcView *v, NsProcEvent evt, const char *text,
                gpointer user_data)
@@ -1124,6 +1152,7 @@ on_view_notify(NsProcView *v, NsProcEvent evt, const char *text,
     }
 }
 
+/* Normalizes the input to a URL, shows it in the address bar and loads it. */
 static void
 proc_window_load(ProcWindow *pw, const char *url)
 {
@@ -1133,6 +1162,7 @@ proc_window_load(ProcWindow *pw, const char *url)
     g_free(resolved);
 }
 
+/* Selects all address-bar text from an idle so it survives the focus click. */
 static gboolean
 address_select_all_idle(gpointer user_data)
 {
@@ -1163,6 +1193,7 @@ on_address_focus_leave(GtkEventControllerFocus *ctrl, gpointer user_data)
     suggest_hide(user_data);
 }
 
+/* Builds a suggestion row storing its navigation target and optional address-fill text. */
 static GtkWidget *
 suggest_row_new(const char *title, const char *url, const char *target)
 {
@@ -1190,6 +1221,7 @@ suggest_row_new(const char *title, const char *url, const char *target)
     return row;
 }
 
+/* Returns TRUE if a suggestion row with the given target URL is already listed. */
 static gboolean
 suggest_has_target(GtkListBox *list, const char *target)
 {
@@ -1210,6 +1242,7 @@ suggest_clear(GtkListBox *list)
         gtk_list_box_remove(list, c);
 }
 
+/* Case-folded substring test against an already case-folded needle. */
 static gboolean
 text_contains_fold(const char *haystack, const char *needle_fold)
 {
@@ -1221,6 +1254,7 @@ text_contains_fold(const char *haystack, const char *needle_fold)
     return hit;
 }
 
+/* Rebuilds the address suggestions from search, bookmarks and history and shows the popover. */
 static void
 suggest_refresh(ProcWindow *pw)
 {
@@ -1294,6 +1328,7 @@ suggest_refresh(ProcWindow *pw)
         gtk_popover_present(GTK_POPOVER(pw->suggest_popover));
 }
 
+/* Refreshes suggestions on user edits while the address bar has focus. */
 static void
 on_address_changed(GtkEditable *editable, gpointer user_data)
 {
@@ -1307,6 +1342,7 @@ on_address_changed(GtkEditable *editable, gpointer user_data)
     suggest_refresh(pw);
 }
 
+/* Navigates to a suggestion row's target and moves focus to the page. */
 static void
 suggest_load(ProcWindow *pw, GtkListBoxRow *row)
 {
@@ -1329,6 +1365,7 @@ on_suggest_row_activated(GtkListBox *list, GtkListBoxRow *row, gpointer ud)
     suggest_load(ud, row);
 }
 
+/* Moves the suggestion selection by delta, wrapping through "none" back to the typed text. */
 static void
 suggest_move(ProcWindow *pw, int delta)
 {
@@ -1360,6 +1397,7 @@ suggest_move(ProcWindow *pw, int delta)
     gtk_editable_set_position(GTK_EDITABLE(pw->address), -1);
 }
 
+/* Handles Esc/Up/Down/Enter for the open suggestion popover; returns TRUE if consumed. */
 static gboolean
 on_address_suggest_key(ProcWindow *pw, guint keyval, GdkModifierType state)
 {
@@ -1386,6 +1424,7 @@ on_address_suggest_key(ProcWindow *pw, guint keyval, GdkModifierType state)
     return FALSE;
 }
 
+/* Creates the non-focusable, non-autohide suggestion popover parented to the address bar. */
 static GtkWidget *
 suggest_popover_new(ProcWindow *pw)
 {
@@ -1408,6 +1447,7 @@ suggest_popover_new(ProcWindow *pw)
     return popover;
 }
 
+/* Unparents the suggestion popover when the address entry is destroyed. */
 static void
 on_address_destroy_unparent_suggest(GtkWidget *address, gpointer user_data)
 {
@@ -1420,6 +1460,7 @@ on_address_destroy_unparent_suggest(GtkWidget *address, gpointer user_data)
     }
 }
 
+/* Loads the normalized address-bar text in the current view and focuses the page. */
 static void
 on_address_activate(GtkEntry *entry, gpointer user_data)
 {
@@ -1438,6 +1479,7 @@ on_address_activate(GtkEntry *entry, gpointer user_data)
     g_free(resolved);
 }
 
+/* Ctrl/Shift+Enter completes a bare name to www.NAME.com/.net/.org and navigates. */
 static gboolean
 on_address_key_pressed(GtkEventControllerKey *controller, guint keyval,
                        guint keycode, GdkModifierType state, gpointer ud)
@@ -1574,6 +1616,7 @@ act_reload(GSimpleAction *a, GVariant *p, gpointer ud)
         ns_proc_view_reload(v);
 }
 
+/* Clears the HTTP cache before reloading the current view. */
 static void
 act_hard_reload(GSimpleAction *a, GVariant *p, gpointer ud)
 {
@@ -1605,6 +1648,7 @@ act_console(GSimpleAction *a, GVariant *p, gpointer ud)
         ns_proc_view_toggle_console(v);
 }
 
+/* Adds or removes the current page as a bookmark; returns FALSE if there is no page URL. */
 static gboolean
 toggle_bookmark_current(ProcWindow *pw)
 {
@@ -1633,6 +1677,7 @@ act_bookmark_page(GSimpleAction *a, GVariant *p, gpointer ud)
     toggle_bookmark_current(ud);
 }
 
+/* Loads view-source: for the current URL unless it is already a source view. */
 static void
 act_view_source(GSimpleAction *a, GVariant *p, gpointer ud)
 {
@@ -1669,6 +1714,7 @@ act_focus_address(GSimpleAction *a, GVariant *p, gpointer ud)
     gtk_editable_select_region(GTK_EDITABLE(pw->address), 0, -1);
 }
 
+/* Esc handler: reverts address edits, else closes find bar or stops loading; focuses page. */
 static void
 act_focus_page(GSimpleAction *a, GVariant *p, gpointer ud)
 {
@@ -1753,6 +1799,7 @@ act_downloads(GSimpleAction *action, GVariant *parameter, gpointer user_data)
     show_downloads_window((ProcWindow *)user_data);
 }
 
+/* Registers a win.NAME action bound to cb and sets its keyboard accelerators. */
 static void
 install_action(ProcWindow *pw, const char *name, GCallback cb,
                const char *const *accels)
@@ -1768,6 +1815,7 @@ install_action(ProcWindow *pw, const char *name, GCallback cb,
     }
 }
 
+/* Registers all window actions and their keyboard shortcuts. */
 static void
 install_shortcuts(ProcWindow *pw)
 {
@@ -1821,6 +1869,7 @@ install_shortcuts(ProcWindow *pw)
                    (const char *[]){ "<Ctrl>q", NULL });
 }
 
+/* Capture-phase handler: Esc leaves fullscreen and re-maximizes the window. */
 static gboolean
 on_window_key_pressed(GtkEventControllerKey *controller, guint keyval,
                       guint keycode, GdkModifierType state, gpointer user_data)
@@ -1856,6 +1905,7 @@ menu_append_section(GMenu *menu, GMenu *section)
     g_object_unref(section);
 }
 
+/* Builds the sectioned app menu model with accelerator hints. */
 static GMenuModel *
 build_app_menu_model(void)
 {
@@ -1908,6 +1958,7 @@ build_app_menu_model(void)
     return G_MENU_MODEL(menu);
 }
 
+/* Creates a browser window with toolbar, address bar, view, actions and theme watchers. */
 static ProcWindow *
 proc_window_new(GtkApplication *app, const char *home_url,
                 gboolean private_mode)
@@ -2164,6 +2215,7 @@ act_history(GSimpleAction *action, GVariant *parameter, gpointer user_data)
         ns_proc_view_load(v, "about:history");
 }
 
+/* Opens a new window with the same home URL and private mode, loading home. */
 static void
 act_new_window(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
@@ -2196,6 +2248,7 @@ act_save_image(GSimpleAction *action, GVariant *parameter, gpointer user_data)
     ns_proc_view_save_image(current_view(user_data));
 }
 
+/* Toggles fullscreen; leaving it re-maximizes the window. */
 static void
 act_fullscreen(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
@@ -2210,6 +2263,7 @@ act_fullscreen(GSimpleAction *action, GVariant *parameter, gpointer user_data)
     }
 }
 
+/* Loads the clicked bookmark's URL and closes the enclosing popover. */
 static void
 on_bookmark_activate(GtkButton *button, gpointer user_data)
 {
@@ -2224,6 +2278,7 @@ on_bookmark_activate(GtkButton *button, gpointer user_data)
         gtk_popover_popdown(GTK_POPOVER(pop));
 }
 
+/* Removes the bookmark and its row from the popover list. */
 static void
 on_bookmark_remove(GtkButton *button, gpointer user_data)
 {
@@ -2250,6 +2305,7 @@ on_add_bookmark(GtkButton *button, gpointer user_data)
         gtk_popover_popdown(GTK_POPOVER(pop));
 }
 
+/* Builds the bookmarks popover: add/remove-current button plus a scrollable list. */
 static GtkWidget *
 build_bookmarks_popover(ProcWindow *pw)
 {
@@ -2316,6 +2372,7 @@ build_bookmarks_popover(ProcWindow *pw)
     return pop;
 }
 
+/* Unparents and drops a closed popover from an idle, outside its signal emission. */
 static gboolean
 popover_unparent_idle(gpointer pop)
 {
@@ -2332,6 +2389,7 @@ on_popover_closed_unparent(GtkPopover *pop, gpointer user_data)
     g_idle_add(popover_unparent_idle, g_object_ref(pop));
 }
 
+/* Builds a fresh bookmarks popover under the button; it is unparented when closed. */
 static void
 on_bookmarks_clicked(GtkButton *button, gpointer user_data)
 {
@@ -2351,6 +2409,7 @@ typedef struct {
     gboolean private_mode;
 } ProcAppCtx;
 
+/* Returns TRUE for http, https, ftp and file URLs that may be restored after a crash. */
 static gboolean
 session_url_recoverable(const char *u)
 {
@@ -2360,6 +2419,7 @@ session_url_recoverable(const char *u)
                  g_str_has_prefix(u, "file://"));
 }
 
+/* Periodically writes the current URL to the session file (empty when private). */
 static gboolean
 write_session_cb(gpointer data)
 {
@@ -2375,6 +2435,7 @@ write_session_cb(gpointer data)
     return G_SOURCE_CONTINUE;
 }
 
+/* App activate: sets up media, icons and CSS, opens a window, loads recovered or start URL. */
 static void
 on_proc_activate(GtkApplication *app, gpointer user_data)
 {
@@ -2415,6 +2476,7 @@ on_proc_activate(GtkApplication *app, gpointer user_data)
         pw->session_timer = g_timeout_add_seconds(4, write_session_cb, pw);
 }
 
+/* Recursively deletes files older than min_age_s (all if <= 0) under a cache subdir. */
 static void
 procapp_clear_cache_dir(const char *name, gint64 min_age_s)
 {
@@ -2454,6 +2516,7 @@ procapp_clear_cache_dir(const char *name, gint64 min_age_s)
     g_free(dir);
 }
 
+/* Prunes object caches (all at exit, else older than 1h) and stream caches older than 1h. */
 static void
 procapp_clear_http_caches(gboolean at_exit)
 {
@@ -2467,6 +2530,7 @@ procapp_clear_http_caches(gboolean at_exit)
         procapp_clear_cache_dir(stream_dirs[i], 3600);
 }
 
+/* Runs the GTK browser app, pruning caches before and after and shutting audio down. */
 int
 ns_procapp_run(const char *startup_url, const char *session_path,
                gboolean recover, gboolean private_mode)

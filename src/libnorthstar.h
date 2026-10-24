@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — internal page-engine interface for the GTK shell and headless driver.
+/* Nordstjernen Web Browser — page-engine interface for the GTK shell and headless driver.
+ * ns_browser handle: open, render, damage, input, scrolling, selection and text/DOM/layout dumps.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

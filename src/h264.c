@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — H.264 video decoding over OpenH264, to BGRA textures.
+ * Converts MP4 avcC config and length-prefixed samples to Annex B before decoding.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -22,6 +23,7 @@ struct ns_h264_decoder {
     int          length_size;
 };
 
+/* Creates a quiet, single-threaded OpenH264 AVC decoder; NULL on failure. */
 static ISVCDecoder *
 open_codec(void)
 {
@@ -43,6 +45,7 @@ open_codec(void)
     return codec;
 }
 
+/* Uninitializes and destroys an OpenH264 decoder. */
 static void
 close_codec(ISVCDecoder *codec)
 {
@@ -51,6 +54,7 @@ close_codec(ISVCDecoder *codec)
     WelsDestroyDecoder(codec);
 }
 
+/* Appends avcC SPS/PPS as Annex B NAL units and reads the NAL length size. */
 static gboolean
 append_parameter_sets(GByteArray *out, GBytes *config, int *length_size)
 {
@@ -76,6 +80,7 @@ append_parameter_sets(GByteArray *out, GBytes *config, int *length_size)
     return TRUE;
 }
 
+/* Converts a length-prefixed MP4 sample into Annex B start-code NAL units. */
 static gboolean
 append_nal_units(GByteArray *out, GBytes *sample, int length_size)
 {
@@ -95,6 +100,7 @@ append_nal_units(GByteArray *out, GBytes *sample, int length_size)
     return TRUE;
 }
 
+/* Converts a decoded 4:2:0 picture to a BGRA texture (BT.601 below 720p). */
 static ns_texture *
 picture_to_texture(const SBufferInfo *info, unsigned char *const planes[3])
 {
@@ -114,6 +120,7 @@ picture_to_texture(const SBufferInfo *info, unsigned char *const planes[3])
     return ns_yuv_to_texture(&yuv);
 }
 
+/* Flushes the next frame still buffered in the decoder; FALSE when none remain. */
 static gboolean
 next_buffered_picture(ISVCDecoder *codec, SBufferInfo *info,
                       unsigned char *planes[3])
@@ -136,6 +143,7 @@ ns_h264_available(void)
     return TRUE;
 }
 
+/* Creates an H.264 decoder wrapper; NULL when OpenH264 is unavailable. */
 ns_h264_decoder *
 ns_h264_decoder_new(void)
 {
@@ -158,6 +166,7 @@ ns_h264_decoder_free(ns_h264_decoder *decoder)
     g_free(decoder);
 }
 
+/* Recreates the codec and forgets the cached avcC config. */
 void
 ns_h264_decoder_flush(ns_h264_decoder *decoder)
 {
@@ -167,6 +176,7 @@ ns_h264_decoder_flush(ns_h264_decoder *decoder)
     g_clear_pointer(&decoder->config, g_bytes_unref);
 }
 
+/* Decodes one sample; returns a texture only for the frame matching timestamp. */
 ns_texture *
 ns_h264_decoder_decode(ns_h264_decoder *decoder, GBytes *sample, GBytes *config,
                        gint64 timestamp, gboolean want_texture)

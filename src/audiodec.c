@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — the audio decoders behind Media Source Extensions, chosen by codec.
+/* Nordstjernen Web Browser — MSE audio decoder dispatch: AAC-LC (built in) or Opus (libopus).
+ * Handles Opus pre-skip trimming and seek resets; outputs interleaved float PCM.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -27,6 +28,7 @@ struct ns_audio_decoder {
     int             skip_left;
 };
 
+/* TRUE for codecs with a decoder in this build (AAC "mp4a", Opus if enabled). */
 gboolean
 ns_audio_decoder_supports(const char *codec)
 {
@@ -39,6 +41,7 @@ ns_audio_decoder_supports(const char *codec)
 }
 
 #ifdef NS_HAVE_OPUS
+/* Creates a 48 kHz Opus decoder from an OpusHead config, taking channels and pre-skip. */
 static ns_audio_decoder *
 opus_decoder_from_head(GBytes *config, int channels)
 {
@@ -64,6 +67,7 @@ opus_decoder_from_head(GBytes *config, int channels)
 }
 #endif
 
+/* Creates an AAC (from AudioSpecificConfig) or Opus decoder for an MSE audio track. */
 ns_audio_decoder *
 ns_audio_decoder_new(const char *codec, GBytes *config, int channels,
                      int sample_rate)
@@ -109,6 +113,7 @@ ns_audio_decoder_channels(const ns_audio_decoder *decoder)
     return decoder ? decoder->channels : 0;
 }
 
+/* Resets decoder state after a seek; re-arms Opus pre-skip only when restarting at 0. */
 void
 ns_audio_decoder_reset(ns_audio_decoder *decoder, gboolean from_start)
 {
@@ -120,6 +125,7 @@ ns_audio_decoder_reset(ns_audio_decoder *decoder, gboolean from_start)
     decoder->skip_left = from_start ? decoder->pre_skip : 0;
 }
 
+/* Decodes one frame to interleaved float PCM, trimming Opus pre-skip; frames or -1. */
 int
 ns_audio_decoder_decode(ns_audio_decoder *decoder, const guint8 *data,
                         gsize len, float *out, int out_frames)

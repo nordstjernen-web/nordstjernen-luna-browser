@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — calc() tree simplification and specified-value serialization.
+ * Parses math functions into trees, simplifies per CSS Values 4 and prints the canonical form.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -45,6 +46,7 @@ calc_node_free(gpointer data)
     g_free(n);
 }
 
+/* Allocates a calc tree node; non-leaf kinds get an owning children array. */
 static calc_node *
 calc_node_new(calc_node_kind kind)
 {
@@ -78,6 +80,7 @@ calc_child(const calc_node *n, guint i)
     return g_ptr_array_index(n->children, i);
 }
 
+/* Detaches child i from n (leaving NULL) and returns it to the caller. */
 static calc_node *
 calc_take_child(calc_node *n, guint i)
 {
@@ -86,6 +89,7 @@ calc_take_child(calc_node *n, guint i)
     return c;
 }
 
+/* Skips ASCII whitespace; returns TRUE if any was consumed. */
 static gboolean
 calc_skip_ws(calc_cursor *c)
 {
@@ -101,6 +105,7 @@ calc_ident_char(char ch)
            (unsigned char)ch >= 0x80;
 }
 
+/* Reads an identifier as a lowercased string, or NULL if none; caller frees. */
 static char *
 calc_read_ident(calc_cursor *c)
 {
@@ -144,6 +149,7 @@ static const char *const calc_relative_units[] = {
     "cqi", "cqb", "cqmin", "cqmax", "fr",
 };
 
+/* Converts absolute units to canonical ones, keeps relative units; FALSE if unknown. */
 static gboolean
 calc_canonical_unit(char **unit, double *value)
 {
@@ -176,6 +182,7 @@ calc_is_math_function(const char *name)
 
 static calc_node *calc_parse_sum(calc_cursor *c);
 
+/* Returns the ')' closing the paren at p, or NULL if unbalanced or a string appears. */
 static const char *
 calc_matching_paren(const char *p, const char *end)
 {
@@ -188,6 +195,7 @@ calc_matching_paren(const char *p, const char *end)
     return NULL;
 }
 
+/* Parses math function arguments, allowing round() strategy and clamp() none keywords. */
 static calc_node *
 calc_parse_function(calc_cursor *c, char *name)
 {
@@ -235,6 +243,7 @@ calc_parse_function(calc_cursor *c, char *name)
     }
 }
 
+/* Parses a calc value: parenthesized sum, dimension, nested function or constant (e, pi...). */
 static calc_node *
 calc_parse_value(calc_cursor *c)
 {
@@ -300,6 +309,7 @@ calc_parse_value(calc_cursor *c)
     return known ? calc_numeric(constant, "") : NULL;
 }
 
+/* Parses a "*" and "/" chain into a product node, wrapping divisors in INVERT. */
 static calc_node *
 calc_parse_product(calc_cursor *c)
 {
@@ -330,6 +340,7 @@ calc_parse_product(calc_cursor *c)
     return product ? product : first;
 }
 
+/* Parses a "+"/"-" chain (operators need whitespace on both sides) into a sum node. */
 static calc_node *
 calc_parse_sum(calc_cursor *c)
 {
@@ -369,6 +380,7 @@ calc_is_number(const calc_node *n)
 
 static calc_node *calc_simplify(calc_node *n, gboolean *ok);
 
+/* Splices children of the same kind as n into n, flattening nested sums or products. */
 static void
 calc_flatten(calc_node *n)
 {
@@ -387,6 +399,7 @@ calc_flatten(calc_node *n)
     n->children = flat;
 }
 
+/* Frees n and returns its only child. */
 static calc_node *
 calc_single_child(calc_node *n)
 {
@@ -395,6 +408,7 @@ calc_single_child(calc_node *n)
     return only;
 }
 
+/* Combines same-unit terms; clears ok when numbers mix with dimensions. */
 static calc_node *
 calc_simplify_sum(calc_node *n, gboolean *ok)
 {
@@ -421,6 +435,7 @@ calc_simplify_sum(calc_node *n, gboolean *ok)
     return n->children->len == 1 ? calc_single_child(n) : n;
 }
 
+/* Folds plain-number factors and distributes them into a single numeric or sum child. */
 static calc_node *
 calc_simplify_product(calc_node *n)
 {
@@ -462,6 +477,7 @@ calc_simplify_product(calc_node *n)
     return n;
 }
 
+/* Returns TRUE if children from index on are numerics sharing one non-% unit. */
 static gboolean
 calc_same_unit_numerics(const calc_node *n, guint from)
 {
@@ -475,12 +491,14 @@ calc_same_unit_numerics(const calc_node *n, guint from)
     return unit && strcmp(unit, "%") != 0;
 }
 
+/* Less-than that orders -0 before +0, as min()/max() require. */
 static gboolean
 calc_less_signed(double a, double b)
 {
     return a < b || (a == 0 && b == 0 && signbit(a) && !signbit(b));
 }
 
+/* Simplifies calc()/min()/max()/abs() whose arguments are already resolvable. */
 static calc_node *
 calc_simplify_function(calc_node *n)
 {
@@ -518,6 +536,7 @@ calc_simplify_function(calc_node *n)
     return n;
 }
 
+/* Recursively simplifies a calc tree per CSS Values 4 calc simplification. */
 static calc_node *
 calc_simplify(calc_node *n, gboolean *ok)
 {
@@ -562,6 +581,7 @@ calc_simplify(calc_node *n, gboolean *ok)
     }
 }
 
+/* Sort rank for serialization: number, percentage, dimension, then other nodes. */
 static int
 calc_sort_rank(const calc_node *n)
 {
@@ -571,6 +591,7 @@ calc_sort_rank(const calc_node *n)
     return 2;
 }
 
+/* Reorders children by rank, sorting dimensions by unit name, for canonical output. */
 static void
 calc_sort_children(calc_node *n)
 {
@@ -600,6 +621,7 @@ calc_sort_children(calc_node *n)
     n->children = sorted;
 }
 
+/* Appends a number with NaN/infinity/-0 spellings; clears exact if %g loses precision. */
 static void
 calc_append_number(GString *out, double v, gboolean *exact)
 {
@@ -618,6 +640,7 @@ calc_append_number(GString *out, double v, gboolean *exact)
     }
 }
 
+/* Appends a numeric with unit, writing non-finite dimensions as "value * 1unit". */
 static void
 calc_append_numeric(GString *out, const calc_node *n, gboolean *exact)
 {
@@ -633,6 +656,7 @@ calc_append_numeric(GString *out, const calc_node *n, gboolean *exact)
 
 static void calc_serialize(GString *out, calc_node *n, gboolean *exact);
 
+/* Serializes a node and strips one pair of outer parentheses. */
 static void
 calc_serialize_unwrapped(GString *out, calc_node *n, gboolean *exact)
 {
@@ -653,6 +677,7 @@ calc_is_negative(const calc_node *n)
            (n->value < 0 || (n->value == 0 && signbit(n->value)));
 }
 
+/* Serializes a simplified calc tree, sorting sum and product terms canonically. */
 static void
 calc_serialize(GString *out, calc_node *n, gboolean *exact)
 {
@@ -720,6 +745,7 @@ calc_serialize(GString *out, calc_node *n, gboolean *exact)
     }
 }
 
+/* Parses, simplifies and serializes a math function; NULL if invalid or inexact. */
 static char *
 calc_function_canonical(const char *start, const char *end, gboolean keep_calc)
 {
@@ -756,6 +782,7 @@ calc_function_canonical(const char *start, const char *end, gboolean keep_calc)
     return g_string_free(out, FALSE);
 }
 
+/* Returns the canonical serialization of a calc()/min()/max()/clamp() value; caller frees. */
 char *
 ns_css_calc_canonical(const char *text)
 {

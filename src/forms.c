@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — HTML form validation, serialization, and submission helpers.
+/* Nordstjernen Web Browser — HTML forms: submit/reset triggers, form data set, validation.
+ * Builds the urlencoded data set; checks required, pattern, type, min/max and maxlength.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -14,6 +15,7 @@
 #define NS_PATTERN_MAX_LEN 2048
 #define NS_PATTERN_VALUE_MAX_LEN 10000
 
+/* True for elements that submit their form when activated (submit buttons, image inputs). */
 gboolean
 ns_form_is_submit_trigger(const ns_node *n)
 {
@@ -30,6 +32,7 @@ ns_form_is_submit_trigger(const ns_node *n)
     return FALSE;
 }
 
+/* True for button or input elements of type reset. */
 gboolean
 ns_form_is_reset_trigger(const ns_node *n)
 {
@@ -40,6 +43,7 @@ ns_form_is_reset_trigger(const ns_node *n)
            strcmp(n->name, "input") == 0;
 }
 
+/* True if control's form owner is form. */
 static gboolean
 form_control_belongs_to(const ns_node *form, const ns_node *control,
                         const ns_node *doc)
@@ -47,6 +51,7 @@ form_control_belongs_to(const ns_node *form, const ns_node *control,
     return form && control && ns_form_owner(control, doc) == form;
 }
 
+/* True if an option is disabled itself or by an ancestor optgroup within its select. */
 static gboolean
 form_option_disabled(const ns_node *option)
 {
@@ -61,6 +66,7 @@ form_option_disabled(const ns_node *option)
     return FALSE;
 }
 
+/* Enabled selected options of a select that contribute to the form data set. */
 static GPtrArray *
 form_selected_options(const ns_node *select)
 {
@@ -83,6 +89,7 @@ form_selected_options(const ns_node *select)
     return out;
 }
 
+/* Builds the urlencoded form data set from controls owned by form, including the submitter. */
 static void
 ns_form_collect_inputs_depth(const ns_node *form, const ns_node *n,
                     const ns_node *doc, GString *query, gboolean *first,
@@ -170,6 +177,7 @@ ns_form_collect_inputs(const ns_node *form, const ns_node *n, const ns_node *doc
     ns_form_collect_inputs_depth(form, n, doc, query, first, submitter, 0);
 }
 
+/* Tests a value against an anchored pattern attribute; invalid regexes match. */
 static gboolean
 ns_value_matches_pattern(const char *value, const char *pattern)
 {
@@ -186,6 +194,7 @@ ns_value_matches_pattern(const char *value, const char *pattern)
     return ok;
 }
 
+/* typeMismatch/badInput check for email, url and numeric input types. */
 static gboolean
 ns_value_matches_type(const ns_node *n, const char *value, const char *type)
 {
@@ -199,6 +208,7 @@ ns_value_matches_type(const ns_node *n, const char *value, const char *type)
     return TRUE;
 }
 
+/* True unless the value underflows min or overflows max. */
 static gboolean
 ns_value_matches_range(const ns_node *n, const char *value)
 {
@@ -213,6 +223,7 @@ ns_value_matches_step(const ns_node *n, const char *value)
     return !ns_input_value_step_mismatch(n, value);
 }
 
+/* Finds the first control owned by form that fails constraint validation. */
 static const ns_node *
 ns_form_first_invalid_depth(const ns_node *form, const ns_node *n,
                             const ns_node *doc, int depth)
@@ -303,6 +314,7 @@ ns_form_first_invalid_depth(const ns_node *form, const ns_node *n,
     return NULL;
 }
 
+/* First invalid control owned by form in tree order, or NULL. */
 const ns_node *
 ns_form_first_invalid(const ns_node *form, const ns_node *n, const ns_node *doc)
 {

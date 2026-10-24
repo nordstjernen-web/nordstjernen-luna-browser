@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — progressive download of MP4 and WebM files for <video src>, fed through the Media Source buffers.
+/* Nordstjernen Web Browser — progressive <video src> download of MP4/WebM via ranged fetches.
+ * Feeds Media Source buffers: finds moov, sizes chunks by bitrate, evicts and refetches on seek.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -62,6 +63,7 @@ struct ns_progressive {
 static void progressive_fetch(ns_progressive *file, request_kind kind,
                               guint64 start, guint64 length);
 
+/* Cancels the in-flight range request and detaches it from the file. */
 static void
 progressive_cancel(ns_progressive *file)
 {
@@ -71,6 +73,7 @@ progressive_cancel(ns_progressive *file)
     file->request = NULL;
 }
 
+/* Cancels any request and marks the progressive download failed. */
 static void
 progressive_fail(ns_progressive *file)
 {
@@ -78,6 +81,7 @@ progressive_fail(ns_progressive *file)
     file->state = NS_PROGRESSIVE_FAILED;
 }
 
+/* Total file size from a Content-Range header in raw headers; 0 if absent or unknown. */
 static guint64
 content_range_total(const char *headers)
 {
@@ -94,6 +98,7 @@ content_range_total(const char *headers)
     return 0;
 }
 
+/* TRUE if the data starts with the EBML magic used by WebM. */
 static gboolean
 bytes_are_webm(const guint8 *data, gsize len)
 {
@@ -101,6 +106,7 @@ bytes_are_webm(const guint8 *data, gsize len)
            data[3] == 0xA3;
 }
 
+/* TRUE if the first box type is a known top-level MP4 box. */
 static gboolean
 bytes_are_mp4(const guint8 *data, gsize len)
 {
@@ -113,6 +119,7 @@ bytes_are_mp4(const guint8 *data, gsize len)
     return FALSE;
 }
 
+/* Sizes range fetches to about 8 s of media from bitrate, clamped to 256 KiB..8 MiB. */
 static void
 progressive_choose_chunk(ns_progressive *file)
 {
@@ -124,6 +131,7 @@ progressive_choose_chunk(ns_progressive *file)
     file->chunk = CLAMP(chunk, NS_PROGRESSIVE_MIN_CHUNK, NS_PROGRESSIVE_MAX_CHUNK);
 }
 
+/* Sets the source duration from the container once known and resizes chunks. */
 static void
 progressive_update_duration(ns_progressive *file)
 {
@@ -134,6 +142,7 @@ progressive_update_duration(ns_progressive *file)
     }
 }
 
+/* Appends in-order bytes for linear playback; at EOF flushes, sets duration and ends. */
 static void
 progressive_append_sequential(ns_progressive *file, guint64 start,
                               const guint8 *data, gsize len)
@@ -160,6 +169,7 @@ progressive_append_sequential(ns_progressive *file, guint64 start,
     }
 }
 
+/* Feeds a range response through the MP4 sample index from next_position onward. */
 static void
 progressive_append_indexed(ns_progressive *file, guint64 start,
                            const guint8 *data, gsize len)
@@ -194,6 +204,7 @@ progressive_append_media(ns_progressive *file, guint64 start,
         progressive_append_indexed(file, start, data, len);
 }
 
+/* Marks the file ready to play and sets the first fetch position. */
 static void
 progressive_become_ready(ns_progressive *file)
 {
@@ -205,6 +216,7 @@ progressive_become_ready(ns_progressive *file)
         ? 0 : ns_mse_buffer_file_seek(file->buffer, 0.0);
 }
 
+/* Switches to sequential (whole-stream) mode, e.g. for WebM or unindexed MP4. */
 static void
 progressive_start_sequential(ns_progressive *file, gboolean webm,
                              const guint8 *data, gsize len)
@@ -218,6 +230,7 @@ progressive_start_sequential(ns_progressive *file, gboolean webm,
     if (data) progressive_append_sequential(file, 0, data, len);
 }
 
+/* Parses the moov box; indexed mode if it has a sample table, else sequential. */
 static gboolean
 progressive_moov(ns_progressive *file, const guint8 *data, gsize len,
                  const guint8 *whole, gsize whole_len)
@@ -235,6 +248,7 @@ progressive_moov(ns_progressive *file, const guint8 *data, gsize len,
     return TRUE;
 }
 
+/* Walks top-level MP4 boxes to find moov, fetching more ranges as needed. */
 static void
 progressive_walk_boxes(ns_progressive *file, guint64 start, const guint8 *data,
                        gsize len, gboolean whole)
@@ -295,6 +309,7 @@ progressive_walk_boxes(ns_progressive *file, guint64 start, const guint8 *data,
     }
 }
 
+/* Sniffs the first bytes: WebM goes sequential, non-MP4 is fetched whole, MP4 is probed. */
 static void
 progressive_probe(ns_progressive *file, guint64 start, const guint8 *data,
                   gsize len, gboolean whole)
@@ -319,6 +334,7 @@ progressive_probe(ns_progressive *file, guint64 start, const guint8 *data,
     progressive_walk_boxes(file, start, data, len, whole);
 }
 
+/* Dispatches a range/whole response by request kind; retries media fetches up to 3 times. */
 static void
 progressive_handle(ns_progressive *file, progressive_request *request,
                    ns_response *resp)
@@ -362,6 +378,7 @@ progressive_handle(ns_progressive *file, progressive_request *request,
     }
 }
 
+/* Async fetch completion: hands the response to the file unless it was cancelled. */
 static void
 progressive_fetched(GObject *source, GAsyncResult *result, gpointer user_data)
 {
@@ -380,6 +397,7 @@ progressive_fetched(GObject *source, GAsyncResult *result, gpointer user_data)
     g_free(request);
 }
 
+/* Issues a GET, ranged when length > 0, clamped to the known file size. */
 static void
 progressive_fetch(ns_progressive *file, request_kind kind, guint64 start,
                   guint64 length)
@@ -405,6 +423,7 @@ progressive_fetch(ns_progressive *file, request_kind kind, guint64 start,
     g_free(range);
 }
 
+/* Starts progressive download of a media URL with an initial 256 KiB probe. */
 ns_progressive *
 ns_progressive_new(const char *url, const char *top_url, ns_fetch_policy *policy)
 {
@@ -444,6 +463,7 @@ ns_progressive_get_state(const ns_progressive *file)
     return file ? file->state : NS_PROGRESSIVE_FAILED;
 }
 
+/* Transfers ownership of the whole-file body fetched for non-MP4/WebM formats. */
 GBytes *
 ns_progressive_take_body(ns_progressive *file)
 {
@@ -452,6 +472,7 @@ ns_progressive_take_body(ns_progressive *file)
     return body;
 }
 
+/* End of the buffered range containing t (0.15 s tolerance); -1 if none. */
 static double
 buffered_end_at(ns_mse_source *source, double t)
 {
@@ -469,6 +490,7 @@ buffered_end_at(ns_mse_source *source, double t)
     return end;
 }
 
+/* Evicts media far behind (from a keyframe) and far ahead of the playhead. */
 static void
 progressive_evict(ns_progressive *file, double t)
 {
@@ -496,6 +518,7 @@ progressive_evict(ns_progressive *file, double t)
                              INFINITY);
 }
 
+/* Restarts fetching from time t, cancelling the current request (seek). */
 static void
 progressive_restart(ns_progressive *file, double t)
 {
@@ -511,6 +534,7 @@ progressive_restart(ns_progressive *file, double t)
     ns_mse_source_set_ended(file->source, file->next_position == NS_MP4_INDEX_END);
 }
 
+/* Playback tick: evicts, restarts on seek, and fetches the next chunk when ahead is short. */
 void
 ns_progressive_update(ns_progressive *file, double t, gboolean playing)
 {

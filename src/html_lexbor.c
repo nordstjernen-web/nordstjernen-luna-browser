@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — lexbor-backed HTML parser.
+/* Nordstjernen Web Browser — HTML parser built on lexbor, converting its tree into ns_node.
+ * Declarative shadow DOM, streaming document.write fragments, script lines, video metadata.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -38,6 +39,7 @@ lxb_doc_destroy_void(void *p)
     if (p) lxb_html_document_destroy((lxb_html_document_t *)p);
 }
 
+/* Copies lexbor attributes onto out, borrowing strings; xlink/xml/xmlns get namespaces. */
 static void
 lxb_borrow_attributes(lxb_dom_element_t *el, ns_node *out)
 {
@@ -79,6 +81,7 @@ lxb_borrow_attributes(lxb_dom_element_t *el, ns_node *out)
     }
 }
 
+/* Converts one lexbor node to an ns_node (children not included); NULL if unsupported. */
 static ns_node *
 lxb_node_convert(lxb_dom_node_t *src)
 {
@@ -141,6 +144,7 @@ lxb_node_convert(lxb_dom_node_t *src)
     }
 }
 
+/* First child of an HTML template element's content fragment, or NULL. */
 static lxb_dom_node_t *
 lxb_template_content_first_child(lxb_dom_node_t *src)
 {
@@ -165,6 +169,7 @@ lxb_walk_push(GArray *stack, lxb_dom_node_t *child, ns_node *parent)
     g_array_append_val(stack, fr);
 }
 
+/* Iteratively converts a lexbor subtree (including template contents) under ns_root. */
 static void
 lxb_walk_into(lxb_dom_node_t *src_root, ns_node *ns_root)
 {
@@ -202,6 +207,7 @@ lxb_walk_into(lxb_dom_node_t *src_root, ns_node *ns_root)
     g_array_free(stack, TRUE);
 }
 
+/* Converts a whole lexbor tree into a new ns_node tree. */
 static ns_node *
 lxb_to_nd_root(lxb_dom_node_t *root)
 {
@@ -212,6 +218,7 @@ lxb_to_nd_root(lxb_dom_node_t *root)
     return out;
 }
 
+/* True for element names allowed to host a shadow root (attachShadow list or custom). */
 static gboolean
 ns_valid_shadow_host(const char *name)
 {
@@ -226,6 +233,7 @@ ns_valid_shadow_host(const char *name)
     return strchr(name, '-') != NULL;
 }
 
+/* Converts declarative shadow DOM templates into internal shadow root elements. */
 static void
 ns_dsd_convert(ns_node *n, int depth)
 {
@@ -282,6 +290,7 @@ ns_dsd_convert(ns_node *n, int depth)
         ns_dsd_convert(n->tpl_content, depth + 1);
 }
 
+/* Appends all descendant text of n to out (depth-limited). */
 static void
 text_descendants_append(const ns_node *n, GString *out, int depth)
 {
@@ -292,6 +301,7 @@ text_descendants_append(const ns_node *n, GString *out, int depth)
         text_descendants_append(c, out, depth + 1);
 }
 
+/* Returns the text content of a script element; caller frees. */
 static char *
 script_text(const ns_node *n)
 {
@@ -300,6 +310,7 @@ script_text(const ns_node *n)
     return g_string_free(out, FALSE);
 }
 
+/* Unescapes a JSON string body up to its closing quote; caller frees. */
 static char *
 json_string_unescape(const char *p)
 {
@@ -336,6 +347,7 @@ json_string_unescape(const char *p)
     return g_string_free(out, FALSE);
 }
 
+/* Finds "key": "..." in raw JSON text and returns a pointer after the opening quote. */
 static const char *
 json_string_value_for_key(const char *text, const char *key, const char **out_key)
 {
@@ -358,6 +370,7 @@ json_string_value_for_key(const char *text, const char *key, const char **out_ke
     return NULL;
 }
 
+/* Unescaped string value of the first occurrence of key in JSON text; caller frees. */
 static char *
 json_first_url_for_key(const char *text, const char *key)
 {
@@ -372,6 +385,7 @@ attr_contains_word(const ns_node *n, const char *attr, const char *word)
     return v && word && g_strstr_len(v, -1, word) != NULL;
 }
 
+/* First element whose attribute value contains word as a substring. */
 static ns_node *
 find_element_with_attr_contains(ns_node *n, const char *attr, const char *word,
                                 int depth)
@@ -386,6 +400,7 @@ find_element_with_attr_contains(ns_node *n, const char *attr, const char *word,
     return NULL;
 }
 
+/* Element to annotate with extracted media: first video, #player, or a .player element. */
 static ns_node *
 document_media_target(const ns_node *root)
 {
@@ -397,6 +412,7 @@ document_media_target(const ns_node *root)
                                            0);
 }
 
+/* Finds a meta element with this property or name and non-empty content. */
 static ns_node *
 find_meta_property(ns_node *n, const char *prop, int depth)
 {
@@ -415,6 +431,7 @@ find_meta_property(ns_node *n, const char *prop, int depth)
     return NULL;
 }
 
+/* Content of the matching meta property; caller frees, NULL if absent. */
 static char *
 meta_property_content(const ns_node *root, const char *prop)
 {
@@ -423,6 +440,7 @@ meta_property_content(const ns_node *root, const char *prop)
     return (c && *c) ? g_strdup(c) : NULL;
 }
 
+/* String value for key in the first JSON-LD script mentioning VideoObject; caller frees. */
 static char *
 jsonld_videoobject_url(const ns_node *n, const char *key, int depth)
 {
@@ -446,6 +464,7 @@ jsonld_videoobject_url(const ns_node *n, const char *key, int depth)
     return NULL;
 }
 
+/* True for http(s) URLs whose path ends in a natively playable container extension. */
 static gboolean
 media_url_is_direct_playable(const char *url)
 {
@@ -462,6 +481,7 @@ media_url_is_direct_playable(const char *url)
            strcmp(ext, ".ogv") == 0 || strcmp(ext, ".ogg") == 0;
 }
 
+/* Returns a if non-NULL (freeing b), else b. */
 static char *
 first_nonempty(char *a, char *b)
 {
@@ -469,6 +489,7 @@ first_nonempty(char *a, char *b)
     return b;
 }
 
+/* Marks the media target with a video src or stream flag and poster from page metadata. */
 static void
 ns_media_extract_standard(const ns_node *root)
 {
@@ -515,6 +536,7 @@ ns_media_extract_standard(const ns_node *root)
     g_free(embed);
 }
 
+/* Returns the position just after delim, or NULL if not found before end. */
 static const char *
 xml_skip_until(const char *p, const char *end, const char *delim)
 {
@@ -526,6 +548,7 @@ xml_skip_until(const char *p, const char *end, const char *delim)
     return NULL;
 }
 
+/* Extracts the xmlns default namespace value from a root start tag; caller frees. */
 static char *
 xml_root_default_namespace(const char *s, const char *end)
 {
@@ -546,6 +569,7 @@ xml_root_default_namespace(const char *s, const char *end)
     return NULL;
 }
 
+/* Lightweight tag-balance well-formedness check; optionally returns the root namespace. */
 gboolean
 ns_xml_well_formed(const char *input, gssize len, char **out_root_ns)
 {
@@ -645,6 +669,7 @@ ns_xml_well_formed(const char *input, gssize len, char **out_root_ns)
     return ok;
 }
 
+/* Collects script elements in document order. */
 static void
 ns_collect_script_elems(ns_node *n, GPtrArray *out, int depth)
 {
@@ -657,6 +682,7 @@ ns_collect_script_elems(ns_node *n, GPtrArray *out, int depth)
     }
 }
 
+/* Sets each script element's source line by scanning the input for script start tags. */
 static void
 ns_html_assign_script_positions(ns_node *root, const char *input, size_t len)
 {
@@ -695,6 +721,7 @@ ns_html_assign_script_positions(ns_node *root, const char *input, size_t len)
     g_array_free(lines, TRUE);
 }
 
+/* Ends parsing and converts the document, applying quirks, DSD and media extraction. */
 static ns_node *
 ns_html_parser_finish(ns_html_parser *parser)
 {
@@ -720,6 +747,7 @@ ns_html_parser_finish(ns_html_parser *parser)
     return root;
 }
 
+/* Creates a chunked lexbor document parser with scripting flag set. */
 static ns_html_parser *
 ns_html_parser_new(gboolean scripting)
 {
@@ -742,6 +770,7 @@ ns_html_parser_new(gboolean scripting)
     return parser;
 }
 
+/* Feeds a chunk to the parser, keeping a copy of the source for script positions. */
 static gboolean
 ns_html_parser_write(ns_html_parser *parser, const char *input, gsize len)
 {
@@ -767,6 +796,7 @@ ns_html_parser_free(ns_html_parser *parser)
     g_free(parser);
 }
 
+/* Parses a full HTML document in 16 KiB chunks; caller frees the tree. */
 ns_node *
 ns_html_parse_with_scripting(const char *input, gssize len,
                              gboolean scripting)
@@ -795,6 +825,7 @@ ns_html_parse(const char *input, gssize len)
     return ns_html_parse_with_scripting(input, len, TRUE);
 }
 
+/* Lexbor tag ID for a context element name; defaults to body. */
 static lxb_tag_id_t
 lxb_tag_id_from_name(lxb_html_document_t *doc, const char *name)
 {
@@ -806,6 +837,7 @@ lxb_tag_id_from_name(lxb_html_document_t *doc, const char *name)
     return data->tag_id;
 }
 
+/* Mirrors a lexbor node into the output tree incrementally, updating changed text. */
 static ns_node *
 lxb_fragment_sync_node(lxb_dom_node_t *src, ns_node *parent)
 {
@@ -842,6 +874,7 @@ lxb_fragment_sync_node(lxb_dom_node_t *src, ns_node *parent)
     return out;
 }
 
+/* Tracks whether streamed input ends inside a tag or character reference. */
 static void
 lxb_fragment_track_input(ns_html_fragment_parser *stream,
                          const char *input, gsize len)
@@ -869,6 +902,7 @@ lxb_fragment_track_input(ns_html_fragment_parser *stream,
     }
 }
 
+/* True if pending text can be flushed (not mid-tag or inside raw-text elements). */
 static gboolean
 lxb_fragment_can_flush_text(ns_html_fragment_parser *stream)
 {
@@ -890,6 +924,7 @@ lxb_fragment_can_flush_text(ns_html_fragment_parser *stream)
     return TRUE;
 }
 
+/* Clears the parser-open flag on all mirrored nodes under src. */
 static void
 lxb_fragment_clear_open(lxb_dom_node_t *src)
 {
@@ -908,6 +943,7 @@ lxb_fragment_clear_open(lxb_dom_node_t *src)
     }
 }
 
+/* Syncs the lexbor fragment into output, marking still-open script elements. */
 static void
 lxb_fragment_sync(ns_html_fragment_parser *stream, lxb_dom_node_t *root)
 {
@@ -932,6 +968,7 @@ lxb_fragment_sync(ns_html_fragment_parser *stream, lxb_dom_node_t *root)
     }
 }
 
+/* Creates a streaming fragment parser (used for document.write) in a context element. */
 ns_html_fragment_parser *
 ns_html_fragment_parser_new(const char *context_tag, gboolean scripting)
 {
@@ -959,6 +996,7 @@ ns_html_fragment_parser_new(const char *context_tag, gboolean scripting)
     return stream;
 }
 
+/* Feeds streamed markup, forcing a text flush with a sentinel element, then syncs output. */
 gboolean
 ns_html_fragment_parser_write(ns_html_fragment_parser *stream,
                               const char *input, gsize len)
@@ -988,6 +1026,7 @@ ns_html_fragment_parser_write(ns_html_fragment_parser *stream,
     return TRUE;
 }
 
+/* Finishes the streaming fragment parse and syncs the final tree. */
 gboolean
 ns_html_fragment_parser_finish(ns_html_fragment_parser *stream)
 {
@@ -1003,6 +1042,7 @@ ns_html_fragment_parser_finish(ns_html_fragment_parser *stream)
     return TRUE;
 }
 
+/* True if the stream is mid-token or has elements still open beyond the root. */
 gboolean
 ns_html_fragment_parser_needs_source(const ns_html_fragment_parser *stream)
 {
@@ -1030,6 +1070,7 @@ ns_html_fragment_parser_free(ns_html_fragment_parser *stream)
     g_free(stream);
 }
 
+/* HTML fragment parsing algorithm with the given context element and namespace. */
 static ns_node *
 parse_fragment_in_namespace(const char *context_tag, lxb_ns_id_t context_ns,
                             const char *input, gssize len, gboolean scripting)
@@ -1076,6 +1117,7 @@ ns_html_parse_fragment_with_scripting(const char *context_tag,
                                        scripting);
 }
 
+/* Parses a fragment using a context node, honoring SVG/MathML context namespaces. */
 ns_node *
 ns_html_parse_fragment_in(const ns_node *context, const char *input,
                           gssize len, gboolean scripting)

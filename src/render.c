@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — shared style/layout pipeline used by GUI and headless.
+ * Runs cascade and layout, repeating for container queries, and honors viewport meta.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -39,12 +40,14 @@ ns_render_page_uses_active(void)
 static ns_css_page_rule g_render_page_rule;
 static gboolean         g_render_page_rule_set = FALSE;
 
+/* The last @page rule seen in the current sheets, or NULL. */
 const ns_css_page_rule *
 ns_render_page_rule(void)
 {
     return g_render_page_rule_set ? &g_render_page_rule : NULL;
 }
 
+/* Loads keyframes from all sheets and starts observing animations on styles. */
 static void
 render_feed_animations(const ns_render_ctx *c, GHashTable *styles)
 {
@@ -54,6 +57,7 @@ render_feed_animations(const ns_render_ctx *c, GHashTable *styles)
     ns_anim_observe_all(c->anim, styles, g_get_monotonic_time());
 }
 
+/* Requests @font-face sources allowed by fetch policy from the font loader. */
 static void
 render_request_fonts(const ns_render_ctx *c)
 {
@@ -81,6 +85,7 @@ render_request_fonts(const ns_render_ctx *c)
     }
 }
 
+/* Scales computed font sizes by the page zoom factor when not 1. */
 static void
 render_apply_zoom(const ns_render_ctx *c, GHashTable *styles)
 {
@@ -93,6 +98,7 @@ render_apply_zoom(const ns_render_ctx *c, GHashTable *styles)
         ns_css_style_scale_font_size(val, zoom);
 }
 
+/* Records size containers (container-type not normal) with their measured sizes. */
 static void
 render_collect_containers(const ns_box *b, GHashTable *map)
 {
@@ -119,6 +125,7 @@ render_collect_containers(const ns_box *b, GHashTable *map)
             g_array_index(b->inline_atomics, ns_inline_atomic, i).box, map);
 }
 
+/* Post-cascade style work: animations, web font requests and zoom. */
 static void
 render_style_pass(const ns_render_ctx *c, GHashTable *styles)
 {
@@ -127,6 +134,7 @@ render_style_pass(const ns_render_ctx *c, GHashTable *styles)
     render_apply_zoom(c, styles);
 }
 
+/* Deep equality of computed CSS values, including layered values. */
 static gboolean
 render_value_equal(const ns_css_value *a, const ns_css_value *b)
 {
@@ -179,6 +187,7 @@ render_value_equal(const ns_css_value *a, const ns_css_value *b)
     return equal && render_value_equal(a->next_layer, b->next_layer);
 }
 
+/* True if two custom property maps have the same names and values. */
 static gboolean
 render_vars_equal(const struct ns_var_map *a, const struct ns_var_map *b)
 {
@@ -198,6 +207,7 @@ render_vars_equal(const struct ns_var_map *a, const struct ns_var_map *b)
     return equal;
 }
 
+/* Deep equality of computed styles, including pseudo-element styles. */
 static gboolean
 render_style_equal(const ns_style *a, const ns_style *b)
 {
@@ -223,6 +233,7 @@ render_style_equal(const ns_style *a, const ns_style *b)
                               b->file_selector_button);
 }
 
+/* True if two node-to-style tables hold equal styles for the same nodes. */
 static gboolean
 render_style_tables_equal(GHashTable *a, GHashTable *b)
 {
@@ -237,6 +248,7 @@ render_style_tables_equal(GHashTable *a, GHashTable *b)
     return TRUE;
 }
 
+/* Finds the first meta name="viewport" element. */
 static const ns_node *
 render_find_viewport_meta(const ns_node *n, int depth)
 {
@@ -253,6 +265,7 @@ render_find_viewport_meta(const ns_node *n, int depth)
     return NULL;
 }
 
+/* Parses an explicit width (320-4096) from viewport meta content; 0 otherwise. */
 static double
 render_parse_viewport_width(const char *content)
 {
@@ -279,6 +292,7 @@ render_parse_viewport_width(const char *content)
     return out;
 }
 
+/* Layout width: the real viewport, widened to a larger viewport meta width. */
 static double
 render_effective_viewport_width(const ns_render_ctx *c)
 {
@@ -292,6 +306,7 @@ render_effective_viewport_width(const ns_render_ctx *c)
 
 #define RENDER_CONTAINER_PASSES_MAX 3
 
+/* Builds the container size map from a layout when enabled (else empty). */
 static GHashTable *
 render_measure_containers(const ns_box *layout, gboolean enabled)
 {
@@ -305,6 +320,7 @@ static double         g_cq_seed_width;
 static GHashTable    *g_cq_seed;
 static gboolean       g_cq_seed_settled;
 
+/* Container map kept from the last render of this document and width, or NULL. */
 static GHashTable *
 render_container_seed(const ns_node *doc, double viewport_width)
 {
@@ -314,6 +330,7 @@ render_container_seed(const ns_node *doc, double viewport_width)
     return g_cq_seed;
 }
 
+/* Stores the measured container map for reuse by the next render. */
 static void
 render_keep_container_seed(const ns_node *doc, double viewport_width,
                            GHashTable *containers, gboolean settled)
@@ -326,6 +343,7 @@ render_keep_container_seed(const ns_node *doc, double viewport_width,
     g_cq_seed_settled = settled;
 }
 
+/* Container size map from the last render of doc, or NULL. */
 GHashTable *
 ns_render_container_map(const ns_node *doc)
 {
@@ -337,6 +355,7 @@ static const ns_node *g_offered_doc;
 static double         g_offered_width;
 static GHashTable    *g_offered_containers;
 
+/* Offers a precomputed style table for the next relayout; takes ownership. */
 void
 ns_render_offer_styles(const ns_node *doc, double viewport_width,
                        GHashTable *containers, GHashTable *styles)
@@ -348,6 +367,7 @@ ns_render_offer_styles(const ns_node *doc, double viewport_width,
     g_offered_containers = containers;
 }
 
+/* Effective layout viewport width for doc, honoring viewport meta. */
 double
 ns_render_viewport_width(ns_node *doc, double viewport_width)
 {
@@ -355,6 +375,7 @@ ns_render_viewport_width(ns_node *doc, double viewport_width)
     return render_effective_viewport_width(&c);
 }
 
+/* Takes offered styles if they match doc, width and container map; else frees them. */
 static GHashTable *
 render_take_offered_styles(const ns_node *doc, double viewport_width,
                            GHashTable *containers)
@@ -371,6 +392,7 @@ render_take_offered_styles(const ns_node *doc, double viewport_width,
     return styles;
 }
 
+/* Cascade plus layout, re-running for container queries until sizes settle. */
 GHashTable *
 ns_render_relayout_profile(const ns_render_ctx *c, ns_box **out_layout,
                            ns_render_profile *profile)

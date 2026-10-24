@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — incremental WebM (Matroska subset) demuxing for Media Source Extensions.
+/* Nordstjernen Web Browser — incremental WebM (Matroska subset) demuxer for Media Source.
+ * EBML parsing of tracks, clusters and laced blocks into MP4-style tracks and samples.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -135,6 +136,7 @@ struct ns_webm_demuxer {
     GQueue       *ready;
 };
 
+/* Length in bytes (1-8) of an EBML variable-size integer from its first byte; 0 if invalid. */
 static gsize
 vint_length(guint8 first_byte)
 {
@@ -144,6 +146,7 @@ vint_length(guint8 first_byte)
     return 0;
 }
 
+/* Reads an EBML vint, optionally keeping the length marker; flags the all-ones value. */
 static header_result
 read_vint(const guint8 *data, gsize available, gsize max_length,
           gboolean keep_marker, guint64 *value, gsize *length,
@@ -165,6 +168,7 @@ read_vint(const guint8 *data, gsize available, gsize max_length,
     return HEADER_COMPLETE;
 }
 
+/* Reads an EBML element ID and size; all-ones size means unknown size. */
 static header_result
 read_element_header(const guint8 *data, gsize available, element_header *out)
 {
@@ -197,6 +201,7 @@ iterator_init(element_iterator *it, const guint8 *data, gsize length)
     it->offset = 0;
 }
 
+/* Yields the next sized child element; 0 at end, -1 if malformed or unknown-size. */
 static int
 iterator_next(element_iterator *it, child_element *out)
 {
@@ -215,6 +220,7 @@ iterator_next(element_iterator *it, child_element *out)
     return 1;
 }
 
+/* Reads an EBML unsigned integer element of up to 8 bytes. */
 static gboolean
 read_unsigned(const child_element *element, guint64 *out)
 {
@@ -226,6 +232,7 @@ read_unsigned(const child_element *element, guint64 *out)
     return TRUE;
 }
 
+/* Reads a sign-extended EBML signed integer element of up to 8 bytes. */
 static gboolean
 read_signed(const child_element *element, gint64 *out)
 {
@@ -241,6 +248,7 @@ read_signed(const child_element *element, gint64 *out)
     return TRUE;
 }
 
+/* Reads an EBML float element (0, 4 or 8 bytes). */
 static gboolean
 read_float(const child_element *element, double *out)
 {
@@ -261,6 +269,7 @@ read_float(const child_element *element, double *out)
     return TRUE;
 }
 
+/* Copies an EBML string element into out, stopping at NUL and truncating. */
 static void
 read_string(const child_element *element, char *out, gsize out_size)
 {
@@ -272,6 +281,7 @@ read_string(const child_element *element, char *out, gsize out_size)
     out[length] = '\0';
 }
 
+/* Drops a track's held block awaiting a duration. */
 static void
 release_held_block(webm_track *track)
 {
@@ -291,6 +301,7 @@ webm_track_free(gpointer data)
     g_free(track);
 }
 
+/* Finds a WebM track by track number. */
 static webm_track *
 find_track(GPtrArray *tracks, guint64 number)
 {
@@ -301,12 +312,14 @@ find_track(GPtrArray *tracks, guint64 number)
     return NULL;
 }
 
+/* True if the timecode scale divides one second evenly in nanoseconds. */
 static gboolean
 timecode_scale_is_exact(guint64 timecode_scale)
 {
     return WEBM_NANOSECONDS_PER_SECOND % timecode_scale == 0;
 }
 
+/* Sample timescale for a timecode scale: ticks per second, or ns when inexact. */
 static guint32
 timescale_for(guint64 timecode_scale)
 {
@@ -315,12 +328,14 @@ timescale_for(guint64 timecode_scale)
     return (guint32)WEBM_NANOSECONDS_PER_SECOND;
 }
 
+/* Factor converting block timecodes to timescale ticks (1 when scale is exact). */
 static guint64
 tick_multiplier(guint64 timecode_scale)
 {
     return timecode_scale_is_exact(timecode_scale) ? 1 : timecode_scale;
 }
 
+/* Rounds a nanosecond duration to timescale ticks, capped to the max timestamp. */
 static gint64
 nanoseconds_to_ticks(guint64 nanoseconds, guint32 timescale)
 {
@@ -331,6 +346,7 @@ nanoseconds_to_ticks(guint64 nanoseconds, guint32 timescale)
     return (gint64)MIN(ticks, (guint64)WEBM_MAX_TIMESTAMP);
 }
 
+/* Splits a total duration across count frames, spreading the remainder. */
 static void
 fill_spread_durations(gint64 total, guint count, gint64 *durations)
 {
@@ -341,6 +357,7 @@ fill_spread_durations(gint64 total, guint count, gint64 *durations)
         durations[i] = base + ((gint64)i < remainder ? 1 : 0);
 }
 
+/* Queues laced frames as consecutive samples sharing keyframe status. */
 static void
 emit_frame_group(ns_webm_demuxer *d, webm_track *track, gint64 timestamp,
                  gboolean keyframe, GPtrArray *frames, const gint64 *durations)
@@ -360,6 +377,7 @@ emit_frame_group(ns_webm_demuxer *d, webm_track *track, gint64 timestamp,
     }
 }
 
+/* Emits a held block, deriving its duration from the next timestamp or last frame. */
 static void
 resolve_held_block(ns_webm_demuxer *d, webm_track *track,
                    gboolean has_next_timestamp, gint64 next_timestamp)
@@ -390,6 +408,7 @@ drop_all_held_blocks(ns_webm_demuxer *d)
         release_held_block(g_ptr_array_index(d->tracks, i));
 }
 
+/* Sets the segment timecode scale, flushing held blocks if it changes. */
 static void
 apply_timecode_scale(ns_webm_demuxer *d, guint64 timecode_scale)
 {
@@ -401,6 +420,7 @@ apply_timecode_scale(ns_webm_demuxer *d, guint64 timecode_scale)
     }
 }
 
+/* Opus packet duration from its TOC byte and frame count; 0 if invalid. */
 static guint64
 opus_packet_duration_ns(GBytes *frame)
 {
@@ -440,6 +460,7 @@ opus_packet_duration_ns(GBytes *frame)
     return total;
 }
 
+/* Reads Xiph-style lace sizes (255-continued bytes) for all but the last frame. */
 static gboolean
 read_xiph_lace_sizes(const guint8 *data, gsize length, gsize *offset,
                      parsed_block *block, gsize *sum)
@@ -460,6 +481,7 @@ read_xiph_lace_sizes(const guint8 *data, gsize length, gsize *offset,
     return TRUE;
 }
 
+/* Reads EBML lace sizes: first absolute, the rest as signed vint deltas. */
 static gboolean
 read_ebml_lace_sizes(const guint8 *data, gsize length, gsize *offset,
                      parsed_block *block, gsize *sum)
@@ -491,6 +513,7 @@ read_ebml_lace_sizes(const guint8 *data, gsize length, gsize *offset,
     return TRUE;
 }
 
+/* Parses a (Simple)Block header and lacing into per-frame offsets and sizes. */
 static gboolean
 parse_block_payload(const guint8 *data, gsize length, parsed_block *block)
 {
@@ -540,6 +563,7 @@ parse_block_payload(const guint8 *data, gsize length, parsed_block *block)
     return TRUE;
 }
 
+/* Absolute block timestamp in timescale ticks from cluster and relative timecodes. */
 static gboolean
 block_timestamp(const ns_webm_demuxer *d, gint16 relative_timecode,
                 gint64 *out)
@@ -552,6 +576,7 @@ block_timestamp(const ns_webm_demuxer *d, gint16 relative_timecode,
     return TRUE;
 }
 
+/* Splits a block into samples, holding it when no duration source is known. */
 static gboolean
 handle_block(ns_webm_demuxer *d, GBytes *block_bytes, gboolean is_simple_block,
              gboolean has_block_duration, guint64 block_duration,
@@ -610,6 +635,7 @@ handle_block(ns_webm_demuxer *d, GBytes *block_bytes, gboolean is_simple_block,
     return TRUE;
 }
 
+/* Parses a BlockGroup: Block, BlockDuration and ReferenceBlock (non-keyframe). */
 static gboolean
 parse_block_group(ns_webm_demuxer *d, const guint8 *payload, gsize length)
 {
@@ -652,6 +678,7 @@ parse_block_group(ns_webm_demuxer *d, const guint8 *payload, gsize length)
     return ok;
 }
 
+/* Validates the EBML header limits and requires a webm or matroska DocType. */
 static gboolean
 parse_ebml_header(const guint8 *payload, gsize length)
 {
@@ -683,6 +710,7 @@ parse_ebml_header(const guint8 *payload, gsize length)
     return strcmp(doc_type, "webm") == 0 || strcmp(doc_type, "matroska") == 0;
 }
 
+/* Parses segment Info: timecode scale and duration in seconds. */
 static gboolean
 parse_info(ns_webm_demuxer *d, const guint8 *payload, gsize length)
 {
@@ -713,6 +741,7 @@ parse_info(ns_webm_demuxer *d, const guint8 *payload, gsize length)
     return TRUE;
 }
 
+/* Maps a Matroska CodecID to an MP4-style codec fourcc name. */
 static void
 assign_codec_name(webm_track *track, const char *codec_id)
 {
@@ -747,6 +776,7 @@ assign_codec_name(webm_track *track, const char *codec_id)
     track->public.codec[i] = '\0';
 }
 
+/* Reads pixel width and height from a Video track element. */
 static gboolean
 parse_track_video(webm_track *track, const child_element *video)
 {
@@ -768,6 +798,7 @@ parse_track_video(webm_track *track, const child_element *video)
     return step == 0;
 }
 
+/* Reads sampling frequency and channel count from an Audio track element. */
 static gboolean
 parse_track_audio(webm_track *track, const child_element *audio)
 {
@@ -790,6 +821,7 @@ parse_track_audio(webm_track *track, const child_element *audio)
     return step == 0;
 }
 
+/* Parses a TrackEntry; *out is NULL for non audio/video tracks. */
 static gboolean
 parse_track_entry(ns_webm_demuxer *d, const child_element *entry,
                   webm_track **out)
@@ -873,6 +905,7 @@ parse_track_entry(ns_webm_demuxer *d, const child_element *entry,
     return TRUE;
 }
 
+/* Parses Tracks into a new track set, replacing the old one (init segment). */
 static gboolean
 parse_tracks(ns_webm_demuxer *d, const guint8 *payload, gsize length)
 {
@@ -917,6 +950,7 @@ input_cursor(const ns_webm_demuxer *d)
     return d->input->data + d->input_offset;
 }
 
+/* Advances past count input bytes, updating the stream position. */
 static void
 consume_input(ns_webm_demuxer *d, gsize count)
 {
@@ -924,6 +958,7 @@ consume_input(ns_webm_demuxer *d, gsize count)
     d->position += count;
 }
 
+/* Discards consumed bytes from the front of the input buffer. */
 static void
 compact_input(ns_webm_demuxer *d)
 {
@@ -932,6 +967,7 @@ compact_input(ns_webm_demuxer *d)
     d->input_offset = 0;
 }
 
+/* 1 if the element is fully buffered, 0 if more is needed, -1 if too big/unknown. */
 static int
 element_ready(const ns_webm_demuxer *d, const element_header *header,
               guint64 limit)
@@ -941,6 +977,7 @@ element_ready(const ns_webm_demuxer *d, const element_header *header,
     return 1;
 }
 
+/* Consumes an element header and skips its payload. */
 static void
 enter_skip(ns_webm_demuxer *d, const element_header *header)
 {
@@ -948,6 +985,7 @@ enter_skip(ns_webm_demuxer *d, const element_header *header)
     d->skip_remaining = header->size;
 }
 
+/* True for segment-level element IDs, which end an unknown-size cluster. */
 static gboolean
 id_is_top_level(guint32 id)
 {
@@ -968,6 +1006,7 @@ id_is_top_level(guint32 id)
     }
 }
 
+/* Leaves cluster context, flushing held blocks. */
 static void
 end_cluster(ns_webm_demuxer *d)
 {
@@ -979,6 +1018,7 @@ end_cluster(ns_webm_demuxer *d)
     d->cluster_timecode = 0;
 }
 
+/* Parses a fully buffered element (EBML, Info, Tracks, timecode, blocks). */
 static gboolean
 parse_buffered_element(ns_webm_demuxer *d, const element_header *header,
                        guint64 limit, gboolean *need_more)
@@ -1025,6 +1065,7 @@ parse_buffered_element(ns_webm_demuxer *d, const element_header *header,
     return ok;
 }
 
+/* Handles a segment-level element: enters Segment/Cluster, parses headers, skips rest. */
 static gboolean
 process_top_level_element(ns_webm_demuxer *d, const element_header *header,
                           gboolean *need_more)
@@ -1060,6 +1101,7 @@ process_top_level_element(ns_webm_demuxer *d, const element_header *header,
     }
 }
 
+/* Handles an element inside a cluster, bounded by the cluster end when known. */
 static gboolean
 process_cluster_element(ns_webm_demuxer *d, const element_header *header,
                         gboolean *need_more)
@@ -1090,6 +1132,7 @@ process_cluster_element(ns_webm_demuxer *d, const element_header *header,
     }
 }
 
+/* Runs the incremental parser over buffered input until it needs more data. */
 static gboolean
 process_input(ns_webm_demuxer *d)
 {
@@ -1135,6 +1178,7 @@ clear_parser_state(ns_webm_demuxer *d)
     d->cluster_timecode = 0;
 }
 
+/* Puts the demuxer in a permanent error state, dropping buffered input. */
 static void
 enter_error_state(ns_webm_demuxer *d)
 {
@@ -1167,6 +1211,7 @@ ns_webm_demuxer_free(ns_webm_demuxer *d)
     g_free(d);
 }
 
+/* Feeds bytes to the demuxer, fast-skipping ignored payloads; FALSE on error. */
 gboolean
 ns_webm_demuxer_append(ns_webm_demuxer *d, const guint8 *data, gsize len)
 {
@@ -1215,6 +1260,7 @@ ns_webm_demuxer_track(const ns_webm_demuxer *d, guint index)
     return &track->public;
 }
 
+/* Pops the next demuxed sample; caller owns out->data. */
 gboolean
 ns_webm_demuxer_pop_sample(ns_webm_demuxer *d, ns_mp4_sample *out)
 {
@@ -1226,6 +1272,7 @@ ns_webm_demuxer_pop_sample(ns_webm_demuxer *d, ns_mp4_sample *out)
     return TRUE;
 }
 
+/* Emits any blocks held for duration resolution (end of stream). */
 void
 ns_webm_demuxer_flush(ns_webm_demuxer *d)
 {
@@ -1233,6 +1280,7 @@ ns_webm_demuxer_flush(ns_webm_demuxer *d)
     resolve_all_held_blocks(d);
 }
 
+/* Resets parsing at a discontinuity, flushing held blocks first. */
 void
 ns_webm_demuxer_reset_parser(ns_webm_demuxer *d)
 {
@@ -1241,6 +1289,7 @@ ns_webm_demuxer_reset_parser(ns_webm_demuxer *d)
     clear_parser_state(d);
 }
 
+/* Segment duration in seconds, or -1 when not declared. */
 double
 ns_webm_demuxer_duration_seconds(const ns_webm_demuxer *d)
 {

@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — SubtleCrypto and CryptoKey of the Web Cryptography API (QuickJS).
+/* Nordstjernen Web Browser — Web Cryptography API bindings: SubtleCrypto and CryptoKey (QuickJS).
+ * Normalizes algorithms, imports/exports raw, SPKI, PKCS#8 and JWK keys over webcrypto.c.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -229,6 +230,7 @@ ns_cryptokey_finalizer(JSRuntime *rt, JSValue val)
     g_free(ref);
 }
 
+/* GC mark hook keeping the CryptoKey's cached algorithm and usages objects alive. */
 static void
 ns_cryptokey_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
@@ -249,6 +251,7 @@ static JSClassDef ns_subtle_class = {
     .finalizer = NULL,
 };
 
+/* Throws a TypeError or a DOMException with the given name and message. */
 static JSValue
 ns_wc_throw(JSContext *ctx, const char *name, const char *message)
 {
@@ -273,6 +276,7 @@ ns_wc_throw(JSContext *ctx, const char *name, const char *message)
     return JS_Throw(ctx, err);
 }
 
+/* Throws from an "XxxError: msg" string, using the prefix as DOMException name; frees err. */
 static JSValue
 ns_wc_throw_err(JSContext *ctx, char *err, const char *fallback)
 {
@@ -293,6 +297,7 @@ ns_wc_throw_err(JSContext *ctx, char *err, const char *fallback)
     return r;
 }
 
+/* Zeroes and frees a buffer so key material does not linger in memory. */
 static void
 ns_wc_buf_clear(ns_wc_buf *b)
 {
@@ -304,6 +309,7 @@ ns_wc_buf_clear(ns_wc_buf *b)
     b->len = 0;
 }
 
+/* Replaces the buffer with a NUL-terminated copy of data, wiping old contents. */
 static void
 ns_wc_buf_set(ns_wc_buf *b, const guint8 *data, gsize len)
 {
@@ -314,6 +320,7 @@ ns_wc_buf_set(ns_wc_buf *b, const guint8 *data, gsize len)
     b->len = len;
 }
 
+/* True if v is an ArrayBuffer or ArrayBufferView. */
 static gboolean
 ns_wc_is_buffer_source(JSContext *ctx, JSValueConst v)
 {
@@ -325,6 +332,7 @@ ns_wc_is_buffer_source(JSContext *ctx, JSValueConst v)
     return ok;
 }
 
+/* Copies the bytes of a BufferSource into out (empty if not a buffer). */
 static void
 ns_wc_copy_buffer(JSContext *ctx, JSValueConst v, ns_wc_buf *out)
 {
@@ -336,6 +344,7 @@ ns_wc_copy_buffer(JSContext *ctx, JSValueConst v, ns_wc_buf *out)
     JS_FreeValue(ctx, hold);
 }
 
+/* Wipes and frees all owned members of a normalized algorithm. */
 static void
 ns_wc_alg_clear(ns_wc_alg *a)
 {
@@ -352,6 +361,7 @@ ns_wc_alg_clear(ns_wc_alg *a)
     memset(a, 0, sizeof *a);
 }
 
+/* Wipes and frees all JWK string members, zeroing key material first. */
 static void
 ns_wc_jwk_clear(ns_wc_jwk *j)
 {
@@ -402,6 +412,7 @@ ns_wc_is_xdh(const char *name)
     return !strcmp(name, "X25519") || !strcmp(name, "X448");
 }
 
+/* Raw key size in bytes for an OKP curve: 57 for Ed448, 56 for X448, else 32. */
 static gsize
 ns_wc_okp_key_bytes(const char *name)
 {
@@ -410,6 +421,7 @@ ns_wc_okp_key_bytes(const char *name)
     return 32;
 }
 
+/* Usages permitted for a secret key of the given algorithm. */
 static guint32
 ns_wc_secret_usages(const char *name)
 {
@@ -419,6 +431,7 @@ ns_wc_secret_usages(const char *name)
     return NS_USAGES_DERIVE;
 }
 
+/* Usages permitted for a public key of the given algorithm. */
 static guint32
 ns_wc_public_usages(const char *name)
 {
@@ -427,6 +440,7 @@ ns_wc_public_usages(const char *name)
     return NS_USAGE_VERIFY;
 }
 
+/* Usages permitted for a private key of the given algorithm. */
 static guint32
 ns_wc_private_usages(const char *name)
 {
@@ -435,6 +449,7 @@ ns_wc_private_usages(const char *name)
     return NS_USAGE_SIGN;
 }
 
+/* Block size in bits of a SHA hash: 1024 for SHA-384/512, else 512 (HMAC default length). */
 static int
 ns_wc_hash_block_bits(const char *hash)
 {
@@ -442,6 +457,7 @@ ns_wc_hash_block_bits(const char *hash)
                                                                          : 512;
 }
 
+/* JWK alg suffix for a SHA hash name (e.g. "256"), or NULL if unknown. */
 static const char *
 ns_wc_hash_suffix(const char *hash)
 {
@@ -452,6 +468,7 @@ ns_wc_hash_suffix(const char *hash)
     return NULL;
 }
 
+/* True for the supported NIST curves P-256, P-384 and P-521. */
 static gboolean
 ns_wc_curve_supported(const char *curve)
 {
@@ -459,6 +476,7 @@ ns_wc_curve_supported(const char *curve)
                      !strcmp(curve, "P-521"));
 }
 
+/* Field element size in bytes for a NIST curve; 0 if unknown. */
 static gsize
 ns_wc_curve_bytes(const char *curve)
 {
@@ -468,6 +486,7 @@ ns_wc_curve_bytes(const char *curve)
     return 0;
 }
 
+/* Reads a dictionary member; returns 1 present, 0 absent, -1 on error or missing required. */
 static int
 ns_wc_member(JSContext *ctx, JSValueConst obj, const char *key,
              gboolean required, JSValue *out)
@@ -482,6 +501,7 @@ ns_wc_member(JSContext *ctx, JSValueConst obj, const char *key,
     return 0;
 }
 
+/* WebIDL [EnforceRange] conversion to an unsigned integer bounded by max. */
 static int
 ns_wc_to_enforced(JSContext *ctx, JSValueConst v, double max, guint32 *out)
 {
@@ -500,6 +520,7 @@ ns_wc_to_enforced(JSContext *ctx, JSValueConst v, double max, guint32 *out)
     return 0;
 }
 
+/* Reads an [EnforceRange] unsigned dictionary member; reports presence via present. */
 static int
 ns_wc_member_uint(JSContext *ctx, JSValueConst obj, const char *key,
                   gboolean required, double max, guint32 *out,
@@ -514,6 +535,7 @@ ns_wc_member_uint(JSContext *ctx, JSValueConst obj, const char *key,
     return r < 0 ? -1 : 1;
 }
 
+/* Reads a BufferSource dictionary member into out, copying the bytes. */
 static int
 ns_wc_member_buffer(JSContext *ctx, JSValueConst obj, const char *key,
                     gboolean required, ns_wc_buf *out)
@@ -532,6 +554,7 @@ ns_wc_member_buffer(JSContext *ctx, JSValueConst obj, const char *key,
     return 1;
 }
 
+/* Reads a dictionary member converted to a string; caller frees out. */
 static int
 ns_wc_member_string(JSContext *ctx, JSValueConst obj, const char *key,
                     gboolean required, char **out)
@@ -547,6 +570,7 @@ ns_wc_member_string(JSContext *ctx, JSValueConst obj, const char *key,
     return 1;
 }
 
+/* Reads an AlgorithmIdentifier member, stringifying non-objects. */
 static int
 ns_wc_member_identifier(JSContext *ctx, JSValueConst obj, const char *key,
                         JSValue *out)
@@ -559,6 +583,7 @@ ns_wc_member_identifier(JSContext *ctx, JSValueConst obj, const char *key,
     return JS_IsException(s) ? -1 : 1;
 }
 
+/* Reads a BigInteger (Uint8Array) dictionary member into out. */
 static int
 ns_wc_member_big_integer(JSContext *ctx, JSValueConst obj, const char *key,
                          ns_wc_buf *out)
@@ -576,6 +601,7 @@ ns_wc_member_big_integer(JSContext *ctx, JSValueConst obj, const char *key,
     return 1;
 }
 
+/* Returns the native key behind a CryptoKey object, or NULL. */
 static ns_crypto_key *
 ns_wc_key_of(JSValueConst v)
 {
@@ -583,6 +609,7 @@ ns_wc_key_of(JSValueConst v)
     return ref ? ref->key : NULL;
 }
 
+/* Reads a CryptoKey dictionary member; out receives a new reference. */
 static int
 ns_wc_member_key(JSContext *ctx, JSValueConst obj, const char *key,
                  ns_crypto_key **out)
@@ -603,6 +630,7 @@ ns_wc_member_key(JSContext *ctx, JSValueConst obj, const char *key,
 static int ns_wc_normalize(JSContext *ctx, JSValueConst alg, ns_wc_op op,
                            ns_wc_alg *out);
 
+/* Converts the algorithm-specific dictionary members for a params type, normalizing hash. */
 static int
 ns_wc_convert_params(JSContext *ctx, JSValueConst obj, int params, ns_wc_alg *a)
 {
@@ -693,6 +721,7 @@ ns_wc_convert_params(JSContext *ctx, JSValueConst obj, int params, ns_wc_alg *a)
     return r < 0 ? -1 : 0;
 }
 
+/* WebCrypto "normalize an algorithm": registry lookup by op plus parameter conversion. */
 static int
 ns_wc_normalize(JSContext *ctx, JSValueConst alg, ns_wc_op op, ns_wc_alg *out)
 {
@@ -744,6 +773,7 @@ ns_wc_normalize(JSContext *ctx, JSValueConst alg, ns_wc_op op, ns_wc_alg *out)
     return r;
 }
 
+/* True if the registry lists the algorithm for the operation. */
 static gboolean
 ns_wc_supports(const char *name, ns_wc_op op)
 {
@@ -753,6 +783,7 @@ ns_wc_supports(const char *name, ns_wc_op op)
     return FALSE;
 }
 
+/* Converts a sequence of KeyUsage strings to a bitmask; TypeError on unknown entries. */
 static int
 ns_wc_usages_from(JSContext *ctx, JSValueConst v, guint32 *out)
 {
@@ -785,6 +816,7 @@ ns_wc_usages_from(JSContext *ctx, JSValueConst v, guint32 *out)
     return 0;
 }
 
+/* Builds a JS array of usage names from a bitmask, in canonical order. */
 static JSValue
 ns_wc_usages_array(JSContext *ctx, guint32 usages)
 {
@@ -797,6 +829,7 @@ ns_wc_usages_array(JSContext *ctx, guint32 usages)
     return a;
 }
 
+/* Parses a KeyFormat string (raw, spki, pkcs8, jwk). */
 static int
 ns_wc_format_from(JSContext *ctx, JSValueConst v, ns_wc_format *out)
 {
@@ -815,6 +848,7 @@ ns_wc_format_from(JSContext *ctx, JSValueConst v, ns_wc_format *out)
     return 0;
 }
 
+/* Unwraps a CryptoKey argument, throwing TypeError naming what if it is not one. */
 static ns_crypto_key *
 ns_wc_key_arg(JSContext *ctx, JSValueConst v, const char *what)
 {
@@ -823,6 +857,7 @@ ns_wc_key_arg(JSContext *ctx, JSValueConst v, const char *what)
     return k;
 }
 
+/* Wraps a native key in a new CryptoKey object, taking ownership of k. */
 static JSValue
 ns_wc_new_key(JSContext *ctx, ns_crypto_key *k)
 {
@@ -839,6 +874,7 @@ ns_wc_new_key(JSContext *ctx, ns_crypto_key *k)
     return o;
 }
 
+/* Structured-clone helper: new CryptoKey sharing the same native key. */
 JSValue
 ns_webcrypto_clone_key(JSContext *ctx, JSValueConst v)
 {
@@ -856,6 +892,7 @@ ns_wc_hash_object(JSContext *ctx, const char *hash)
     return h;
 }
 
+/* Builds the KeyAlgorithm dictionary exposed as CryptoKey.algorithm. */
 static JSValue
 ns_wc_key_algorithm(JSContext *ctx, const ns_crypto_key *k)
 {
@@ -905,6 +942,7 @@ ns_cryptokey_get_extractable(JSContext *ctx, JSValueConst this_val)
     return JS_NewBool(ctx, ref->key->extractable);
 }
 
+/* CryptoKey.algorithm getter; caches the object so identity is stable. */
 static JSValue
 ns_cryptokey_get_algorithm(JSContext *ctx, JSValueConst this_val)
 {
@@ -915,6 +953,7 @@ ns_cryptokey_get_algorithm(JSContext *ctx, JSValueConst this_val)
     return JS_DupValue(ctx, ref->algorithm);
 }
 
+/* CryptoKey.usages getter; caches the array so identity is stable. */
 static JSValue
 ns_cryptokey_get_usages(JSContext *ctx, JSValueConst this_val)
 {
@@ -925,6 +964,7 @@ ns_cryptokey_get_usages(JSContext *ctx, JSValueConst this_val)
     return JS_DupValue(ctx, ref->usages);
 }
 
+/* Decodes unpadded base64url into out; -1 on invalid characters or length. */
 static int
 ns_wc_b64url_decode(const char *s, ns_wc_buf *out)
 {
@@ -953,6 +993,7 @@ ns_wc_b64url_decode(const char *s, ns_wc_buf *out)
     return 0;
 }
 
+/* Encodes bytes as unpadded base64url; caller frees. */
 static char *
 ns_wc_b64url_encode(const guint8 *b, gsize len)
 {
@@ -966,6 +1007,7 @@ ns_wc_b64url_encode(const guint8 *b, gsize len)
     return s;
 }
 
+/* Copies an optional JWK string member into out; caller frees. */
 static int
 ns_wc_jwk_string(JSContext *ctx, JSValueConst obj, const char *key, char **out)
 {
@@ -980,6 +1022,7 @@ ns_wc_jwk_string(JSContext *ctx, JSValueConst obj, const char *key, char **out)
     return 0;
 }
 
+/* Reads JWK key_ops into a usage mask, noting repeated entries. */
 static int
 ns_wc_jwk_key_ops(JSContext *ctx, JSValueConst obj, ns_wc_jwk *jwk)
 {
@@ -1018,6 +1061,7 @@ ns_wc_jwk_key_ops(JSContext *ctx, JSValueConst obj, ns_wc_jwk *jwk)
     return r < 0 ? -1 : 0;
 }
 
+/* Converts a JsonWebKey dictionary, reading members in WebIDL lexicographic order. */
 static int
 ns_wc_jwk_from(JSContext *ctx, JSValueConst obj, ns_wc_jwk *jwk)
 {
@@ -1064,6 +1108,7 @@ ns_wc_jwk_from(JSContext *ctx, JSValueConst obj, ns_wc_jwk *jwk)
     return 0;
 }
 
+/* Validates JWK kty, use, key_ops and ext against the import request; throws DataError. */
 static gboolean
 ns_wc_jwk_check(JSContext *ctx, const ns_wc_jwk *jwk, const char *kty,
                 const char *use, gboolean extractable, guint32 usages)
@@ -1088,6 +1133,7 @@ ns_wc_jwk_check(JSContext *ctx, const ns_wc_jwk *jwk, const char *kty,
     return TRUE;
 }
 
+/* Decodes a required base64url JWK member; throws DataError if missing or bad. */
 static gboolean
 ns_wc_jwk_bytes(JSContext *ctx, const char *field, ns_wc_buf *out)
 {
@@ -1096,6 +1142,7 @@ ns_wc_jwk_bytes(JSContext *ctx, const char *field, ns_wc_buf *out)
     return FALSE;
 }
 
+/* Throws SyntaxError unless all requested usages are within allowed. */
 static gboolean
 ns_wc_check_usages(JSContext *ctx, guint32 usages, guint32 allowed)
 {
@@ -1104,6 +1151,7 @@ ns_wc_check_usages(JSContext *ctx, guint32 usages, guint32 allowed)
     return FALSE;
 }
 
+/* Imports an AES key from raw or JWK, checking size and the JWK alg (e.g. A256GCM). */
 static ns_crypto_key *
 ns_wc_import_aes(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                  const ns_wc_jwk *jwk, const ns_wc_alg *a, gboolean extractable,
@@ -1151,6 +1199,7 @@ ns_wc_import_aes(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return k;
 }
 
+/* Imports an HMAC key from raw or JWK, honoring an explicit bit length. */
 static ns_crypto_key *
 ns_wc_import_hmac(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                   const ns_wc_jwk *jwk, const ns_wc_alg *a, gboolean extractable,
@@ -1203,6 +1252,7 @@ ns_wc_import_hmac(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return k;
 }
 
+/* Imports a raw, non-extractable HKDF/PBKDF2 base key. */
 static ns_crypto_key *
 ns_wc_import_kdf(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                  const ns_wc_alg *a, gboolean extractable, guint32 usages)
@@ -1220,6 +1270,7 @@ ns_wc_import_kdf(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                                 (int)(data->len * 8), FALSE, usages);
 }
 
+/* Imports an SPKI or PKCS#8 key and checks it is of the expected kind. */
 static ns_crypto_key *
 ns_wc_import_der(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                  const ns_wc_alg *a, const char *kind, gboolean extractable,
@@ -1239,6 +1290,7 @@ ns_wc_import_der(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return k;
 }
 
+/* JWK alg name (RS256, PS384, RSA-OAEP-256, ...) for an RSA algorithm and hash, or NULL. */
 static const char *
 ns_wc_rsa_jwk_alg(const char *name, const char *hash)
 {
@@ -1262,6 +1314,7 @@ ns_wc_rsa_jwk_alg(const char *name, const char *hash)
     return NULL;
 }
 
+/* True if alg is a valid JWK alg for this RSA algorithm under any SHA hash. */
 static gboolean
 ns_wc_rsa_jwk_alg_known(const char *name, const char *alg)
 {
@@ -1271,6 +1324,7 @@ ns_wc_rsa_jwk_alg_known(const char *name, const char *alg)
     return FALSE;
 }
 
+/* Imports an RSA public or private JWK, validating alg/hash and CRT completeness. */
 static ns_crypto_key *
 ns_wc_import_rsa_jwk(JSContext *ctx, const ns_wc_jwk *jwk, const ns_wc_alg *a,
                      gboolean extractable, guint32 usages)
@@ -1322,6 +1376,7 @@ ns_wc_import_rsa_jwk(JSContext *ctx, const ns_wc_jwk *jwk, const ns_wc_alg *a,
     return k;
 }
 
+/* Imports an RSA key from SPKI, PKCS#8 or JWK after checking usages. */
 static ns_crypto_key *
 ns_wc_import_rsa(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                  const ns_wc_jwk *jwk, const ns_wc_alg *a, gboolean extractable,
@@ -1342,6 +1397,7 @@ ns_wc_import_rsa(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return NULL;
 }
 
+/* Imports an EC JWK, checking crv, ES* alg and coordinate sizes. */
 static ns_crypto_key *
 ns_wc_import_ec_jwk(JSContext *ctx, const ns_wc_jwk *jwk, const ns_wc_alg *a,
                     gboolean extractable, guint32 usages)
@@ -1384,6 +1440,7 @@ ns_wc_import_ec_jwk(JSContext *ctx, const ns_wc_jwk *jwk, const ns_wc_alg *a,
     return k;
 }
 
+/* Imports an ECDSA/ECDH key from raw point, SPKI, PKCS#8 or JWK, checking the curve. */
 static ns_crypto_key *
 ns_wc_import_ec(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                 const ns_wc_jwk *jwk, const ns_wc_alg *a, gboolean extractable,
@@ -1426,6 +1483,7 @@ ns_wc_import_ec(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return k;
 }
 
+/* Imports an Ed/X25519/448 JWK, verifying a private key's x matches its derived public key. */
 static ns_crypto_key *
 ns_wc_import_okp_jwk(JSContext *ctx, const ns_wc_jwk *jwk, const ns_wc_alg *a,
                      gboolean extractable, guint32 usages)
@@ -1482,6 +1540,7 @@ ns_wc_import_okp_jwk(JSContext *ctx, const ns_wc_jwk *jwk, const ns_wc_alg *a,
     return k;
 }
 
+/* Imports an OKP (EdDSA/XDH) key from raw, SPKI, PKCS#8 or JWK. */
 static ns_crypto_key *
 ns_wc_import_okp(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
                  const ns_wc_jwk *jwk, const ns_wc_alg *a, gboolean extractable,
@@ -1507,6 +1566,7 @@ ns_wc_import_okp(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return ns_wc_import_der(ctx, fmt, data, a, a->name, extractable, usages);
 }
 
+/* Dispatches key import to the per-algorithm-family importer. */
 static ns_crypto_key *
 ns_wc_import(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
              const ns_wc_jwk *jwk, const ns_wc_alg *a, gboolean extractable,
@@ -1525,6 +1585,7 @@ ns_wc_import(JSContext *ctx, ns_wc_format fmt, const ns_wc_buf *data,
     return ns_wc_import_okp(ctx, fmt, data, jwk, a, extractable, usages);
 }
 
+/* Wraps an imported/generated key, rejecting secret/private keys with no usages. */
 static JSValue
 ns_wc_finish_key(JSContext *ctx, ns_crypto_key *k)
 {
@@ -1537,6 +1598,7 @@ ns_wc_finish_key(JSContext *ctx, ns_crypto_key *k)
     return ns_wc_new_key(ctx, k);
 }
 
+/* Imports key data (BufferSource or JWK object) into a new CryptoKey value. */
 static JSValue
 ns_wc_import_value(JSContext *ctx, ns_wc_format fmt, JSValueConst key_data,
                    const ns_wc_alg *a, gboolean extractable, guint32 usages)
@@ -1558,6 +1620,7 @@ ns_wc_import_value(JSContext *ctx, ns_wc_format fmt, JSValueConst key_data,
     return ns_wc_finish_key(ctx, k);
 }
 
+/* SubtleCrypto.importKey body: validates arguments and imports the key. */
 static JSValue
 ns_wc_import_key(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -1582,6 +1645,7 @@ ns_wc_import_key(JSContext *ctx, int argc, JSValueConst *argv)
     return r;
 }
 
+/* Exports a key as raw/SPKI/PKCS#8 bytes after format and type checks; caller frees. */
 static guint8 *
 ns_wc_export_bytes(JSContext *ctx, ns_wc_format fmt, const ns_crypto_key *k,
                    gsize *out_len)
@@ -1616,6 +1680,7 @@ ns_wc_export_bytes(JSContext *ctx, ns_wc_format fmt, const ns_crypto_key *k,
     return out;
 }
 
+/* Sets a base64url-encoded property on o when data is non-NULL. */
 static void
 ns_wc_set_b64(JSContext *ctx, JSValueConst o, const char *key,
               const guint8 *data, gsize len)
@@ -1626,6 +1691,7 @@ ns_wc_set_b64(JSContext *ctx, JSValueConst o, const char *key,
     g_free(s);
 }
 
+/* Exports a key as a JsonWebKey object including key_ops and ext. */
 static JSValue
 ns_wc_export_jwk(JSContext *ctx, const ns_crypto_key *k)
 {
@@ -1696,6 +1762,7 @@ ns_wc_export_jwk(JSContext *ctx, const ns_crypto_key *k)
     return o;
 }
 
+/* Exports an extractable key in the requested format as ArrayBuffer or JWK. */
 static JSValue
 ns_wc_export(JSContext *ctx, ns_wc_format fmt, const ns_crypto_key *k)
 {
@@ -1713,6 +1780,7 @@ ns_wc_export(JSContext *ctx, ns_wc_format fmt, const ns_crypto_key *k)
     return ab;
 }
 
+/* SubtleCrypto.exportKey body. */
 static JSValue
 ns_wc_export_key(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -1725,6 +1793,7 @@ ns_wc_export_key(JSContext *ctx, int argc, JSValueConst *argv)
     return ns_wc_export(ctx, fmt, k);
 }
 
+/* Big-endian RSA public exponent as a uint32; 0 if it overflows. */
 static guint32
 ns_wc_exponent_value(const ns_wc_buf *e)
 {
@@ -1736,6 +1805,7 @@ ns_wc_exponent_value(const ns_wc_buf *e)
     return (guint32)v;
 }
 
+/* Generates a secret key or key pair, splitting usages between public and private halves. */
 static JSValue
 ns_wc_generate(JSContext *ctx, const ns_wc_alg *a, gboolean extractable,
                guint32 usages)
@@ -1795,6 +1865,7 @@ ns_wc_generate(JSContext *ctx, const ns_wc_alg *a, gboolean extractable,
     return pair;
 }
 
+/* SubtleCrypto.generateKey body. */
 static JSValue
 ns_wc_generate_key(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -1811,6 +1882,7 @@ ns_wc_generate_key(JSContext *ctx, int argc, JSValueConst *argv)
     return r;
 }
 
+/* Throws InvalidAccessError unless the key matches the algorithm and permits usage. */
 static gboolean
 ns_wc_check_key(JSContext *ctx, const ns_wc_alg *a, const ns_crypto_key *k,
                 guint32 usage)
@@ -1828,6 +1900,7 @@ ns_wc_check_key(JSContext *ctx, const ns_wc_alg *a, const ns_crypto_key *k,
     return TRUE;
 }
 
+/* Throws InvalidAccessError unless the key is of the given type. */
 static gboolean
 ns_wc_check_type(JSContext *ctx, const ns_crypto_key *k, ns_ck_type type)
 {
@@ -1836,6 +1909,7 @@ ns_wc_check_type(JSContext *ctx, const ns_crypto_key *k, ns_ck_type type)
     return FALSE;
 }
 
+/* Throws TypeError unless v is a BufferSource. */
 static int
 ns_wc_data_arg(JSContext *ctx, JSValueConst v, const char *what)
 {
@@ -1844,6 +1918,7 @@ ns_wc_data_arg(JSContext *ctx, JSValueConst v, const char *what)
     return -1;
 }
 
+/* Runs RSA-OAEP or AES-CBC/CTR/GCM encrypt or decrypt after parameter checks. */
 static JSValue
 ns_wc_cipher(JSContext *ctx, const ns_wc_alg *a, const ns_crypto_key *k,
              const ns_wc_buf *data, gboolean encrypt)
@@ -1898,6 +1973,7 @@ ns_wc_cipher(JSContext *ctx, const ns_wc_alg *a, const ns_crypto_key *k,
     return ab;
 }
 
+/* SubtleCrypto.encrypt/decrypt body. */
 static JSValue
 ns_wc_encrypt_decrypt(JSContext *ctx, int argc, JSValueConst *argv,
                       gboolean encrypt)
@@ -1919,12 +1995,14 @@ ns_wc_encrypt_decrypt(JSContext *ctx, int argc, JSValueConst *argv,
     return r;
 }
 
+/* Raw (r, s) ECDSA signature length for the key's curve. */
 static gsize
 ns_wc_ecdsa_signature_len(const ns_crypto_key *k)
 {
     return 2 * ns_wc_curve_bytes(k->curve);
 }
 
+/* Validates an Ed448 context: at most 255 bytes and supported by OpenSSL. */
 static gboolean
 ns_wc_check_context(JSContext *ctx, const ns_wc_alg *a)
 {
@@ -1940,6 +2018,7 @@ ns_wc_check_context(JSContext *ctx, const ns_wc_alg *a)
     return TRUE;
 }
 
+/* SubtleCrypto.sign/verify body; wrong-length ECDSA/EdDSA signatures verify false. */
 static JSValue
 ns_wc_sign_verify(JSContext *ctx, int argc, JSValueConst *argv, gboolean sign)
 {
@@ -1998,6 +2077,7 @@ ns_wc_sign_verify(JSContext *ctx, int argc, JSValueConst *argv, gboolean sign)
     return r;
 }
 
+/* Truncates a buffer to bits, masking off trailing bits of the last byte. */
 static void
 ns_wc_truncate_bits(ns_wc_buf *b, guint32 bits)
 {
@@ -2006,6 +2086,7 @@ ns_wc_truncate_bits(ns_wc_buf *b, guint32 bits)
     if (bits % 8) b->data[bytes - 1] &= (guint8)(0xFF << (8 - bits % 8));
 }
 
+/* Derives bits via ECDH/XDH key agreement or HKDF/PBKDF2 into out. */
 static int
 ns_wc_derive(JSContext *ctx, const ns_wc_alg *a, const ns_crypto_key *k,
              gboolean has_length, guint32 length, ns_wc_buf *out)
@@ -2078,6 +2159,7 @@ ns_wc_derive(JSContext *ctx, const ns_wc_alg *a, const ns_crypto_key *k,
     return 0;
 }
 
+/* Reads an optional [EnforceRange] length argument (undefined/null means absent). */
 static int
 ns_wc_optional_length(JSContext *ctx, int argc, JSValueConst *argv, int index,
                       gboolean *has_length, guint32 *length)
@@ -2090,6 +2172,7 @@ ns_wc_optional_length(JSContext *ctx, int argc, JSValueConst *argv, int index,
     return ns_wc_to_enforced(ctx, argv[index], 4294967295.0, length);
 }
 
+/* SubtleCrypto.deriveBits body. */
 static JSValue
 ns_wc_derive_bits(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -2113,6 +2196,7 @@ ns_wc_derive_bits(JSContext *ctx, int argc, JSValueConst *argv)
     return r;
 }
 
+/* "Get key length" for the derived key algorithm (AES length or HMAC default). */
 static int
 ns_wc_key_length(JSContext *ctx, const ns_wc_alg *a, gboolean *has_length,
                  guint32 *length)
@@ -2140,6 +2224,7 @@ ns_wc_key_length(JSContext *ctx, const ns_wc_alg *a, gboolean *has_length,
     return 0;
 }
 
+/* SubtleCrypto.deriveKey: derives bits of the key length and imports them raw. */
 static JSValue
 ns_wc_derive_key(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -2179,6 +2264,7 @@ ns_wc_derive_key(JSContext *ctx, int argc, JSValueConst *argv)
     return r;
 }
 
+/* Normalizes for wrapKey/unwrapKey, falling back to encrypt/decrypt algorithms. */
 static int
 ns_wc_normalize_wrap(JSContext *ctx, JSValueConst alg, gboolean wrap,
                      ns_wc_alg *out)
@@ -2190,6 +2276,7 @@ ns_wc_normalize_wrap(JSContext *ctx, JSValueConst alg, gboolean wrap,
     return ns_wc_normalize(ctx, alg, wrap ? NS_OP_ENCRYPT : NS_OP_DECRYPT, out);
 }
 
+/* AES-KW wraps or unwraps data; wrapping requires a multiple of 8 bytes. */
 static JSValue
 ns_wc_aes_kw(JSContext *ctx, const ns_crypto_key *k, const ns_wc_buf *data,
              gboolean wrap)
@@ -2211,6 +2298,7 @@ ns_wc_aes_kw(JSContext *ctx, const ns_crypto_key *k, const ns_wc_buf *data,
     return ab;
 }
 
+/* SubtleCrypto.wrapKey: exports the key (JWK as JSON text) then encrypts it. */
 static JSValue
 ns_wc_wrap_key(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -2254,6 +2342,7 @@ ns_wc_wrap_key(JSContext *ctx, int argc, JSValueConst *argv)
     return r;
 }
 
+/* SubtleCrypto.unwrapKey: decrypts, parses JWK JSON if needed, then imports. */
 static JSValue
 ns_wc_unwrap_key(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -2311,6 +2400,7 @@ ns_wc_unwrap_key(JSContext *ctx, int argc, JSValueConst *argv)
     return r;
 }
 
+/* SubtleCrypto.digest body. */
 static JSValue
 ns_wc_digest(JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -2330,6 +2420,7 @@ ns_wc_digest(JSContext *ctx, int argc, JSValueConst *argv)
     return ab;
 }
 
+/* Converts a synchronous result or pending exception into a settled promise. */
 static JSValue
 ns_wc_settle(JSContext *ctx, JSValue result)
 {
@@ -2364,6 +2455,7 @@ enum {
     NS_WC_UNWRAP_KEY,
 };
 
+/* Shared SubtleCrypto method entry; dispatches on magic and returns a promise. */
 static JSValue
 ns_subtle_method(JSContext *ctx, JSValueConst this_val, int argc,
                  JSValueConst *argv, int magic)
@@ -2429,6 +2521,7 @@ static const JSCFunctionListEntry ns_subtle_proto_funcs[] = {
                        JS_PROP_CONFIGURABLE),
 };
 
+/* Registers a class with an illegal-constructor interface object on global. */
 static void
 ns_wc_install_interface(JSContext *ctx, JSValueConst global, const char *name,
                         JSClassID *class_id, JSClassDef *def,
@@ -2446,6 +2539,7 @@ ns_wc_install_interface(JSContext *ctx, JSValueConst global, const char *name,
                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* Installs CryptoKey and SubtleCrypto and defines crypto.subtle. */
 void
 ns_webcrypto_install(JSContext *ctx, JSValueConst global, JSValueConst crypto)
 {

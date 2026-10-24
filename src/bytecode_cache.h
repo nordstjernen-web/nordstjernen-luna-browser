@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — JavaScript bytecode cache (in-memory + on-disk).
+/* Nordstjernen Web Browser — JavaScript bytecode cache API (in-memory + on-disk).
+ * Get/put compiled scripts keyed by top-level site, and queue background precompilation.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

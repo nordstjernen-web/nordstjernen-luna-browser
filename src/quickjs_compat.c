@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — browser-side shims that give quickjs-ng and the original QuickJS one API.
+/* Nordstjernen Web Browser — shims that give quickjs-ng and the original QuickJS one API.
+ * Adds V8-style Error.stack and native toString, plus source-less script compilation.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -8,6 +9,7 @@
 #include <glib.h>
 #include <string.h>
 
+/* Assigns a process-wide class id (from 192) to *pclass_id once, thread-safely. */
 JSClassID ns_new_class_id(JSClassID *pclass_id)
 {
     static gint next_id = 192;
@@ -33,6 +35,7 @@ JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj)
     return ctx;
 }
 
+/* Compat stub: repointing an ArrayBuffer is unsupported here; always returns -1. */
 int JS_RepointArrayBuffer(JSContext *ctx, JSValueConst obj, uint8_t *data,
                           size_t byte_length)
 {
@@ -43,6 +46,7 @@ int JS_RepointArrayBuffer(JSContext *ctx, JSValueConst obj, uint8_t *data,
     return -1;
 }
 
+/* Error.prototype.stack setter: defines or sets an own stack property on the receiver. */
 static JSValue ns_quickjs_error_stack_set(JSContext *ctx, JSValueConst this_val,
                                           int argc, JSValueConst *argv,
                                           int magic, JSValueConst *func_data)
@@ -70,6 +74,7 @@ static JSValue ns_quickjs_error_stack_set(JSContext *ctx, JSValueConst this_val,
     return ret < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
+/* Returns an error property as a new string, or a copy of fallback; swallows exceptions. */
 static char *ns_quickjs_error_field(JSContext *ctx, JSValueConst error,
                                     const char *field, const char *fallback)
 {
@@ -88,6 +93,7 @@ static char *ns_quickjs_error_field(JSContext *ctx, JSValueConst error,
     return out ? out : g_strdup(fallback);
 }
 
+/* Rewrites a QuickJS stack frame toward V8 style, dropping <anonymous>/<input> noise. */
 static void ns_quickjs_append_v8_frame(GString *out, const char *line, size_t len)
 {
     static const char *const unnamed[] = { "    at <anonymous> (", "    at <eval> (" };
@@ -112,6 +118,7 @@ static void ns_quickjs_append_v8_frame(GString *out, const char *line, size_t le
     g_string_free(frame, TRUE);
 }
 
+/* Error.stack getter that prepends "Name: message" and V8-style frames when missing. */
 static JSValue ns_quickjs_error_stack_get(JSContext *ctx, JSValueConst this_val,
                                           int argc, JSValueConst *argv,
                                           int magic, JSValueConst *func_data)
@@ -155,6 +162,7 @@ static JSValue ns_quickjs_error_stack_get(JSContext *ctx, JSValueConst this_val,
     return frames;
 }
 
+/* Wraps Error.prototype.stack accessors with V8-compatible getter and setter. */
 static void ns_quickjs_accept_any_error_stack(JSContext *ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
@@ -194,6 +202,7 @@ static void ns_quickjs_accept_any_error_stack(JSContext *ctx)
 
 #define NS_QUICKJS_NATIVE_BODY "() {\n    [native code]\n}"
 
+/* Function.prototype.toString wrapper printing native bodies as "() { [native code] }". */
 static JSValue ns_quickjs_function_to_string(JSContext *ctx, JSValueConst this_val,
                                              int argc, JSValueConst *argv,
                                              int magic, JSValueConst *func_data)
@@ -222,6 +231,7 @@ static JSValue ns_quickjs_function_to_string(JSContext *ctx, JSValueConst this_v
     return text;
 }
 
+/* Installs the toString wrapper and removes engine-specific fileName/line/column props. */
 static void ns_quickjs_print_natives_on_one_line(JSContext *ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
@@ -254,6 +264,7 @@ static void ns_quickjs_print_natives_on_one_line(JSContext *ctx)
 static void ns_quickjs_learn_class_ids_once(JSContext *ctx);
 #endif
 
+/* Creates a JS context with the browser's Error.stack and toString compatibility shims. */
 JSContext *ns_quickjs_new_context(JSRuntime *rt)
 {
     JSContext *ctx = (JS_NewContext)(rt);
@@ -266,6 +277,7 @@ JSContext *ns_quickjs_new_context(JSRuntime *rt)
     return ctx;
 }
 
+/* Compiles a global script to bytecode with its source text stripped. */
 JSValue ns_js_compile_without_source(JSContext *ctx, const char *input, size_t input_len,
                                      const char *filename)
 {
@@ -293,6 +305,7 @@ JSValue ns_js_compile_without_source(JSContext *ctx, const char *input, size_t i
 #endif
 }
 
+/* Compiles a script without retaining source, then evaluates it. */
 JSValue ns_js_eval_without_source(JSContext *ctx, const char *input, size_t input_len,
                                   const char *filename)
 {
@@ -322,6 +335,7 @@ typedef struct ns_quickjs_array_buffer_owner {
 
 static ns_quickjs_class_ids ns_quickjs_classes;
 
+/* Returns a value's class id and frees the value (and any pending exception). */
 static JSClassID ns_quickjs_class_of(JSContext *ctx, JSValue val)
 {
     JSClassID id = JS_GetClassID(val);
@@ -331,6 +345,7 @@ static JSClassID ns_quickjs_class_of(JSContext *ctx, JSValue val)
     return id;
 }
 
+/* Discovers original-QuickJS class ids for Array, Error, buffers and typed arrays. */
 static void ns_quickjs_learn_class_ids(JSContext *ctx)
 {
     static const uint8_t one_byte;
@@ -348,6 +363,7 @@ static void ns_quickjs_learn_class_ids(JSContext *ctx)
                 JS_EVAL_TYPE_GLOBAL));
 }
 
+/* Runs ns_quickjs_learn_class_ids once per process. */
 static void ns_quickjs_learn_class_ids_once(JSContext *ctx)
 {
     static gsize learned;
@@ -382,6 +398,7 @@ bool JS_IsDataView(JSValueConst obj)
     return ns_quickjs_has_class(obj, ns_quickjs_classes.data_view);
 }
 
+/* Returns the typed array type of obj by class id, or -1 if not a typed array. */
 int JS_GetTypedArrayType(JSValueConst obj)
 {
     for (int type = JS_TYPED_ARRAY_UINT8C; type <= JS_TYPED_ARRAY_FLOAT64; type++)
@@ -390,6 +407,7 @@ int JS_GetTypedArrayType(JSValueConst obj)
     return -1;
 }
 
+/* ArrayBuffer free hook that releases data through the owner's realloc function. */
 static void ns_quickjs_array_buffer_free(JSRuntime *rt, void *opaque, void *ptr)
 {
     ns_quickjs_array_buffer_owner *owner = opaque;
@@ -397,6 +415,7 @@ static void ns_quickjs_array_buffer_free(JSRuntime *rt, void *opaque, void *ptr)
     g_free(owner);
 }
 
+/* quickjs-ng style external ArrayBuffer over original QuickJS; resizable is unsupported. */
 JSValue ns_quickjs_new_array_buffer(JSContext *ctx, uint8_t *buf, size_t len,
                                     size_t max_len,
                                     JSReallocArrayBufferDataFunc *realloc_func,
@@ -416,6 +435,7 @@ JSValue ns_quickjs_new_array_buffer(JSContext *ctx, uint8_t *buf, size_t len,
     return buffer;
 }
 
+/* Calls JS_NewTypedArray, padding argv to three arguments as original QuickJS needs. */
 JSValue ns_quickjs_new_typed_array(JSContext *ctx, int argc, JSValueConst *argv,
                                    JSTypedArrayEnum type)
 {
@@ -432,6 +452,7 @@ const char *JS_GetVersion(void)
     return NS_QUICKJS_VERSION;
 }
 
+/* Creates a Uint8Array over a new ArrayBuffer holding a copy of buf. */
 JSValue JS_NewUint8ArrayCopy(JSContext *ctx, const uint8_t *buf, size_t len)
 {
     JSValue buffer = JS_NewArrayBufferCopy(ctx, buf, len);
@@ -442,6 +463,7 @@ JSValue JS_NewUint8ArrayCopy(JSContext *ctx, const uint8_t *buf, size_t len)
     return array;
 }
 
+/* Returns a Uint8Array's data pointer and length; throws TypeError on wrong type or bounds. */
 uint8_t *JS_GetUint8Array(JSContext *ctx, size_t *psize, JSValueConst obj)
 {
     *psize = 0;
@@ -465,6 +487,7 @@ uint8_t *JS_GetUint8Array(JSContext *ctx, size_t *psize, JSValueConst obj)
     return data + offset;
 }
 
+/* ToObject(): dups objects, throws on null/undefined, otherwise boxes via Object(). */
 JSValue JS_ToObject(JSContext *ctx, JSValueConst val)
 {
     if (JS_IsObject(val))
@@ -479,6 +502,7 @@ JSValue JS_ToObject(JSContext *ctx, JSValueConst val)
     return obj;
 }
 
+/* Throws a DOMException with a printf-formatted message, falling back to an Error. */
 JSValue JS_ThrowDOMException(JSContext *ctx, const char *name, const char *fmt, ...)
 {
     va_list ap;
@@ -511,6 +535,7 @@ JSValue JS_ThrowDOMException(JSContext *ctx, const char *name, const char *fmt, 
     return JS_Throw(ctx, error);
 }
 
+/* Evaluates with a starting line number by prepending newlines (skipped for hashbang). */
 JSValue JS_EvalThis2(JSContext *ctx, JSValueConst this_obj, const char *input,
                      size_t input_len, JSEvalOptions *options)
 {

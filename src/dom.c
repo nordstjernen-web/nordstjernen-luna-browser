@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — DOM data structure.
+/* Nordstjernen Web Browser — DOM node tree: nodes, attributes, namespaces and id/class/tag indexes.
+ * Also form-control state and validity, textContent, and HTML/XML serialization.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -28,6 +29,7 @@ ns_str_is_ascii_lower(const char *s)
     return TRUE;
 }
 
+/* Parses a decimal int after leading blanks, clamped to [min_v,max_v]; dflt if no digits. */
 int
 ns_parse_int(const char *s, int dflt, int min_v, int max_v)
 {
@@ -55,6 +57,7 @@ typedef enum {
     NS_FORM_INPUT_DATETIME,
 } ns_form_input_kind;
 
+/* Maps an input type attribute to the numeric-value kind used by step/range logic. */
 static ns_form_input_kind
 ns_form_input_kind_of_type(const char *type)
 {
@@ -75,6 +78,7 @@ ns_input_type_has_number_value(const char *type)
     return ns_form_input_kind_of_type(type) != NS_FORM_INPUT_OTHER;
 }
 
+/* True for input types where the readonly attribute applies (empty type counts as text). */
 gboolean
 ns_input_type_supports_readonly(const char *type)
 {
@@ -93,6 +97,7 @@ ns_input_type_supports_readonly(const char *type)
            g_ascii_strcasecmp(type, "number") == 0;
 }
 
+/* True for text-like input types where minlength/maxlength/pattern apply. */
 gboolean
 ns_input_type_supports_text_constraints(const char *type)
 {
@@ -105,6 +110,7 @@ ns_input_type_supports_text_constraints(const char *type)
            g_ascii_strcasecmp(type, "password") == 0;
 }
 
+/* True when a readonly textarea/input bars the control from constraint validation. */
 gboolean
 ns_form_control_readonly_bars_validation(const ns_node *control)
 {
@@ -126,6 +132,7 @@ ns_form_control_length_limits_apply(const ns_node *control)
     return ns_input_type_supports_text_constraints(ns_element_get_attr(control, "type"));
 }
 
+/* True when the required attribute applies: textarea, select, and most input types. */
 gboolean
 ns_form_control_supports_required(const ns_node *control)
 {
@@ -146,6 +153,7 @@ ns_form_control_supports_required(const ns_node *control)
            g_ascii_strcasecmp(type, "button") != 0;
 }
 
+/* Checks the HTML "valid floating-point number" grammar (no leading +, no bare dot). */
 static gboolean
 ns_is_valid_floating_point_number(const char *v)
 {
@@ -169,6 +177,7 @@ ns_is_valid_floating_point_number(const char *v)
     return *p == '\0';
 }
 
+/* Parses an HTML floating-point number; FALSE if invalid or non-finite. */
 static gboolean
 ns_form_parse_finite_double(const char *v, double *out)
 {
@@ -179,6 +188,7 @@ ns_form_parse_finite_double(const char *v, double *out)
     return TRUE;
 }
 
+/* Formats a double like JS Number.prototype.toString (shortest round-trip digits). */
 void
 ns_num_to_str(double d, char *buf, size_t n)
 {
@@ -227,6 +237,7 @@ ns_num_to_str(double d, char *buf, size_t n)
     g_string_free(out, TRUE);
 }
 
+/* Counts fractional digits in a numeric string, adjusted by its exponent; never negative. */
 static int
 ns_decimal_places(const char *v)
 {
@@ -240,6 +251,7 @@ ns_decimal_places(const char *v)
     return places < 0 ? 0 : places;
 }
 
+/* Rounds to the given decimal places to strip float noise; no-op outside 1..15. */
 static double
 ns_round_to_places(double v, int places)
 {
@@ -249,6 +261,7 @@ ns_round_to_places(double v, int places)
 }
 
 
+/* Converts an input value to its numeric form per type (ms for dates/times, months, etc.). */
 gboolean
 ns_input_value_to_number(const char *type, const char *value, double *out)
 {
@@ -308,6 +321,7 @@ ns_input_value_to_number(const char *type, const char *value, double *out)
     }
 }
 
+/* Reports rangeUnderflow/rangeOverflow against min/max; FALSE if value is not numeric. */
 gboolean
 ns_input_value_range_state(const ns_node *input, const char *value,
                            gboolean *underflow, gboolean *overflow)
@@ -330,6 +344,7 @@ ns_input_value_range_state(const ns_node *input, const char *value,
     return TRUE;
 }
 
+/* Step scale factor per input kind (ms per day/week/second), per HTML step semantics. */
 static double
 ns_form_step_scale(ns_form_input_kind kind)
 {
@@ -342,6 +357,7 @@ ns_form_step_scale(ns_form_input_kind kind)
     }
 }
 
+/* Default step per input kind: 60 seconds for time inputs, otherwise 1. */
 static double
 ns_form_default_step(ns_form_input_kind kind)
 {
@@ -354,6 +370,7 @@ ns_form_default_step(ns_form_input_kind kind)
     }
 }
 
+/* Appends ms-since-midnight as HH:MM, adding :SS and .mmm only when nonzero. */
 static void
 ns_form_serialize_time(GString *out, int ms)
 {
@@ -366,6 +383,7 @@ ns_form_serialize_time(GString *out, int ms)
     if (frac) g_string_append_printf(out, ".%03d", frac);
 }
 
+/* Serializes a number back to the input type's string form in buf; FALSE if invalid. */
 static gboolean
 ns_input_number_to_value(ns_form_input_kind kind, double v, char *buf,
                          gsize buflen)
@@ -436,6 +454,7 @@ ns_input_number_to_value(ns_form_input_kind kind, double v, char *buf,
     return ok;
 }
 
+/* stepUp/stepDown: snaps to the step base, clamps to min/max, writes new value to buf. */
 int
 ns_input_step_apply(const ns_node *input, int sign, double n, char *buf,
                     gsize buflen)
@@ -500,6 +519,7 @@ ns_input_step_apply(const ns_node *input, int sign, double n, char *buf,
     return NS_STEP_OK;
 }
 
+/* True when the value is not an integral number of steps from the step base (stepMismatch). */
 gboolean
 ns_input_value_step_mismatch(const ns_node *input, const char *value)
 {
@@ -535,6 +555,7 @@ ns_input_type_is(const ns_node *node, const char *want)
     return type && g_ascii_strcasecmp(type, want) == 0;
 }
 
+/* Recursively searches for a checked radio with the same name and form owner. */
 static gboolean
 ns_radio_group_has_checked(const ns_node *scan, const ns_node *doc,
                            const ns_node *owner,
@@ -555,6 +576,7 @@ ns_radio_group_has_checked(const ns_node *scan, const ns_node *doc,
     return FALSE;
 }
 
+/* Computes valueMissing: unchecked checkbox, radio group with none checked, or empty value. */
 gboolean
 ns_form_control_value_missing(const ns_node *control, const char *value,
                               const ns_node *doc)
@@ -584,6 +606,7 @@ ns_email_local_char(guchar c)
            c == '~' || c == '-';
 }
 
+/* Validates a dotted domain: labels 1-63 chars of alnum/hyphen, alnum at both ends. */
 static gboolean
 ns_email_domain_valid(const char *domain)
 {
@@ -603,6 +626,7 @@ ns_email_domain_valid(const char *domain)
     return FALSE;
 }
 
+/* Validates one trimmed email address token: local@domain with a single @. */
 static gboolean
 ns_email_token_valid(const char *start, gsize len)
 {
@@ -617,6 +641,7 @@ ns_email_token_valid(const char *start, gsize len)
     return ok;
 }
 
+/* Validates an email input value; comma-separated list when the multiple attribute is set. */
 gboolean
 ns_input_email_value_valid(const ns_node *input, const char *value)
 {
@@ -633,6 +658,7 @@ ns_input_email_value_valid(const ns_node *input, const char *value)
     }
 }
 
+/* True when a contenteditable attribute value makes the element editable. */
 gboolean
 ns_ce_attr_enables(const char *ce)
 {
@@ -641,6 +667,7 @@ ns_ce_attr_enables(const char *ce)
                   g_ascii_strcasecmp(ce, "plaintext-only") == 0);
 }
 
+/* True for textarea and text-entry input types (text, search, email, url, tel, etc.). */
 gboolean
 ns_node_is_text_input(const ns_node *n)
 {
@@ -658,6 +685,7 @@ ns_node_is_text_input(const ns_node *n)
            g_ascii_strcasecmp(type, "password") == 0;
 }
 
+/* True for non-form elements whose own contenteditable attribute enables editing. */
 gboolean
 ns_node_is_contenteditable_host(const ns_node *n)
 {
@@ -673,6 +701,7 @@ ns_node_is_editable(const ns_node *n)
     return ns_node_is_text_input(n) || ns_node_is_contenteditable_host(n);
 }
 
+/* Resolves inherited spellcheck state from the nearest ancestor attribute; defaults to TRUE. */
 gboolean
 ns_node_spellcheck_used(const ns_node *n)
 {
@@ -686,6 +715,7 @@ ns_node_spellcheck_used(const ns_node *n)
     return TRUE;
 }
 
+/* Returns the nearest editable ancestor if spellchecking is enabled for it, else NULL. */
 const ns_node *
 ns_node_spellcheck_host(const ns_node *n)
 {
@@ -695,6 +725,7 @@ ns_node_spellcheck_host(const ns_node *n)
     return NULL;
 }
 
+/* True for input types using the "value" value mode, where edits go to data-nd-value. */
 gboolean
 ns_input_value_is_dirty_mode(const ns_node *n)
 {
@@ -711,6 +742,7 @@ ns_input_value_is_dirty_mode(const ns_node *n)
              g_ascii_strcasecmp(type, "hidden")   == 0);
 }
 
+/* Current value of an input/textarea: dirty edited value if set, else the default value. */
 const char *
 ns_input_used_value(const ns_node *n)
 {
@@ -733,6 +765,7 @@ ns_input_used_value(const ns_node *n)
     return ns_element_get_attr(n, "value");
 }
 
+/* Concatenates a textarea's text children (its default value); caller frees. */
 char *
 ns_textarea_default_value_dup(const ns_node *n)
 {
@@ -745,6 +778,7 @@ ns_textarea_default_value_dup(const ns_node *n)
     return g_string_free(value, FALSE);
 }
 
+/* Normalizes CR and CRLF newlines to LF; caller frees. */
 static char *
 ns_textarea_normalized_value_dup(const char *value)
 {
@@ -760,6 +794,7 @@ ns_textarea_normalized_value_dup(const char *value)
     return g_string_free(normalized, FALSE);
 }
 
+/* Returns the textarea's current value with newlines normalized; caller frees. */
 char *
 ns_textarea_value_dup(const ns_node *n)
 {
@@ -774,6 +809,7 @@ ns_textarea_value_dup(const ns_node *n)
     return value;
 }
 
+/* Checkedness: the dirty data-nd-checked state if present, else the checked attribute. */
 gboolean
 ns_input_is_checked(const ns_node *n)
 {
@@ -783,6 +819,7 @@ ns_input_is_checked(const ns_node *n)
     return ns_element_get_attr(n, "checked") != NULL;
 }
 
+/* Current text of a textarea, contenteditable host (first text child) or input; never NULL. */
 const char *
 ns_node_editable_value(const ns_node *n)
 {
@@ -799,6 +836,7 @@ ns_node_editable_value(const ns_node *n)
     return v ? v : "";
 }
 
+/* Stores a user-edited value; a contenteditable host gets one text child instead. */
 void
 ns_node_set_editable_value(ns_node *n, const char *value)
 {
@@ -831,6 +869,7 @@ ns_node_set_editable_value(ns_node *n, const char *value)
     }
 }
 
+/* Collapses a contenteditable host's subtree into a single text node of its text. */
 void
 ns_node_flatten_editable(ns_node *n)
 {
@@ -850,6 +889,7 @@ ns_node_is_numeric_input(const ns_node *control)
     return type && g_ascii_strcasecmp(type, "number") == 0;
 }
 
+/* Filters inserted text to characters valid in a number input; caller frees. */
 char *
 ns_numeric_filter_insert(const char *insert, gsize len, gsize *out_len)
 {
@@ -879,6 +919,7 @@ ns_node_new_document(void)
     return ns_node_new(NS_NODE_DOCUMENT);
 }
 
+/* Creates a doctype node; takes ownership of the name and id strings. */
 ns_node *
 ns_node_new_doctype(char *name, char *public_id, char *system_id)
 {
@@ -890,6 +931,7 @@ ns_node_new_doctype(char *name, char *public_id, char *system_id)
     return n;
 }
 
+/* Creates an element node that takes ownership of name. */
 ns_node *
 ns_node_new_element(char *name)
 {
@@ -899,6 +941,7 @@ ns_node_new_element(char *name)
     return n;
 }
 
+/* Creates a text node that takes ownership of text. */
 ns_node *
 ns_node_new_text_len(char *text, guint32 len)
 {
@@ -915,6 +958,7 @@ ns_node_new_text(char *text)
     return ns_node_new_text_len(text, text ? (guint32)strlen(text) : 0);
 }
 
+/* Creates a comment node that takes ownership of text. */
 ns_node *
 ns_node_new_comment_len(char *text, guint32 len)
 {
@@ -931,6 +975,7 @@ ns_node_new_comment(char *text)
     return ns_node_new_comment_len(text, text ? (guint32)strlen(text) : 0);
 }
 
+/* Points the node name at a borrowed string, freeing any previously owned name. */
 void
 ns_node_set_name_borrow(ns_node *n, const char *name)
 {
@@ -941,6 +986,7 @@ ns_node_set_name_borrow(ns_node *n, const char *name)
     n->flags &= ~NS_NODE_OWN_NAME;
 }
 
+/* Replaces the node name with an owned string; frees name if node is NULL. */
 void
 ns_node_set_name_owned(ns_node *n, char *name)
 {
@@ -954,6 +1000,7 @@ ns_node_set_name_owned(ns_node *n, char *name)
     n->flags |= NS_NODE_OWN_NAME;
 }
 
+/* Points the node text at a borrowed string, freeing any previously owned text. */
 void
 ns_node_set_text_borrow(ns_node *n, const char *text)
 {
@@ -965,6 +1012,7 @@ ns_node_set_text_borrow(ns_node *n, const char *text)
     n->flags &= ~NS_NODE_OWN_TEXT;
 }
 
+/* Replaces node text with an owned buffer; frees text if node is NULL. */
 void
 ns_node_replace_text_len_owned(ns_node *n, char *text, guint32 len)
 {
@@ -985,6 +1033,7 @@ ns_node_replace_text_owned(ns_node *n, char *text)
     ns_node_replace_text_len_owned(n, text, text ? (guint32)strlen(text) : 0);
 }
 
+/* Duplicates any borrowed name/text/attribute strings so the node owns them. */
 static void
 ns_node_own_strings_one(ns_node *n)
 {
@@ -1009,6 +1058,7 @@ ns_node_own_strings_one(ns_node *n)
     }
 }
 
+/* Makes a subtree (including template contents) own all of its strings, iteratively. */
 void
 ns_node_own_strings_deep(ns_node *n)
 {
@@ -1027,6 +1077,7 @@ ns_node_own_strings_deep(ns_node *n)
     }
 }
 
+/* Appends an attribute with borrowed strings, invalidating class set, bloom and id index. */
 void
 ns_element_append_attr_borrow(ns_node *el, const char *name, const char *value)
 {
@@ -1046,6 +1097,7 @@ ns_element_append_attr_borrow(ns_node *el, const char *name, const char *value)
     else      el->attrs = a;
 }
 
+/* Attaches a backing buffer to a root node, destroying any previous one. */
 void
 ns_node_attach_backing(ns_node *root, void *backing, void (*destroy)(void *))
 {
@@ -1088,6 +1140,7 @@ typedef struct ns_class_set {
 
 static ns_class_set g_nd_empty_class_set;
 
+/* Tokenizes a class attribute on ASCII whitespace into a set of borrowed slices. */
 static ns_class_set *
 ns_class_set_build(const char *cls)
 {
@@ -1121,6 +1174,7 @@ ns_class_set_clear(ns_node *el)
     el->class_set = NULL;
 }
 
+/* Lazily builds and caches the element's class token set. */
 static ns_class_set *
 ns_class_set_ensure(const ns_node *el)
 {
@@ -1133,6 +1187,7 @@ ns_class_set_ensure(const ns_node *el)
     return cs;
 }
 
+/* Returns the element's cached class tokens and count; NULL for non-elements. */
 const ns_class_token *
 ns_node_class_tokens(const ns_node *el, guint *n_out)
 {
@@ -1145,6 +1200,7 @@ ns_node_class_tokens(const ns_node *el, guint *n_out)
     return cs->tok;
 }
 
+/* True if the element's class list contains the given token (case-sensitive). */
 gboolean
 ns_node_has_class(const ns_node *el, const char *name, gsize len)
 {
@@ -1159,6 +1215,7 @@ ns_node_has_class(const ns_node *el, const char *name, gsize len)
 void (*ns_node_free_hook)(ns_node *node);
 void (*ns_node_detach_hook)(ns_node *parent);
 
+/* Frees a subtree iteratively (no recursion), running free/JS hooks and dropping indexes. */
 void
 ns_node_free(ns_node *node)
 {
@@ -1223,6 +1280,7 @@ ns_node_free(ns_node *node)
     g_ptr_array_free(stack, TRUE);
 }
 
+/* Unlinks a node from its parent and siblings, notifying the detach hook first. */
 static void
 ns_node_detach(ns_node *child)
 {
@@ -1244,6 +1302,7 @@ ns_node_detach(ns_node *child)
     child->next_sibling = NULL;
 }
 
+/* Appends child as parent's last child, detaching it from any previous parent. */
 void
 ns_node_append_child(ns_node *parent, ns_node *child)
 {
@@ -1266,12 +1325,14 @@ ns_node_remove(ns_node *child)
     ns_node_detach(child);
 }
 
+/* True for engine-private data-nd-* attributes hidden from page script. */
 gboolean
 ns_attr_name_is_internal(const char *name)
 {
     return name && g_ascii_strncasecmp(name, "data-nd-", 8) == 0;
 }
 
+/* Attribute local name, falling back to the qualified name; never NULL. */
 const char *
 ns_attr_local_name(const ns_attr *attr)
 {
@@ -1285,6 +1346,7 @@ ns_attr_normalize_namespace(const char *namespace_uri)
     return (namespace_uri && *namespace_uri) ? namespace_uri : NULL;
 }
 
+/* Compares attribute namespaces, treating NULL and empty string as no namespace. */
 static gboolean
 ns_attr_namespace_equal(const char *a, const char *b)
 {
@@ -1294,6 +1356,7 @@ ns_attr_namespace_equal(const char *a, const char *b)
     return strcmp(a, b) == 0;
 }
 
+/* True if the attribute has the given namespace and local name. */
 static gboolean
 ns_attr_matches_ns(const ns_attr *attr, const char *namespace_uri,
                    const char *local_name)
@@ -1303,6 +1366,7 @@ ns_attr_matches_ns(const ns_attr *attr, const char *namespace_uri,
            strcmp(ns_attr_local_name(attr), local_name) == 0;
 }
 
+/* Copies len bytes into a new NUL-terminated buffer; caller frees. */
 char *
 ns_value_dup_len(const char *value, gsize len)
 {
@@ -1312,6 +1376,7 @@ ns_value_dup_len(const char *value, gsize len)
     return v;
 }
 
+/* Updates the document id index when an element's id attribute changes. */
 static void
 ns_doc_id_index_attr_write(ns_node *el, const char *name, const char *value)
 {
@@ -1324,6 +1389,7 @@ ns_doc_id_index_attr_write(ns_node *el, const char *name, const char *value)
     if (value && *value) ns_doc_id_index_register(doc, value, el);
 }
 
+/* Sets or replaces an attribute (ASCII case-insensitive name); len -1 means strlen. */
 void
 ns_element_set_attr_len(ns_node *el, const char *name,
                         const char *value, gssize len)
@@ -1367,6 +1433,7 @@ ns_element_set_attr(ns_node *el, const char *name, const char *value)
     ns_element_set_attr_len(el, name, value, -1);
 }
 
+/* Sets an attribute matched by namespace and local name, as in setAttributeNS. */
 void
 ns_element_set_attr_ns(ns_node *el, const char *namespace_uri,
                        const char *prefix, const char *local_name,
@@ -1412,6 +1479,7 @@ ns_element_set_attr_ns(ns_node *el, const char *namespace_uri,
     else      el->attrs = a;
 }
 
+/* Removes the first attribute with this name (case-insensitive), updating caches. */
 void
 ns_element_remove_attr(ns_node *el, const char *name)
 {
@@ -1433,6 +1501,7 @@ ns_element_remove_attr(ns_node *el, const char *name)
     }
 }
 
+/* Removes the attribute matching namespace and local name, updating caches. */
 void
 ns_element_remove_attr_ns(ns_node *el, const char *namespace_uri,
                           const char *local_name)
@@ -1458,6 +1527,7 @@ ns_element_remove_attr_ns(ns_node *el, const char *namespace_uri,
 
 #define NS_DOM_MAX_DEPTH 512
 
+/* Clones a node (and optionally its subtree and template contents) up to max depth. */
 static ns_node *
 ns_node_clone_depth(const ns_node *src, gboolean deep, int depth)
 {
@@ -1521,6 +1591,7 @@ ns_node_clone(const ns_node *src, gboolean deep)
     return ns_node_clone_depth(src, deep, 0);
 }
 
+/* Returns the template's content fragment, creating it lazily. */
 ns_node *
 ns_template_content_get(ns_node *tpl)
 {
@@ -1534,6 +1605,7 @@ ns_template_content_get(ns_node *tpl)
     return tpl->tpl_content;
 }
 
+/* FNV-1a hash of an attribute name mapped to one bit of a 64-bit bloom filter. */
 guint64
 ns_attr_name_bloom_bit(const char *name)
 {
@@ -1545,6 +1617,7 @@ ns_attr_name_bloom_bit(const char *name)
     return (guint64)1 << (h & 63);
 }
 
+/* Returns the element's cached attribute-name bloom filter, computing it on demand. */
 guint64
 ns_node_attr_bloom(const ns_node *el)
 {
@@ -1556,6 +1629,7 @@ ns_node_attr_bloom(const ns_node *el)
     return b;
 }
 
+/* Finds an attribute by name: exact match for SVG, ASCII case-insensitive otherwise. */
 const ns_attr *
 ns_element_find_attr(const ns_node *el, const char *name)
 {
@@ -1603,6 +1677,7 @@ ns_element_get_attr_len(const ns_node *el, const char *name, gsize *out_len)
     return a->value;
 }
 
+/* Finds an attribute by namespace URI and local name. */
 const ns_attr *
 ns_element_find_attr_ns(const ns_node *el, const char *namespace_uri,
                         const char *local_name)
@@ -1623,6 +1698,7 @@ ns_node_is_element_named(const ns_node *n, const char *tag)
            strcmp(n->name, tag) == 0;
 }
 
+/* True for input types in a one-line text state (text, search, email, url, etc.). */
 gboolean
 ns_input_is_one_line_text(const ns_node *n)
 {
@@ -1639,12 +1715,14 @@ ns_input_is_one_line_text(const ns_node *n)
     return TRUE;
 }
 
+/* True for a document node parented under a frame element. */
 gboolean
 ns_node_is_embedded_document(const ns_node *n)
 {
     return n && n->kind == NS_NODE_DOCUMENT && n->parent != NULL;
 }
 
+/* Topmost ancestor, crossing frame documents; bounded by the max DOM depth. */
 const ns_node *
 ns_node_root(const ns_node *n)
 {
@@ -1669,6 +1747,7 @@ ns_node_document_root(const ns_node *n)
     return n;
 }
 
+/* Depth-first search for the first element with this tag, skipping frame documents. */
 static ns_node *
 ns_node_find_first_element_depth(const ns_node *root, const char *tag, int depth)
 {
@@ -1683,6 +1762,7 @@ ns_node_find_first_element_depth(const ns_node *root, const char *tag, int depth
     return NULL;
 }
 
+/* First element with this tag, via the tag index when the root has one. */
 ns_node *
 ns_node_find_first_element(const ns_node *root, const char *tag)
 {
@@ -1695,6 +1775,7 @@ ns_node_find_first_element(const ns_node *root, const char *tag)
 }
 
 
+/* True for elements marked as shadow roots by the internal shadow attribute. */
 gboolean
 ns_node_is_shadow_root(const ns_node *n)
 {
@@ -1702,6 +1783,7 @@ ns_node_is_shadow_root(const ns_node *n)
            ns_element_get_attr(n, NS_SHADOW_ATTR) != NULL;
 }
 
+/* Tree walk for an id, not descending into shadow roots, templates or frame docs. */
 static ns_node *
 ns_node_find_by_id_depth(const ns_node *root, const char *id, int depth)
 {
@@ -1723,6 +1805,7 @@ ns_node_find_by_id_depth(const ns_node *root, const char *id, int depth)
 #define NS_ID_COUNT_MASK  0x7fffffffu
 #define NS_ID_FIRST_KNOWN 0x80000000u
 
+/* Packed id-count entry for id: occurrence count plus a first-match-known flag bit. */
 static guint
 ns_doc_id_entry(const ns_node *doc, const char *id)
 {
@@ -1730,6 +1813,7 @@ ns_doc_id_entry(const ns_node *doc, const char *id)
         ? GPOINTER_TO_UINT(g_hash_table_lookup(doc->id_counts, id)) : 0;
 }
 
+/* Clears the first-match-known flag for an id after its index entry changed. */
 static void
 ns_doc_id_forget_first(const ns_node *doc, const char *id)
 {
@@ -1739,6 +1823,7 @@ ns_doc_id_forget_first(const ns_node *doc, const char *id)
                             GUINT_TO_POINTER(entry & NS_ID_COUNT_MASK));
 }
 
+/* Adjusts the per-id occurrence count by delta, removing it when it drops to zero. */
 static void
 ns_doc_id_index_count(ns_node *doc, const char *id, int delta)
 {
@@ -1756,6 +1841,7 @@ ns_doc_id_index_count(ns_node *doc, const char *id, int delta)
                             GUINT_TO_POINTER(cur - 1));
 }
 
+/* Counts an id occurrence and indexes node if no element holds that id yet. */
 static void
 ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node)
 {
@@ -1765,6 +1851,7 @@ ns_doc_id_index_register(ns_node *doc, const char *id, ns_node *node)
     g_hash_table_insert(doc->id_index, g_strdup(id), node);
 }
 
+/* Decrements an id count and drops the index entry if it pointed at node. */
 static void
 ns_doc_id_index_unregister(ns_node *doc, const char *id, const ns_node *node)
 {
@@ -1774,6 +1861,7 @@ ns_doc_id_index_unregister(ns_node *doc, const char *id, const ns_node *node)
     if (cur == node) g_hash_table_remove(doc->id_index, id);
 }
 
+/* Registers ids in a subtree, skipping shadow roots and frame documents. */
 static void
 ns_doc_id_index_add_subtree(ns_node *doc, ns_node *n, int depth)
 {
@@ -1788,6 +1876,7 @@ ns_doc_id_index_add_subtree(ns_node *doc, ns_node *n, int depth)
         ns_doc_id_index_add_subtree(doc, c, depth + 1);
 }
 
+/* (Re)builds the document's id index and id counts from scratch. */
 void
 ns_doc_id_index_build(ns_node *doc)
 {
@@ -1803,6 +1892,7 @@ ns_doc_id_index_build(ns_node *doc)
     ns_doc_id_index_add_subtree(doc, doc, 0);
 }
 
+/* Unregisters ids in a subtree, skipping shadow roots and frame documents. */
 static void
 ns_doc_id_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
 {
@@ -1817,6 +1907,7 @@ ns_doc_id_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
         ns_doc_id_index_remove_subtree(doc, c, depth + 1);
 }
 
+/* True if any ancestor of n below stop is a shadow root. */
 static gboolean
 ns_node_inside_shadow_root(const ns_node *n, const ns_node *stop)
 {
@@ -1825,6 +1916,7 @@ ns_node_inside_shadow_root(const ns_node *n, const ns_node *stop)
     return FALSE;
 }
 
+/* Indexes ids of a newly inserted subtree unless it lives in a shadow root. */
 void
 ns_doc_id_index_subtree_added(ns_node *doc, ns_node *root)
 {
@@ -1833,6 +1925,7 @@ ns_doc_id_index_subtree_added(ns_node *doc, ns_node *root)
     ns_doc_id_index_add_subtree(doc, root, 0);
 }
 
+/* Unindexes ids of a removed subtree unless it lives in a shadow root. */
 void
 ns_doc_id_index_subtree_removed(ns_node *doc, ns_node *root)
 {
@@ -1866,6 +1959,7 @@ ns_doc_index_bucket_free(gpointer p)
     g_free(b);
 }
 
+/* Compares two nodes in tree order (-1/0/1); ancestors sort before descendants. */
 int
 ns_node_document_order_cmp(const ns_node *a, const ns_node *b)
 {
@@ -1902,6 +1996,7 @@ ns_node_document_order_cmp(const ns_node *a, const ns_node *b)
 
 static gboolean g_doc_index_building;
 
+/* Lazily builds the membership hash set for an index bucket. */
 static void
 ns_doc_index_bucket_track_members(ns_doc_index_bucket *b)
 {
@@ -1911,6 +2006,7 @@ ns_doc_index_bucket_track_members(ns_doc_index_bucket *b)
         g_hash_table_add(b->members, g_ptr_array_index(b->nodes, i));
 }
 
+/* Inserts a node in document order; large buckets switch to an unsorted set. */
 static void
 ns_doc_index_bucket_add(ns_doc_index_bucket *b, ns_node *node)
 {
@@ -1958,6 +2054,7 @@ ns_doc_index_bucket_add(ns_doc_index_bucket *b, ns_node *node)
     if (b->members) g_hash_table_add(b->members, node);
 }
 
+/* Removes a node from a bucket, marking large buckets unsorted rather than shifting. */
 static void
 ns_doc_index_bucket_remove(ns_doc_index_bucket *b, ns_node *node)
 {
@@ -1990,6 +2087,7 @@ ns_doc_index_order_compare(gconstpointer a, gconstpointer b)
                                       *(const ns_node *const *)b);
 }
 
+/* Rebuilds bucket order by walking the document; sorts any members not found. */
 static void
 ns_doc_index_bucket_collect_in_order(const ns_node *doc,
                                      ns_doc_index_bucket *b)
@@ -2024,6 +2122,7 @@ ns_doc_index_bucket_collect_in_order(const ns_node *doc,
     g_hash_table_destroy(seen);
 }
 
+/* Returns the bucket's nodes in document order, re-sorting if it was marked unsorted. */
 static GPtrArray *
 ns_doc_index_bucket_nodes(const ns_node *doc, ns_doc_index_bucket *b)
 {
@@ -2044,6 +2143,7 @@ ns_doc_index_bucket_nodes(const ns_node *doc, ns_doc_index_bucket *b)
     return b->nodes;
 }
 
+/* Adds or removes node from the class index bucket for one class token. */
 static void
 ns_doc_class_index_update_token(GHashTable *map, const char *tok,
                                 gsize tok_len, ns_node *node, gboolean add)
@@ -2069,6 +2169,7 @@ ns_doc_class_index_update_token(GHashTable *map, const char *tok,
     else ns_doc_index_bucket_remove(bucket, node);
 }
 
+/* Splits a class attribute on whitespace and updates the index for each token. */
 static void
 ns_doc_class_index_update(ns_node *doc, const char *class_attr, ns_node *node,
                           gboolean add)
@@ -2097,6 +2198,7 @@ ns_doc_class_index_unregister(ns_node *doc, const char *class_attr, ns_node *nod
     ns_doc_class_index_update(doc, class_attr, node, FALSE);
 }
 
+/* Registers class tokens for a subtree, not entering templates or frame documents. */
 static void
 ns_doc_class_index_add_subtree(ns_node *doc, ns_node *n, int depth)
 {
@@ -2111,6 +2213,7 @@ ns_doc_class_index_add_subtree(ns_node *doc, ns_node *n, int depth)
         ns_doc_class_index_add_subtree(doc, c, depth + 1);
 }
 
+/* Unregisters class tokens for a subtree, not entering templates or frame documents. */
 static void
 ns_doc_class_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
 {
@@ -2125,6 +2228,7 @@ ns_doc_class_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
         ns_doc_class_index_remove_subtree(doc, c, depth + 1);
 }
 
+/* (Re)builds the document's class index in a single in-order pass. */
 void
 ns_doc_class_index_build(ns_node *doc)
 {
@@ -2154,6 +2258,7 @@ ns_doc_class_index_subtree_removed(ns_node *doc, ns_node *root)
     ns_doc_class_index_remove_subtree(doc, root, 0);
 }
 
+/* Elements with this class token in document order; NULL if unindexed or absent. */
 GPtrArray *
 ns_doc_class_index_lookup(const ns_node *doc, const char *cls)
 {
@@ -2162,6 +2267,7 @@ ns_doc_class_index_lookup(const ns_node *doc, const char *cls)
                                      g_hash_table_lookup(doc->class_index, cls));
 }
 
+/* Adds node to the tag index under the ASCII-lowercased tag name. */
 static void
 ns_doc_tag_index_add_single(GHashTable *map, const char *tag, ns_node *node)
 {
@@ -2185,6 +2291,7 @@ ns_doc_tag_index_add_single(GHashTable *map, const char *tag, ns_node *node)
         is_lower ? g_strdup(tag) : g_ascii_strdown(tag, -1), bucket);
 }
 
+/* Removes node from the tag index bucket for its lowercased tag name. */
 static void
 ns_doc_tag_index_remove_single(GHashTable *map, const char *tag, ns_node *node)
 {
@@ -2200,6 +2307,7 @@ ns_doc_tag_index_remove_single(GHashTable *map, const char *tag, ns_node *node)
     if (bucket) ns_doc_index_bucket_remove(bucket, node);
 }
 
+/* Registers element tags for a subtree, not entering templates or frame documents. */
 static void
 ns_doc_tag_index_add_subtree(ns_node *doc, ns_node *n, int depth)
 {
@@ -2212,6 +2320,7 @@ ns_doc_tag_index_add_subtree(ns_node *doc, ns_node *n, int depth)
         ns_doc_tag_index_add_subtree(doc, c, depth + 1);
 }
 
+/* Unregisters element tags for a subtree, not entering templates or frame documents. */
 static void
 ns_doc_tag_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
 {
@@ -2224,6 +2333,7 @@ ns_doc_tag_index_remove_subtree(ns_node *doc, ns_node *n, int depth)
         ns_doc_tag_index_remove_subtree(doc, c, depth + 1);
 }
 
+/* (Re)builds the document's tag-name index in a single in-order pass. */
 void
 ns_doc_tag_index_build(ns_node *doc)
 {
@@ -2253,6 +2363,7 @@ ns_doc_tag_index_subtree_removed(ns_node *doc, ns_node *root)
     ns_doc_tag_index_remove_subtree(doc, root, 0);
 }
 
+/* Elements with this tag (ASCII case-insensitive) in document order, or NULL. */
 GPtrArray *
 ns_doc_tag_index_lookup(const ns_node *doc, const char *tag)
 {
@@ -2266,6 +2377,7 @@ ns_doc_tag_index_lookup(const ns_node *doc, const char *tag)
     return ns_doc_index_bucket_nodes(doc, bucket);
 }
 
+/* Checks a cached id hit still carries the id, is under root and outside shadow roots. */
 static gboolean
 ns_node_id_hit_valid(const ns_node *root, const ns_node *hit, const char *id)
 {
@@ -2276,6 +2388,7 @@ ns_node_id_hit_valid(const ns_node *root, const ns_node *hit, const char *id)
     return !ns_node_inside_shadow_root(hit, root);
 }
 
+/* True if the cached id hit is valid and the id is not duplicated in the document. */
 static gboolean
 ns_node_id_hit_usable(const ns_node *root, const ns_node *doc,
                       const ns_node *hit, const char *id)
@@ -2284,6 +2397,7 @@ ns_node_id_hit_usable(const ns_node *root, const ns_node *doc,
     return ns_node_id_hit_valid(root, hit, id);
 }
 
+/* getElementById: uses and repairs the id index, falling back to a tree walk. */
 ns_node *
 ns_node_find_by_id(const ns_node *root, const char *id)
 {
@@ -2328,6 +2442,7 @@ ns_node_find_by_id(const ns_node *root, const char *id)
     return ns_node_find_by_id_depth(root, id, 0);
 }
 
+/* Finds the first a element whose name attribute equals name, skipping templates. */
 static ns_node *
 ns_node_find_anchor_name_depth(const ns_node *root, const char *name, int depth)
 {
@@ -2344,6 +2459,7 @@ ns_node_find_anchor_name_depth(const ns_node *root, const char *name, int depth)
     return NULL;
 }
 
+/* Finds a URL fragment's target: element by id, else an a element with that name. */
 ns_node *
 ns_node_find_fragment_target(const ns_node *root, const char *frag)
 {
@@ -2353,6 +2469,7 @@ ns_node_find_fragment_target(const ns_node *root, const char *frag)
     return ns_node_find_anchor_name_depth(root, frag, 0);
 }
 
+/* True when the element has hidden="until-found". */
 gboolean
 ns_element_hidden_until_found(const ns_node *el)
 {
@@ -2361,6 +2478,7 @@ ns_element_hidden_until_found(const ns_node *el)
     return hidden && g_ascii_strcasecmp(hidden, "until-found") == 0;
 }
 
+/* True if a closed details must open to reveal target (target is not inside its summary). */
 gboolean
 ns_details_fragment_needs_open(const ns_node *details, const ns_node *target)
 {
@@ -2382,6 +2500,7 @@ ns_details_fragment_needs_open(const ns_node *details, const ns_node *target)
     return !summary || child != summary;
 }
 
+/* Appends descendant text to out, skipping script element subtrees. */
 static void
 collect_descendant_text_skip_script(const ns_node *n, GString *out, int depth)
 {
@@ -2406,6 +2525,7 @@ ns_node_collect_descendant_text_skip_script(const ns_node *root)
     return g_string_free(out, FALSE);
 }
 
+/* Strips and collapses ASCII whitespace runs to single spaces; caller frees. */
 static char *
 ns_strip_and_collapse_ascii_ws(const char *s)
 {
@@ -2432,6 +2552,7 @@ ns_strip_and_collapse_ascii_ws(const char *s)
     return g_string_free(out, FALSE);
 }
 
+/* Option text per HTML: descendant text minus scripts, whitespace collapsed; caller frees. */
 char *
 ns_option_text_dup(const ns_node *option)
 {
@@ -2440,6 +2561,7 @@ ns_option_text_dup(const ns_node *option)
     return ns_strip_and_collapse_ascii_ws(raw);
 }
 
+/* Option label: the label attribute if present, else its text; caller frees. */
 char *
 ns_option_label_dup(const ns_node *option)
 {
@@ -2449,6 +2571,7 @@ ns_option_label_dup(const ns_node *option)
     return ns_option_text_dup(option);
 }
 
+/* Option value: the value attribute if present, else its text; caller frees. */
 char *
 ns_option_value_dup(const ns_node *option)
 {
@@ -2458,6 +2581,7 @@ ns_option_value_dup(const ns_node *option)
     return ns_option_text_dup(option);
 }
 
+/* Selectedness: dirty data-nd-selected state if set, else the selected attribute. */
 gboolean
 ns_option_is_selected(const ns_node *option)
 {
@@ -2467,6 +2591,7 @@ ns_option_is_selected(const ns_node *option)
     return ns_element_get_attr(option, "selected") != NULL;
 }
 
+/* Appends a select's list of options (direct children and optgroup children) to out. */
 void
 ns_select_collect_options(const ns_node *select, GPtrArray *out)
 {
@@ -2482,6 +2607,7 @@ ns_select_collect_options(const ns_node *select, GPtrArray *out)
     }
 }
 
+/* Selected option of a select: last selected for single-select, first for multiple. */
 const ns_node *
 ns_select_first_selected_option(const ns_node *select)
 {
@@ -2500,6 +2626,7 @@ ns_select_first_selected_option(const ns_node *select)
     return found;
 }
 
+/* Returns the select owning an option (directly or via optgroup), or NULL. */
 static ns_node *
 ns_option_select(const ns_node *option)
 {
@@ -2508,6 +2635,7 @@ ns_option_select(const ns_node *option)
     return ns_node_is_element_named(select, "select") ? select : NULL;
 }
 
+/* Marks chosen as the only selected option; NULL records an explicit no-selection. */
 void
 ns_select_set_selected_option(ns_node *select, const ns_node *chosen)
 {
@@ -2523,6 +2651,7 @@ ns_select_set_selected_option(ns_node *select, const ns_node *chosen)
     else        ns_element_set_attr(select, "data-nd-noselect", "1");
 }
 
+/* Sets an option's selectedness, deselecting siblings in a single-select. */
 void
 ns_option_set_selected(ns_node *option, gboolean on)
 {
@@ -2536,6 +2665,7 @@ ns_option_set_selected(ns_node *option, gboolean on)
     if (select) ns_element_remove_attr(select, "data-nd-noselect");
 }
 
+/* Displayed option: selected one, else first enabled option for a drop-down select. */
 const ns_node *
 ns_select_chosen_option(const ns_node *select)
 {
@@ -2569,6 +2699,7 @@ ns_select_chosen_option(const ns_node *select)
     return first;
 }
 
+/* Resolves a control's form owner via the form attribute or nearest form ancestor. */
 const ns_node *
 ns_form_owner(const ns_node *control, const ns_node *doc)
 {
@@ -2601,6 +2732,7 @@ ns_form_owner(const ns_node *control, const ns_node *doc)
     return NULL;
 }
 
+/* Resets a control to defaults by dropping its dirty value/checked/selected state. */
 static void
 ns_form_reset_control(ns_node *n)
 {
@@ -2626,6 +2758,7 @@ ns_form_reset_control(ns_node *n)
     }
 }
 
+/* Recursively resets every control under scan whose form owner is form. */
 static void
 ns_form_reset_walk(ns_node *form, ns_node *scan, const ns_node *doc, int depth)
 {
@@ -2637,12 +2770,14 @@ ns_form_reset_walk(ns_node *form, ns_node *scan, const ns_node *doc, int depth)
         ns_form_reset_walk(form, c, doc, depth + 1);
 }
 
+/* Implements form reset for all controls owned by form under root. */
 void
 ns_form_reset_owned_controls(ns_node *form, ns_node *root, const ns_node *doc)
 {
     ns_form_reset_walk(form, root ? root : form, doc ? doc : form, 0);
 }
 
+/* True if node is ancestor or a descendant of it (inclusive). */
 gboolean
 ns_node_contains(const ns_node *ancestor, const ns_node *node)
 {
@@ -2660,6 +2795,7 @@ ns_fieldset_first_legend(const ns_node *fieldset)
     return NULL;
 }
 
+/* True for elements that accept the disabled attribute. */
 gboolean
 ns_element_supports_disabled(const ns_node *el)
 {
@@ -2673,6 +2809,7 @@ ns_element_supports_disabled(const ns_node *el)
            strcmp(el->name, "textarea") == 0;
 }
 
+/* HTML disabled state: own attribute, disabled optgroup, or disabled fieldset. */
 gboolean
 ns_element_effectively_disabled(const ns_node *el)
 {
@@ -2707,6 +2844,7 @@ ns_dom_active_modal(void)
     return g_active_modal;
 }
 
+/* True if an ancestor is inert or the element lies outside the active modal dialog. */
 gboolean
 ns_element_effectively_inert(const ns_node *el)
 {
@@ -2720,6 +2858,7 @@ ns_element_effectively_inert(const ns_node *el)
     return FALSE;
 }
 
+/* Appends text content, skipping style, script, noscript and template subtrees. */
 static void
 collect_text(const ns_node *n, GString *out, int depth)
 {
@@ -2738,6 +2877,7 @@ collect_text(const ns_node *n, GString *out, int depth)
         collect_text(c, out, depth + 1);
 }
 
+/* Rendered-ish text of a subtree, excluding style/script/noscript/template; caller frees. */
 char *
 ns_node_collect_text(const ns_node *root)
 {
@@ -2746,6 +2886,7 @@ ns_node_collect_text(const ns_node *root)
     return g_string_free(out, FALSE);
 }
 
+/* Appends all descendant text (textContent), skipping shadow roots. */
 static void
 collect_all_text(const ns_node *n, GString *out, int depth)
 {
@@ -2759,6 +2900,7 @@ collect_all_text(const ns_node *n, GString *out, int depth)
             collect_all_text(c, out, depth + 1);
 }
 
+/* textContent of a node with its length, fast-pathing a single text child; caller frees. */
 char *
 ns_node_collect_all_text_len(const ns_node *root, size_t *out_len)
 {
@@ -2781,6 +2923,7 @@ ns_node_collect_all_text_len(const ns_node *root, size_t *out_len)
 
 #define is_void_tag ns_html_is_void
 
+/* True for pre, textarea and listing, whose leading newline must be re-emitted. */
 static gboolean
 serialize_pre_like(const char *name)
 {
@@ -2790,6 +2933,7 @@ serialize_pre_like(const char *name)
             g_ascii_strcasecmp(name, "listing") == 0);
 }
 
+/* True if element children serialize unescaped (noscript only when scripting is on). */
 static gboolean
 serialize_raw_text(const ns_node *node)
 {
@@ -2802,6 +2946,7 @@ serialize_raw_text(const ns_node *node)
     return !root || !(root->flags & NS_NODE_SCRIPTING_DISABLED);
 }
 
+/* Returns the host's shadow root child element, if any. */
 static const ns_node *
 ns_serialize_shadow_child(const ns_node *host)
 {
@@ -2813,6 +2958,7 @@ ns_serialize_shadow_child(const ns_node *host)
     return NULL;
 }
 
+/* True if getHTML options request this shadow root (listed or serializable). */
 static gboolean
 ns_shadow_root_included(const ns_node *sr, const ns_html_ser_opts *opts)
 {
@@ -2823,6 +2969,7 @@ ns_shadow_root_included(const ns_node *sr, const ns_html_ser_opts *opts)
            ns_element_get_attr(sr, "data-nd-shadow-serializable") != NULL;
 }
 
+/* Appends a doctype with optional PUBLIC/SYSTEM identifiers. */
 static void
 serialize_doctype(const ns_node *n, GString *out)
 {
@@ -2849,6 +2996,7 @@ static void serialize_node_opts(const ns_node *n, GString *out,
                                 gboolean include_self, int depth,
                                 const ns_html_ser_opts *opts);
 
+/* Serializes a shadow root as a declarative template with shadowroot* attributes. */
 static void
 serialize_shadow_template(const ns_node *sr, GString *out, int depth,
                           const ns_html_ser_opts *opts)
@@ -2869,6 +3017,7 @@ serialize_shadow_template(const ns_node *sr, GString *out, int depth,
     g_string_append(out, "</template>");
 }
 
+/* HTML fragment serialization of a node, optionally including shadow roots. */
 static void
 serialize_node_opts(const ns_node *n, GString *out, gboolean include_self,
                     int depth, const ns_html_ser_opts *opts)
@@ -2935,6 +3084,7 @@ serialize_node(const ns_node *n, GString *out, gboolean include_self, int depth)
     serialize_node_opts(n, out, include_self, depth, NULL);
 }
 
+/* innerHTML serialization; uses template content and omits shadow roots; caller frees. */
 char *
 ns_node_inner_html(const ns_node *root)
 {
@@ -2956,6 +3106,7 @@ ns_node_inner_html(const ns_node *root)
     return g_string_free(out, FALSE);
 }
 
+/* getHTML(): inner serialization that may include shadow roots per opts; caller frees. */
 char *
 ns_node_get_html(const ns_node *root, const ns_html_ser_opts *opts)
 {
@@ -2979,6 +3130,7 @@ ns_node_get_html(const ns_node *root, const ns_html_ser_opts *opts)
     return g_string_free(out, FALSE);
 }
 
+/* outerHTML serialization of a node; caller frees. */
 char *
 ns_node_outer_html(const ns_node *node)
 {
@@ -2991,6 +3143,7 @@ ns_node_outer_html(const ns_node *node)
 #define NS_XML_NAMESPACE "http://www.w3.org/XML/1998/namespace"
 #define NS_XMLNS_NAMESPACE "http://www.w3.org/2000/xmlns/"
 
+/* Namespace URI of an element: stored URI, SVG, empty for foreign/XML, else XHTML. */
 static const char *
 ns_xml_element_ns(const ns_node *n)
 {
@@ -3004,6 +3157,7 @@ ns_xml_element_ns(const ns_node *n)
     return NS_HTML_NAMESPACE;
 }
 
+/* Escapes text for XML; in attributes also quotes and tab/newline/CR. */
 static void
 ns_xml_escape_append(GString *out, const char *s, gboolean attr)
 {
@@ -3040,6 +3194,7 @@ xml_attr_is_namespace_decl(const ns_attr *a)
            strcmp(a->namespace_uri, NS_XMLNS_NAMESPACE) == 0;
 }
 
+/* Namespace bound to prefix (NULL for default) by xmlns attributes on n itself. */
 static const char *
 xml_declared_namespace_on(const ns_node *n, const char *prefix)
 {
@@ -3056,6 +3211,7 @@ xml_declared_namespace_on(const ns_node *n, const char *prefix)
     return value;
 }
 
+/* Resolves a prefix through ancestor xmlns declarations; xml maps to its namespace. */
 static const char *
 xml_declared_namespace(const ns_node *n, const char *prefix)
 {
@@ -3067,6 +3223,7 @@ xml_declared_namespace(const ns_node *n, const char *prefix)
     return prefix && strcmp(prefix, "xml") == 0 ? NS_XML_NAMESPACE : NULL;
 }
 
+/* Finds the prefix bound to uri on the nearest declaring ancestor; caller frees. */
 static char *
 xml_prefix_for_namespace(const ns_node *n, const char *uri)
 {
@@ -3086,6 +3243,7 @@ xml_prefix_for_namespace(const ns_node *n, const char *uri)
     return NULL;
 }
 
+/* True if n or any ancestor carries an xmlns declaration. */
 static gboolean
 xml_has_namespace_declaration(const ns_node *n)
 {
@@ -3096,6 +3254,7 @@ xml_has_namespace_declaration(const ns_node *n)
     return FALSE;
 }
 
+/* True if n declares an xmlns:prefix with an empty value. */
 static gboolean
 xml_has_empty_prefixed_declaration(const ns_node *n)
 {
@@ -3106,6 +3265,7 @@ xml_has_empty_prefixed_declaration(const ns_node *n)
     return FALSE;
 }
 
+/* Element prefix from stored data or the qualified name; caller frees, may be NULL. */
 static char *
 xml_element_prefix(const ns_node *n)
 {
@@ -3125,12 +3285,14 @@ xml_local_name(const char *name)
     return colon ? colon + 1 : (name ? name : "");
 }
 
+/* Generates the next nsN prefix for namespace fixup; caller frees. */
 static char *
 xml_generated_prefix(guint *index)
 {
     return g_strdup_printf("ns%u", (*index)++);
 }
 
+/* XML serialization with namespace fixup, emitting xmlns declarations as needed. */
 static void
 xml_serialize_node(const ns_node *n, GString *out, const char *parent_ns,
                    guint *prefix_index, int depth)
@@ -3308,6 +3470,7 @@ xml_serialize_node(const ns_node *n, GString *out, const char *parent_ns,
     g_free(prefix);
 }
 
+/* XML serialization of a node and its subtree; caller frees. */
 char *
 ns_node_xml_outer_html(const ns_node *node)
 {
@@ -3317,6 +3480,7 @@ ns_node_xml_outer_html(const ns_node *node)
     return g_string_free(out, FALSE);
 }
 
+/* XML serialization of a node's children in its default namespace; caller frees. */
 char *
 ns_node_xml_inner_html(const ns_node *node)
 {
@@ -3330,6 +3494,7 @@ ns_node_xml_inner_html(const ns_node *node)
     return g_string_free(out, FALSE);
 }
 
+/* Appends text with C-style escapes, truncated to max bytes with an ellipsis. */
 static void
 ns_dump_text(GString *out, const char *s, gsize max)
 {
@@ -3350,6 +3515,7 @@ ns_dump_text(GString *out, const char *s, gsize max)
         g_string_append(out, "…");
 }
 
+/* Appends an indented debug dump of a subtree, one node per line. */
 static void
 ns_dump_node(GString *out, const ns_node *n, int depth)
 {
@@ -3396,6 +3562,7 @@ ns_dump_node(GString *out, const ns_node *n, int depth)
         ns_dump_node(out, c, depth + 1);
 }
 
+/* Returns a debug tree dump of node; caller frees the GString. */
 GString *
 ns_node_dump(const ns_node *node)
 {
@@ -3405,6 +3572,7 @@ ns_node_dump(const ns_node *node)
     return out;
 }
 
+/* Parses comma/space-separated area coords into out; returns count parsed. */
 static int
 ns_map_parse_coords(const char *s, double *out, int max)
 {
@@ -3423,6 +3591,7 @@ ns_map_parse_coords(const char *s, double *out, int max)
     return n;
 }
 
+/* Even-odd ray casting test for a point inside a polygon of npairs vertices. */
 static gboolean
 ns_map_point_in_poly(const double *pts, int npairs, double x, double y)
 {
@@ -3437,6 +3606,7 @@ ns_map_point_in_poly(const double *pts, int npairs, double x, double y)
     return in;
 }
 
+/* Hit-tests an area shape (rect, circle, poly, default) against image-local coords. */
 static gboolean
 ns_area_hit(const char *shape, const char *coords, double lx, double ly,
             double iw, double ih)
@@ -3463,6 +3633,7 @@ ns_area_hit(const char *shape, const char *coords, double lx, double ly,
     return lx >= x1 && lx <= x2 && ly >= y1 && ly <= y2;
 }
 
+/* Finds a map element whose name or id matches. */
 static const ns_node *
 ns_find_map(const ns_node *n, const char *name, int depth)
 {
@@ -3480,6 +3651,7 @@ ns_find_map(const ns_node *n, const char *name, int depth)
     return NULL;
 }
 
+/* First area descendant of a map whose shape contains the point. */
 static const ns_node *
 ns_map_first_area(const ns_node *n, double lx, double ly, double iw, double ih,
                   int depth)
@@ -3496,6 +3668,7 @@ ns_map_first_area(const ns_node *n, double lx, double ly, double iw, double ih,
     return NULL;
 }
 
+/* Resolves a usemap click to the hit area's href (and target); caller frees. */
 char *
 ns_image_map_resolve(const ns_node *doc, const char *usemap,
                      double lx, double ly, double iw, double ih,

@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — libcurl-backed async fetcher.
+/* Nordstjernen Web Browser — libcurl-backed async fetcher and WHATWG URL handling.
+ * Cookies, HSTS, CORS preflight, proxies, caching, and data:, file:, ftp: and about: schemes.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -83,6 +84,7 @@ static GHashTable *g_conn_stats;
 static GHashTable *g_dead_hosts;
 static GMutex      g_dead_hosts_lock;
 
+/* TRUE if the host failed within the dead-host TTL; prunes expired entries. */
 static gboolean
 ns_net_host_recently_dead(const char *host)
 {
@@ -101,6 +103,7 @@ ns_net_host_recently_dead(const char *host)
     return dead;
 }
 
+/* Marks a host unreachable for NS_DEAD_HOST_TTL_US (two minutes). */
 static void
 ns_net_host_mark_dead(const char *host)
 {
@@ -147,6 +150,7 @@ origin_slot_key(const char *origin)
     return (origin && *origin) ? g_ascii_strdown(origin, -1) : NULL;
 }
 
+/* Blocks until one of the per-origin connection slots is free; FALSE if cancelled. */
 static gboolean
 ns_net_acquire_origin_slot(const char *origin, GCancellable *cancellable)
 {
@@ -178,6 +182,7 @@ ns_net_acquire_origin_slot(const char *origin, GCancellable *cancellable)
     return TRUE;
 }
 
+/* Releases a per-origin connection slot and wakes one waiter. */
 static void
 ns_net_release_origin_slot(const char *origin)
 {
@@ -209,6 +214,7 @@ static GMutex      g_multi_lock;
 static GQueue      g_multi_incoming = G_QUEUE_INIT;
 static GHashTable *g_multi_active;
 
+/* Records a transfer result and signals its waiting thread; call with the multi lock. */
 static void
 ns_net_multi_finish_locked(ns_multi_xfer *x, CURLcode result)
 {
@@ -217,6 +223,7 @@ ns_net_multi_finish_locked(ns_multi_xfer *x, CURLcode result)
     g_cond_signal(&x->cond);
 }
 
+/* Multi-handle thread: adds queued easy handles, drives transfers, signals completions. */
 static gpointer
 ns_net_multi_loop(gpointer data)
 {
@@ -273,6 +280,7 @@ ns_net_multi_loop(gpointer data)
     return NULL;
 }
 
+/* Lazily creates the shared multiplexing curl multi handle and its worker thread. */
 static void
 ns_net_multi_start(void)
 {
@@ -290,6 +298,7 @@ ns_net_multi_start(void)
     g_mutex_unlock(&g_multi_lock);
 }
 
+/* Runs an easy handle on the shared multi thread and waits; falls back to easy_perform. */
 static CURLcode
 ns_net_multi_perform(CURL *easy)
 {
@@ -317,6 +326,7 @@ ns_net_multi_perform(CURL *easy)
     return x.result;
 }
 
+/* Stops the multi thread (aborting active transfers) and frees the multi handle. */
 static void
 ns_net_multi_shutdown(void)
 {
@@ -339,6 +349,7 @@ ns_net_multi_shutdown(void)
     g_multi_quit = FALSE;
 }
 
+/* Lazily builds and caches a path under the user data dir, creating the directory. */
 static char *
 ns_net_data_path(char **slot, const char *basename)
 {
@@ -350,6 +361,7 @@ ns_net_data_path(char **slot, const char *basename)
     return *slot;
 }
 
+/* Recursively deletes a directory tree without following symlinked directories. */
 void
 ns_rmrf(const char *path)
 {
@@ -371,6 +383,7 @@ ns_rmrf(const char *path)
     g_rmdir(path);
 }
 
+/* Lazily creates the 0700 temp directory holding private-mode network state. */
 static const char *
 ns_net_private_root(void)
 {
@@ -393,6 +406,7 @@ ns_net_is_private(void)
     return cfg && cfg->private_mode;
 }
 
+/* Path of curl's HSTS file; in private mode a temp copy seeded from the real one. */
 static char *
 ns_net_hsts_curl_path(void)
 {
@@ -415,6 +429,7 @@ ns_net_hsts_curl_path(void)
     return g_hsts_curl_path;
 }
 
+/* Reloads the HSTS host cache from curl's file; leading dot means includeSubDomains. */
 static void
 ns_hsts_cache_reload_locked(const char *path)
 {
@@ -460,6 +475,7 @@ file_mtime_us(const char *path)
     return (gint64)st.st_mtime * G_USEC_PER_SEC;
 }
 
+/* TRUE if the host or a parent with includeSubDomains is in the HSTS cache. */
 static gboolean
 ns_hsts_lookup_locked(const char *lower_host)
 {
@@ -482,6 +498,7 @@ ns_url_is_http_or_https(const char *url)
                    g_str_has_prefix(url, "https://"));
 }
 
+/* TRUE if a query key is a known tracking parameter (utm_*, gclid, fbclid, ...). */
 static gboolean
 ns_query_param_is_tracking(const char *key, size_t key_len)
 {
@@ -510,6 +527,7 @@ ns_query_param_is_tracking(const char *key, size_t key_len)
     return FALSE;
 }
 
+/* Returns the URL without tracking query parameters, or NULL if unchanged or disabled. */
 char *
 ns_url_strip_tracking_params(const char *url)
 {
@@ -566,6 +584,7 @@ ns_url_is_ftp(const char *url)
     return url && g_str_has_prefix(url, "ftp://");
 }
 
+/* Parses a Refresh header/meta value into delay seconds and optional URL (HTML spec). */
 gboolean
 ns_net_parse_refresh(const char *input, double *time_out, char **url_out)
 {
@@ -645,6 +664,7 @@ ns_url_parser_destroy_tls(gpointer p)
 
 static GPrivate g_url_parser_tls = G_PRIVATE_INIT(ns_url_parser_destroy_tls);
 
+/* Returns this thread's cached lexbor URL parser, creating it on first use. */
 static lxb_url_parser_t *
 ns_url_parser_open(void)
 {
@@ -670,6 +690,7 @@ ns_url_parser_close(lxb_url_parser_t *parser)
     lxb_url_parser_clean(parser);
 }
 
+/* Resolves href against base with the WHATWG URL parser; serialized result, caller frees. */
 char *
 ns_url_resolve_len(const char *base, const char *href, size_t href_len)
 {
@@ -710,6 +731,7 @@ ns_url_resolve(const char *base, const char *href)
     return ns_url_resolve_len(base, href, href ? strlen(href) : 0);
 }
 
+/* TRUE for schemes whose query is encoded in the document encoding. */
 static gboolean
 ns_url_query_uses_encoding(const char *url)
 {
@@ -719,6 +741,7 @@ ns_url_query_uses_encoding(const char *url)
     return FALSE;
 }
 
+/* Extracts the raw query from href after stripping whitespace and tabs/newlines. */
 static char *
 ns_url_input_query(const char *href)
 {
@@ -741,6 +764,7 @@ ns_url_input_query(const char *href)
     return query;
 }
 
+/* Resolves href, re-encoding its query in a non-UTF-8 document encoding. */
 char *
 ns_url_resolve_encoded(const char *base, const char *href,
                        const char *encoding)
@@ -763,6 +787,7 @@ ns_url_resolve_encoded(const char *base, const char *href,
     return g_string_free(out, FALSE);
 }
 
+/* TRUE if the parsed URL has no host or an empty one. */
 static gboolean
 ns_url_host_is_empty(const lxb_url_t *u)
 {
@@ -779,6 +804,7 @@ ns_url_host_is_empty(const lxb_url_t *u)
     }
 }
 
+/* TRUE if the URL has a special scheme (http, https, ws, wss, ftp, file). */
 static gboolean
 ns_url_is_special(const lxb_url_t *u)
 {
@@ -792,6 +818,7 @@ ns_url_has_credentials_or_port(const lxb_url_t *u)
     return u->username.length > 0 || u->password.length > 0 || u->has_port;
 }
 
+/* Implements the URL host/hostname setters, splitting an optional port per WHATWG. */
 static void
 ns_url_host_setter(lxb_url_t *u, lxb_url_parser_t *parser,
                    const char *v, size_t len, gboolean hostname_only)
@@ -835,6 +862,7 @@ ns_url_host_setter(lxb_url_t *u, lxb_url_parser_t *parser,
                                 digits - colon - 1);
 }
 
+/* Dispatches a URL component setter by name, ignoring userinfo/port on hostless URLs. */
 static void
 ns_url_apply_setter(lxb_url_t *u, lxb_url_parser_t *parser,
                     const char *component, const char *value, size_t vlen)
@@ -865,6 +893,7 @@ ns_url_apply_setter(lxb_url_t *u, lxb_url_parser_t *parser,
         (void) lxb_url_api_hash_set(u, parser, v, vlen);
 }
 
+/* Parses href, sets one URL component, and returns the reserialized URL; NULL on failure. */
 char *
 ns_url_set_component_len(const char *href, const char *component,
                          const char *value, size_t value_len)
@@ -894,6 +923,7 @@ ns_url_set_component_len(const char *href, const char *component,
     return out;
 }
 
+/* Normalizes a URL through the parser (punycode hosts); data/about/file pass through. */
 static char *
 ns_url_to_ascii(const char *url)
 {
@@ -904,6 +934,7 @@ ns_url_to_ascii(const char *url)
     return ns_url_resolve(NULL, url);
 }
 
+/* Parses an absolute URL, returning NULL if it has no non-empty host. */
 static lxb_url_t *
 ns_url_parse_with_host(lxb_url_parser_t *parser, const char *url)
 {
@@ -916,6 +947,7 @@ ns_url_parse_with_host(lxb_url_parser_t *parser, const char *url)
     return u;
 }
 
+/* Serialized origin of an http(s) or blob:http(s) URL; NULL otherwise, caller frees. */
 char *
 ns_url_origin_from(const char *url)
 {
@@ -948,6 +980,7 @@ ns_url_origin_from(const char *url)
     return out;
 }
 
+/* TRUE if both URLs have equal non-null http(s) origins. */
 gboolean
 ns_url_same_origin(const char *a, const char *b)
 {
@@ -959,6 +992,7 @@ ns_url_same_origin(const char *a, const char *b)
     return eq;
 }
 
+/* Computes the Referer to send for a request under the given referrer policy. */
 static char *
 ns_net_referer_for(const char *url, const char *top_url,
                    ns_referer_policy policy)
@@ -986,6 +1020,7 @@ ns_net_referer_for(const char *url, const char *top_url,
     return out;
 }
 
+/* Schemeful site (scheme + registrable domain via PSL, plus port); caller frees. */
 char *
 ns_url_site_from(const char *url)
 {
@@ -1001,6 +1036,7 @@ ns_url_site_from(const char *url)
     return g_strdup_printf("%s://%s", p->protocol, site_host);
 }
 
+/* TRUE if two URLs share a site, falling back to host suffix matching. */
 static gboolean
 ns_url_is_same_site(const char *a, const char *b)
 {
@@ -1023,6 +1059,7 @@ ns_url_is_same_site(const char *a, const char *b)
     return FALSE;
 }
 
+/* Serialized host of a URL, or NULL if it has none; caller frees. */
 char *
 ns_url_host_from(const char *url)
 {
@@ -1063,6 +1100,7 @@ ns_url_parts_free(ns_url_parts *parts)
     g_free(parts);
 }
 
+/* Takes the serializer output string, or "" when serialization failed. */
 static char *
 ns_url_take_serialized(GString *s, lxb_status_t status)
 {
@@ -1073,6 +1111,7 @@ ns_url_take_serialized(GString *s, lxb_status_t status)
     return g_string_free(s, FALSE);
 }
 
+/* Splits a URL into location-style components; blob: inherits its inner origin. */
 static ns_url_parts *
 ns_url_parts_new_depth(const char *url, int depth)
 {
@@ -1176,12 +1215,14 @@ ns_url_parts_new_depth(const char *url, int depth)
     return p;
 }
 
+/* Parses a URL into newly allocated location-style components; NULL if invalid. */
 ns_url_parts *
 ns_url_parts_new(const char *url)
 {
     return ns_url_parts_new_depth(url, 0);
 }
 
+/* TRUE if the string has no whitespace and parses as an absolute URL. */
 gboolean
 ns_url_is_valid_absolute(const char *url)
 {
@@ -1194,6 +1235,7 @@ ns_url_is_valid_absolute(const char *url)
     return parts && parts->protocol && *parts->protocol;
 }
 
+/* TRUE if curl's HSTS store covers the host; reloads the cache when the file changes. */
 gboolean
 ns_net_hsts_should_upgrade(const char *host)
 {
@@ -1215,6 +1257,7 @@ ns_net_hsts_should_upgrade(const char *host)
     return hit;
 }
 
+/* Returns an https:// rewrite of an http:// URL whose host is HSTS-known, else NULL. */
 static char *
 ns_net_hsts_upgrade(const char *url)
 {
@@ -1228,6 +1271,7 @@ ns_net_hsts_upgrade(const char *url)
     return g_strconcat("https://", url + 7, NULL);
 }
 
+/* Selects the User-Agent string for a site compatibility mode. */
 const char *
 ns_user_agent_for_mode(const char *compat_mode)
 {
@@ -1240,6 +1284,7 @@ ns_user_agent_for_mode(const char *compat_mode)
     return NS_USER_AGENT;
 }
 
+/* TRUE if the UA is Chrome-like (and not Ladybird), so client hints apply. */
 gboolean
 ns_user_agent_has_client_hints(const char *user_agent)
 {
@@ -1247,6 +1292,7 @@ ns_user_agent_has_client_hints(const char *user_agent)
            !strstr(user_agent, "Ladybird/");
 }
 
+/* TRUE for localhost, *.localhost, 127.0.0.1 and ::1. */
 static gboolean
 ns_host_is_loopback(const char *host)
 {
@@ -1263,6 +1309,7 @@ ns_url_host_is_loopback(const char *host)
     return host && ns_host_is_loopback(host);
 }
 
+/* HTTPS-First mode: https:// rewrite of a non-loopback http:// URL, else NULL. */
 char *
 ns_net_https_first_upgrade(const char *url)
 {
@@ -1277,6 +1324,7 @@ ns_net_https_first_upgrade(const char *url)
     return g_strconcat("https://", url + 7, NULL);
 }
 
+/* TRUE if an X-Content-Type-Options value contains the nosniff token. */
 gboolean
 ns_net_header_is_nosniff(const char *value)
 {
@@ -1292,6 +1340,7 @@ ns_net_header_is_nosniff(const char *value)
     return FALSE;
 }
 
+/* Lazily resolves and creates the cookie jar directory (temp dir in private mode). */
 static const char *
 ns_net_cookie_dir(void)
 {
@@ -1309,6 +1358,7 @@ ns_net_cookie_dir(void)
     return g_cookie_dir;
 }
 
+/* Deletes all entries inside a directory, keeping the directory itself. */
 static void
 ns_net_empty_dir(const char *dir)
 {
@@ -1328,6 +1378,7 @@ ns_net_empty_dir(const char *dir)
     g_dir_close(d);
 }
 
+/* Clears all in-memory cookie partitions and deletes the jar files. */
 static void
 ns_net_cookies_clear(void)
 {
@@ -1348,6 +1399,7 @@ ns_net_cookies_clear(void)
     ns_net_empty_dir(ns_net_cookie_dir());
 }
 
+/* Deletes on-disk localStorage and IndexedDB data. */
 static void
 ns_net_site_storage_clear(void)
 {
@@ -1361,6 +1413,7 @@ ns_net_site_storage_clear(void)
     g_free(base);
 }
 
+/* Jar file path for a cookie partition, named by a SHA-256 prefix of its key. */
 static char *
 ns_net_cookie_path_for_partition(const char *top_origin)
 {
@@ -1388,6 +1441,7 @@ cookie_partition_free(gpointer data)
     g_free(p);
 }
 
+/* Points a partition's holder handle at its jar file, migrating a legacy .js.txt jar. */
 static void
 cookie_partition_open_jar(ns_cookie_partition *p, const char *site)
 {
@@ -1409,6 +1463,7 @@ cookie_partition_open_jar(ns_cookie_partition *p, const char *site)
     g_free(jar);
 }
 
+/* Returns the cookie partition for a site, creating its share and jar on first use. */
 static ns_cookie_partition *
 cookie_partition_get(const char *site)
 {
@@ -1433,6 +1488,7 @@ cookie_partition_get(const char *site)
 
 static gint ns_cookie_writes;
 
+/* Flushes a partition's cookies to disk and bumps the cookie write counter. */
 static void
 cookie_partition_flush(ns_cookie_partition *p)
 {
@@ -1443,6 +1499,7 @@ cookie_partition_flush(ns_cookie_partition *p)
     g_mutex_unlock(&p->lock);
 }
 
+/* Returns a partition's cookies as Netscape-format lines; caller frees the slist. */
 static struct curl_slist *
 cookie_partition_list(ns_cookie_partition *p)
 {
@@ -1454,6 +1511,7 @@ cookie_partition_list(ns_cookie_partition *p)
     return list;
 }
 
+/* Inserts a Netscape-format cookie line into a partition and flushes it. */
 static void
 cookie_partition_add(ns_cookie_partition *p, const char *line)
 {
@@ -1465,6 +1523,7 @@ cookie_partition_add(ns_cookie_partition *p, const char *line)
     g_mutex_unlock(&p->lock);
 }
 
+/* Reports a cookie change counter for document.cookie caching; FALSE without a site. */
 gboolean
 ns_net_cookie_jar_version(const char *url, guint64 *version)
 {
@@ -1474,6 +1533,7 @@ ns_net_cookie_jar_version(const char *url, guint64 *version)
     return TRUE;
 }
 
+/* Detaches and destroys all cookie partitions. */
 static void
 ns_net_cookie_partitions_free(void)
 {
@@ -1484,6 +1544,7 @@ ns_net_cookie_partitions_free(void)
     if (partitions) g_hash_table_destroy(partitions);
 }
 
+/* RFC 6265 domain match: host equals the domain or is a subdomain of it. */
 static gboolean
 cookie_domain_matches(const char *cookie_domain, const char *host)
 {
@@ -1495,6 +1556,7 @@ cookie_domain_matches(const char *cookie_domain, const char *host)
              g_ascii_strcasecmp(host + hl - dl, d) == 0));
 }
 
+/* TRUE if a Netscape cookie line applies to host, path and scheme and is unexpired. */
 static gboolean
 cookie_line_matches(char **f, const char *host, const char *path,
                     gboolean is_https, gint64 now)
@@ -1518,6 +1580,7 @@ cookie_line_matches(char **f, const char *host, const char *path,
     return expiry == 0 || expiry >= now;
 }
 
+/* Builds the document.cookie string for a URL from its site's partition; caller frees. */
 char *
 ns_net_cookies_for_js(const char *url)
 {
@@ -1567,6 +1630,7 @@ ns_net_cookies_for_js(const char *url)
     return g_string_free(out, FALSE);
 }
 
+/* TRUE if the partition holds an HttpOnly cookie with this name for the host. */
 static gboolean
 cookie_partition_has_httponly(ns_cookie_partition *p, const char *host,
                               const char *name)
@@ -1586,6 +1650,7 @@ cookie_partition_has_httponly(ns_cookie_partition *p, const char *host,
     return found;
 }
 
+/* Parses a document.cookie assignment and stores it per RFC 6265 and prefix rules. */
 void
 ns_net_cookie_store_from_js(const char *url, const char *cookie)
 {
@@ -1726,6 +1791,7 @@ ns_net_cookie_store_from_js(const char *url, const char *cookie)
     g_free(path_attr);
 }
 
+/* Path of curl's Alt-Svc cache, or NULL in private mode. */
 static const char *
 ns_net_altsvc_path(void)
 {
@@ -1734,6 +1800,7 @@ ns_net_altsvc_path(void)
     return ns_net_data_path(&g_altsvc_path, "altsvc.txt");
 }
 
+/* HTTP version to request: HTTP/2 over TLS, or HTTP/3 when NS_FORCE_HTTP3 is set. */
 static long
 ns_net_http_version(void)
 {
@@ -1761,6 +1828,7 @@ ns_net_error_quark(void)
     return g_quark_from_static_string("nd-net-error");
 }
 
+/* Curl progress callback that aborts on shutdown or when the request is cancelled. */
 static int
 ns_xferinfo_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
                curl_off_t ultotal, curl_off_t ulnow)
@@ -1771,6 +1839,7 @@ ns_xferinfo_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
     return (c && g_cancellable_is_cancelled(c)) ? 1 : 0;
 }
 
+/* Adopts path as the CA bundle if it exists. */
 static gboolean
 ns_net_try_ca_bundle(const char *path)
 {
@@ -1780,6 +1849,7 @@ ns_net_try_ca_bundle(const char *path)
     return TRUE;
 }
 
+/* Locates a CA bundle via env vars, bundled paths, then platform default locations. */
 static void
 ns_net_resolve_ca_bundle(void)
 {
@@ -1874,6 +1944,7 @@ ns_share_unlock(CURL *handle, curl_lock_data data, void *user_data)
         g_mutex_unlock(&g_share_locks[data]);
 }
 
+/* Creates a locked curl share for DNS, TLS sessions, connections and optionally cookies. */
 static CURLSH *
 ns_net_share_new(gboolean with_cookies)
 {
@@ -1897,6 +1968,7 @@ ns_net_share_new(gboolean with_cookies)
     return share;
 }
 
+/* Primes OpenSSL's RNG in the background by calling RAND_bytes if available. */
 static gpointer
 ns_rng_warmup_thread(gpointer data)
 {
@@ -1932,6 +2004,7 @@ ns_net_join_rng(void)
     }
 }
 
+/* Initializes curl, TLS curves (PQ hybrid on OpenSSL 3.5+), Accept-Encoding and paths. */
 void
 ns_net_init(void)
 {
@@ -1972,6 +2045,7 @@ ns_net_init(void)
     ns_net_cookie_dir();
 }
 
+/* TRUE when no fetches or preconnects are in flight. */
 gboolean
 ns_net_idle(void)
 {
@@ -1983,6 +2057,7 @@ ns_net_idle(void)
 
 static void ns_fetch_task_abandon(GTask *task, const GError *err);
 
+/* Aborts queued fetches and waits up to timeout_ms for active ones; TRUE if drained. */
 static gboolean
 ns_net_drain(int timeout_ms)
 {
@@ -2012,6 +2087,7 @@ ns_net_drain(int timeout_ms)
     return drained;
 }
 
+/* Stops network threads and, once drained, frees all global network state. */
 void
 ns_net_shutdown(void)
 {
@@ -2108,6 +2184,7 @@ static gint64   g_perf_fetch_sum_us;
 static gint64   g_perf_fetch_first_us;
 static gint64   g_perf_fetch_last_us;
 
+/* Accumulates fetch count, bytes and timing for perf logging when enabled. */
 static void
 ns_net_perf_record(gint64 start_us, gint64 end_us, guint64 bytes)
 {
@@ -2123,6 +2200,7 @@ ns_net_perf_record(gint64 start_us, gint64 end_us, guint64 bytes)
     g_mutex_unlock(&g_perf_lock);
 }
 
+/* Reads accumulated fetch statistics; span is first start to last end. */
 void
 ns_net_perf_snapshot(guint64 *fetches, guint64 *bytes,
                      double *sum_ms, double *span_ms)
@@ -2137,6 +2215,7 @@ ns_net_perf_snapshot(guint64 *fetches, guint64 *bytes,
     g_mutex_unlock(&g_perf_lock);
 }
 
+/* Counts requests and new connections per origin and logs them when enabled. */
 static void
 ns_net_conn_stat_record(const char *url, long http_version, long new_connections)
 {
@@ -2166,6 +2245,7 @@ ns_net_conn_stat_record(const char *url, long http_version, long new_connections
     g_free(origin);
 }
 
+/* Proxy for a URL: override, else configured HTTPS or HTTP proxy. */
 static const char *
 ns_net_pick_configured_proxy(const char *url)
 {
@@ -2187,6 +2267,7 @@ ns_net_configured_no_proxy(void)
     return NULL;
 }
 
+/* Applies the configured proxy and no-proxy list to a curl handle. */
 void
 ns_net_apply_curl_proxy(void *curl_handle, const char *url)
 {
@@ -2199,6 +2280,7 @@ ns_net_apply_curl_proxy(void *curl_handle, const char *url)
         curl_easy_setopt(curl, CURLOPT_NOPROXY, no_proxy);
 }
 
+/* Applies TLS hardening to a curl handle: ciphers, curves, ECH, CA bundle, DoH. */
 void
 ns_net_apply_curl_tls(void *curl_handle)
 {
@@ -2264,6 +2346,7 @@ ns_response_free(ns_response *resp)
     g_free(resp);
 }
 
+/* Deep-copies a response including headers and body; caller frees. */
 static ns_response *
 ns_response_copy(const ns_response *src)
 {
@@ -2321,6 +2404,7 @@ ns_net_log_entry_free(gpointer data)
     g_free(e);
 }
 
+/* Appends a request to the ring buffer of the last NS_NET_LOG_CAP fetches. */
 static void
 ns_net_log_record(const char *method, const char *url, long status,
                   const char *content_type, guint64 body_len,
@@ -2374,6 +2458,7 @@ ns_net_log_append_headers(GString *out, const char *headers)
     g_strfreev(lines);
 }
 
+/* Formats the network request log as plain text; caller frees. */
 char *
 ns_net_log_dump(void)
 {
@@ -2411,6 +2496,7 @@ ns_net_log_dump(void)
     return g_string_free(out, FALSE);
 }
 
+/* Joins curl header list lines, skipping internal X-ND- headers; caller frees. */
 static char *
 ns_net_slist_serialize(struct curl_slist *list)
 {
@@ -2432,6 +2518,7 @@ ns_net_slist_serialize(struct curl_slist *list)
 #define NS_NET_RESPONSE_RECHECK_BYTES (16ULL * 1024ULL * 1024ULL)
 #define NS_NET_MAX_RAW_HEADER_BYTES   (1ULL * 1024ULL * 1024ULL)
 
+/* Available physical memory from the OS (total on macOS); 0 if unknown. */
 static guint64
 ns_net_available_memory_bytes(void)
 {
@@ -2466,6 +2553,7 @@ ns_net_available_memory_bytes(void)
     return 0;
 }
 
+/* Per-response body budget: half of available memory, at least 64 MiB. */
 static guint64
 ns_net_response_budget(void)
 {
@@ -2483,6 +2571,7 @@ typedef struct ns_write_ctx {
     gboolean    exceeded;
 } ns_write_ctx;
 
+/* Curl body callback appending to the buffer; aborts once the memory budget is exceeded. */
 static size_t
 ns_write_cb(char *data, size_t size, size_t nmemb, void *userdata)
 {
@@ -2532,6 +2621,7 @@ typedef struct ns_header_ctx {
     gboolean set_cookie_seen;
 } ns_header_ctx;
 
+/* Copies a header value after the name prefix with surrounding whitespace and CRLF trimmed. */
 static char *
 header_value_dup(const char *line, size_t bytes, size_t prefix_len)
 {
@@ -2544,6 +2634,7 @@ header_value_dup(const char *line, size_t bytes, size_t prefix_len)
     return g_strndup(v, vlen);
 }
 
+/* If the line starts with name, stores its value in *slot (replacing); TRUE on match. */
 static gboolean
 header_capture(const char *buffer, size_t bytes,
                const char *name, char **slot)
@@ -2559,6 +2650,7 @@ header_capture(const char *buffer, size_t bytes,
     return TRUE;
 }
 
+/* If the line starts with name, appends its value to *slot comma-joined; TRUE on match. */
 static gboolean
 header_append(const char *buffer, size_t bytes,
               const char *name, char **slot)
@@ -2584,6 +2676,7 @@ header_append(const char *buffer, size_t bytes,
     return TRUE;
 }
 
+/* Curl header callback: captures key headers and raw headers minus Set-Cookie lines. */
 static size_t
 ns_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
 {
@@ -2637,6 +2730,7 @@ ns_header_cb(char *buffer, size_t size, size_t nitems, void *userdata)
 
 extern const char *ns_app_self_exe(void);
 
+/* Reads the first existing file among paths under exe, user and system data dirs. */
 static char *
 about_read_first(const char *const *rel_paths, gsize *out_len)
 {
@@ -2670,6 +2764,7 @@ about_read_first(const char *const *rel_paths, gsize *out_len)
     return contents;
 }
 
+/* Cached data: URI of the bundled logo GIF, or NULL if not found. */
 static const char *
 about_logo_data_uri(void)
 {
@@ -2696,6 +2791,7 @@ about_logo_data_uri(void)
     return NULL;
 }
 
+/* Returns the <img> markup for the about-page logo, or "" if missing. */
 static char *
 about_logo_markup(void)
 {
@@ -2705,6 +2801,7 @@ about_logo_markup(void)
                            "aria-hidden=\"true\">", uri);
 }
 
+/* Replaces every occurrence of placeholder in a template; caller frees. */
 static char *
 about_substitute(const char *template_text,
                  const char *placeholder, const char *value)
@@ -2715,6 +2812,7 @@ about_substitute(const char *template_text,
     return joined;
 }
 
+/* Appends an escaped key/value row to the diagnostics HTML (em dash when empty). */
 static void
 diag_kv(GString *s, const char *key, const char *value)
 {
@@ -2726,6 +2824,7 @@ diag_kv(GString *s, const char *key, const char *value)
     g_free(ev);
 }
 
+/* Appends a build-feature row marked Enabled or Not built. */
 static void
 diag_feature(GString *s, const char *key, gboolean on)
 {
@@ -2735,6 +2834,7 @@ diag_feature(GString *s, const char *key, gboolean on)
         key, on ? "on" : "off", on ? "Enabled" : "Not built");
 }
 
+/* Builds the about-page diagnostics block: OS, versions of libraries, build features. */
 static char *
 about_diagnostics_html(void)
 {
@@ -2821,6 +2921,7 @@ about_diagnostics_html(void)
     return g_string_free(s, FALSE);
 }
 
+/* Wraps a bundled text file in a styled preformatted HTML page, or a missing note. */
 static char *
 build_about_markdown_page(const char *const *paths, const char *title,
                           const char *back_href, const char *back_label,
@@ -2861,6 +2962,7 @@ build_about_markdown_page(const char *const *paths, const char *title,
     return html;
 }
 
+/* Builds the about:license page from the bundled GPL LICENSE file. */
 static char *
 build_about_license(void)
 {
@@ -2878,6 +2980,7 @@ build_about_license(void)
                                      "LICENSE");
 }
 
+/* Builds the third-party notices page from THIRD-PARTY-LICENSES.md. */
 static char *
 build_about_third_party(void)
 {
@@ -2902,6 +3005,7 @@ typedef struct ns_error_info {
     const char *summary;
 } ns_error_info;
 
+/* Picks the error page copy from transport error text, HTTP status and file-URL context. */
 static const ns_error_info *
 classify_error(long status, const char *transport_error, gboolean is_file_url)
 {
@@ -3093,6 +3197,7 @@ classify_error(long status, const char *transport_error, gboolean is_file_url)
     return &GENERIC;
 }
 
+/* Builds the styled HTML error page for a failed load with retry/back actions. */
 char *
 ns_build_error_page(const char *url, long status, const char *transport_error)
 {
@@ -3226,6 +3331,7 @@ ns_build_error_page(const char *url, long status, const char *transport_error)
     return g_string_free(out, FALSE);
 }
 
+/* Appends bytes to a body if it stays within budget and 4 GiB; FALSE otherwise. */
 static gboolean
 append_response_budgeted(GByteArray *body,
                          const guint8 *data,
@@ -3243,6 +3349,7 @@ append_response_budgeted(GByteArray *body,
     return TRUE;
 }
 
+/* Formats the "response would exhaust available memory" error; caller frees. */
 static char *
 response_budget_error(guint64 stopped_at)
 {
@@ -3251,6 +3358,7 @@ response_budget_error(guint64 stopped_at)
         (unsigned long long)(stopped_at >> 20));
 }
 
+/* Decodes one base64 alphabet character; -1 if not in the alphabet. */
 static int
 base64_value(char c)
 {
@@ -3262,6 +3370,7 @@ base64_value(char c)
     return -1;
 }
 
+/* Strict base64 decode of a data: URL body (percent-escapes, whitespace allowed). */
 static gboolean
 decode_data_base64_budgeted(const char *data,
                             GByteArray *body,
@@ -3332,6 +3441,7 @@ decode_data_base64_budgeted(const char *data,
     return TRUE;
 }
 
+/* Percent-decodes a non-base64 data: URL body within the budget; FALSE if malformed. */
 static gboolean
 decode_data_uri_budgeted(const char *data,
                          GByteArray *body,
@@ -3370,6 +3480,7 @@ decode_data_uri_budgeted(const char *data,
     return TRUE;
 }
 
+/* Decodes a data: URL body and media type (default text/plain;charset=UTF-8). */
 gboolean
 ns_data_url_decode(const char *url,
                    GByteArray *out,
@@ -3402,6 +3513,7 @@ ns_data_url_decode(const char *url,
         : decode_data_uri_budgeted(data, out, budget, too_large);
 }
 
+/* Reads a whole file into body, refusing files over the memory budget. */
 static gboolean
 read_file_budgeted(const char *path,
                    GByteArray *body,
@@ -3443,6 +3555,7 @@ read_file_budgeted(const char *path,
     return TRUE;
 }
 
+/* Builds a 200 response for a data: URL; malformed or too large sets resp->error. */
 static gboolean
 synthesize_data_response(const char *url, ns_response *resp)
 {
@@ -3487,6 +3600,7 @@ listing_entry_free(gpointer data)
     g_free(e);
 }
 
+/* Sorts directory listing entries directories first, then by collated name. */
 static gint
 listing_entry_compare(gconstpointer ap, gconstpointer bp)
 {
@@ -3498,6 +3612,7 @@ listing_entry_compare(gconstpointer ap, gconstpointer bp)
                           b->display ? b->display : "");
 }
 
+/* Converts a local path to a file:// URI, with a trailing separator for directories. */
 static char *
 file_uri_for_path(const char *path, gboolean is_dir)
 {
@@ -3513,6 +3628,7 @@ file_uri_for_path(const char *path, gboolean is_dir)
     return uri;
 }
 
+/* Formats a byte count as a human-readable size (B, KB, MB, GB, TB). */
 static char *
 file_size_label(guint64 size)
 {
@@ -3530,6 +3646,7 @@ file_size_label(guint64 size)
     return g_strdup_printf("%.1f %s", v, units[unit]);
 }
 
+/* Formats a Unix mtime as local "YYYY-MM-DD HH:MM", or "" if unknown. */
 static char *
 file_mtime_label(gint64 mtime)
 {
@@ -3541,6 +3658,7 @@ file_mtime_label(gint64 mtime)
     return out ? out : g_strdup("");
 }
 
+/* file:// URI of a path's parent directory, or NULL at the root. */
 static char *
 file_listing_parent_uri(const char *path)
 {
@@ -3556,6 +3674,7 @@ file_listing_parent_uri(const char *path)
     return uri;
 }
 
+/* Error page HTML for an unreadable directory, with a static fallback. */
 static char *
 file_directory_error_page(const char *url, long status, const char *error)
 {
@@ -3565,6 +3684,7 @@ file_directory_error_page(const char *url, long status, const char *error)
                                   "<p>Cannot read folder.</p>");
 }
 
+/* Renders an "Index of" HTML table for directory entries with an optional parent link. */
 static char *
 listing_page(const char *title, const char *parent_uri, GPtrArray *entries)
 {
@@ -3634,6 +3754,7 @@ listing_page(const char *title, const char *parent_uri, GPtrArray *entries)
     return g_string_free(out, FALSE);
 }
 
+/* Renders a local directory as an HTML listing; sets 403/404 status on failure. */
 static char *
 file_directory_listing_page(const char *path, const char *url, long *status_out)
 {
@@ -3686,6 +3807,7 @@ file_directory_listing_page(const char *path, const char *url, long *status_out)
     return html;
 }
 
+/* Splits a line into up to max whitespace fields, the last keeping the rest; caller frees. */
 static char **
 ftp_split_fields(const char *line, int max_fields)
 {
@@ -3706,6 +3828,7 @@ ftp_split_fields(const char *line, int max_fields)
     return (char **)g_ptr_array_free(parts, FALSE);
 }
 
+/* Builds a child entry URL under an FTP directory URL, escaping the name. */
 static char *
 ftp_listing_child_uri(const char *base_url, const char *name, gboolean is_dir)
 {
@@ -3727,6 +3850,7 @@ ftp_listing_child_uri(const char *base_url, const char *name, gboolean is_dir)
     return out;
 }
 
+/* Parent directory URL of an FTP URL, or NULL at the root. */
 static char *
 ftp_listing_parent_uri(const char *url)
 {
@@ -3756,6 +3880,7 @@ ftp_listing_parent_uri(const char *url)
     return out;
 }
 
+/* Takes ownership of name for an entry, rejecting empty, "." and "..". */
 static gboolean
 ftp_entry_take_name(ns_listing_entry *e, char *name)
 {
@@ -3768,6 +3893,7 @@ ftp_entry_take_name(ns_listing_entry *e, char *name)
     return TRUE;
 }
 
+/* Parses an ls -l style FTP listing line (symlink targets dropped). */
 static gboolean
 ftp_parse_unix_listing(char *line, ns_listing_entry *e)
 {
@@ -3796,6 +3922,7 @@ ftp_parse_unix_listing(char *line, ns_listing_entry *e)
     return ftp_entry_take_name(e, name);
 }
 
+/* Parses a DOS/IIS style FTP listing line (date, time, <DIR> or size, name). */
 static gboolean
 ftp_parse_dos_listing(char *line, ns_listing_entry *e)
 {
@@ -3824,6 +3951,7 @@ ftp_parse_dos_listing(char *line, ns_listing_entry *e)
     return ftp_entry_take_name(e, name);
 }
 
+/* Parses an FTP LIST line (Unix, DOS, else bare name) into a new entry. */
 static ns_listing_entry *
 ftp_listing_entry_from_line(const char *line)
 {
@@ -3854,6 +3982,7 @@ ftp_listing_entry_from_line(const char *line)
     return e;
 }
 
+/* Renders an FTP LIST response body as an HTML directory listing. */
 static char *
 ftp_directory_listing_page(const char *url, GByteArray *body)
 {
@@ -3881,6 +4010,7 @@ ftp_directory_listing_page(const char *url, GByteArray *body)
     return html;
 }
 
+/* TRUE if an ftp:// URL path is empty or ends in a slash. */
 static gboolean
 ftp_url_looks_like_directory(const char *url)
 {
@@ -3890,6 +4020,7 @@ ftp_url_looks_like_directory(const char *url)
     return !*parts->pathname || g_str_has_suffix(parts->pathname, "/");
 }
 
+/* Replaces an FTP directory response body with an HTML listing. */
 static void
 maybe_synthesize_ftp_listing(ns_response *resp)
 {
@@ -3904,6 +4035,7 @@ maybe_synthesize_ftp_listing(ns_response *resp)
     resp->content_type = g_strdup("text/html; charset=utf-8");
 }
 
+/* Guesses a MIME type for an FTP file response lacking Content-Type. */
 static void
 maybe_guess_ftp_content_type(ns_response *resp)
 {
@@ -3935,6 +4067,7 @@ ns_file_access_allowed(const char *top_url, gboolean navigation)
     return g_str_has_prefix(top_url, "file:");
 }
 
+/* Serves a file: URL as a response (file or navigation-only listing), policy-gated. */
 static gboolean
 synthesize_file_response(const char *url, const char *top_url,
                          gboolean navigation, ns_response *resp)
@@ -4330,6 +4463,7 @@ static const char k_about_settings_html[] =
 "load();\n"
 "</script></body></html>";
 
+/* Sets a response body to the given JSON (taking ownership) with a JSON content type. */
 static void
 about_emit_json(ns_response *resp, char *json)
 {
@@ -4339,6 +4473,7 @@ about_emit_json(ns_response *resp, char *json)
     g_free(json);
 }
 
+/* Escapes quotes, backslashes and control chars for a JSON string; caller frees. */
 static char *
 about_json_escape(const char *s)
 {
@@ -4351,6 +4486,7 @@ about_json_escape(const char *s)
     return g_string_free(o, FALSE);
 }
 
+/* Serializes the user-editable settings as JSON for about:settings; caller frees. */
 static char *
 about_settings_json(void)
 {
@@ -4377,6 +4513,7 @@ about_settings_json(void)
     return json;
 }
 
+/* Validates a settings URL: empty, or http(s) (or about: if allowed), no control chars. */
 static gboolean
 about_settings_url_ok(const char *v, gboolean allow_about)
 {
@@ -4388,6 +4525,7 @@ about_settings_url_ok(const char *v, gboolean allow_about)
     return ns_url_is_http_or_https(v) && ns_url_is_valid_absolute(v);
 }
 
+/* Applies form-encoded about:settings fields to the config and saves it. */
 static void
 about_settings_save(const char *form)
 {
@@ -4430,6 +4568,7 @@ about_settings_save(const char *form)
     g_hash_table_destroy(q);
 }
 
+/* Clears history, cache, cookies and site storage. */
 static void
 about_settings_clear(void)
 {
@@ -4439,6 +4578,7 @@ about_settings_clear(void)
     ns_net_site_storage_clear();
 }
 
+/* Picks a random localized tagline for the start page. */
 static const char *
 about_start_tagline(void)
 {
@@ -4452,6 +4592,7 @@ about_start_tagline(void)
     return taglines[g_random_int_range(0, G_N_ELEMENTS(taglines))];
 }
 
+/* TRUE if an about: request comes from browser UI or a user navigation. */
 static gboolean
 about_request_from_chrome(const char *top_url, gboolean navigation)
 {
@@ -4459,6 +4600,7 @@ about_request_from_chrome(const char *top_url, gboolean navigation)
     return navigation;
 }
 
+/* Replaces the response body with plain text and sets its status. */
 static void
 about_emit_text(ns_response *resp, long status, const char *body)
 {
@@ -4469,6 +4611,7 @@ about_emit_text(ns_response *resp, long status, const char *body)
     g_byte_array_append(resp->body, (const guint8 *)body, (guint)strlen(body));
 }
 
+/* Serves about: pages (start, settings, license...); privileged ones only to browser UI. */
 static gboolean
 synthesize_about_response(const char *url, const char *top_url,
                           gboolean navigation, const char *method,
@@ -4644,6 +4787,7 @@ synthesize_about_response(const char *url, const char *top_url,
     return TRUE;
 }
 
+/* Appends an HTML-escaped slice wrapped in a highlighting span class. */
 static void
 view_source_append_span(GString *out, const char *cls,
                         const char *s, gsize len)
@@ -4663,6 +4807,7 @@ view_source_append_plain(GString *out, const char *s, gsize len)
     ns_html_escape_append(out, chunk, FALSE);
 }
 
+/* Emits a syntax-highlighted tag (name, attributes, values); returns position after it. */
 static const char *
 view_source_highlight_tag(GString *out, const char *p)
 {
@@ -4703,6 +4848,7 @@ view_source_highlight_tag(GString *out, const char *p)
     return q;
 }
 
+/* Renders HTML source as a syntax-highlighted <pre> document; caller frees. */
 static char *
 view_source_document(const char *inner_url, const char *text)
 {
@@ -4747,6 +4893,7 @@ view_source_document(const char *inner_url, const char *text)
     return g_string_free(out, FALSE);
 }
 
+/* Writes an HTML "source unavailable" page into the response. */
 static void
 view_source_emit_error(ns_response *resp, const char *inner_url,
                        const char *message)
@@ -4766,6 +4913,7 @@ view_source_emit_error(ns_response *resp, const char *inner_url,
     g_string_free(out, TRUE);
 }
 
+/* Serves view-source: by fetching the inner URL and highlighting it; UI-initiated only. */
 static gboolean
 synthesize_view_source_response(const char *url, const char *top_url,
                                 gboolean navigation,
@@ -4826,6 +4974,7 @@ is_simple_get(const char *method)
     return !method || !*method || g_ascii_strcasecmp(method, "GET") == 0;
 }
 
+/* Builds a response from a cache entry, stealing its body. */
 static ns_response *
 response_from_cache_entry(ns_cache_entry *e)
 {
@@ -4853,6 +5002,7 @@ static gboolean ns_fetch_is_navigation(const char *top_url,
  * for it (cookies, Sec-Fetch-*). */
 static __thread gboolean g_navigation_fetch;
 
+/* Marks this thread's next request as a (user-activated) top-level navigation. */
 void
 ns_net_set_navigation_fetch(gboolean navigation, gboolean user_activated)
 {
@@ -4885,6 +5035,7 @@ static const char *const ns_font_accept_headers[] = {
     NULL
 };
 
+/* Returns the Accept and internal destination headers for a fetch destination. */
 const char *const *
 ns_net_accept_headers_for(ns_fetch_destination dest)
 {
@@ -4897,6 +5048,7 @@ ns_net_accept_headers_for(ns_fetch_destination dest)
     }
 }
 
+/* Reads the Sec-Fetch-Dest value from the internal X-ND-Fetch-Dest header; "empty" default. */
 static const char *
 ns_net_fetch_destination(GPtrArray *extra_headers)
 {
@@ -4915,6 +5067,7 @@ ns_net_fetch_destination(GPtrArray *extra_headers)
     return "empty";
 }
 
+/* Cache partition key: top-level site (or origin), User-Agent and Accept-Language. */
 static char *
 ns_net_partition_key(const char *url, const char *top_url)
 {
@@ -4931,6 +5084,7 @@ ns_net_partition_key(const char *url, const char *top_url)
                            ns_net_effective_accept_language());
 }
 
+/* Origin header value: top origin for cross-origin or unsafe requests, "null" if opaque. */
 static const char *
 ns_net_request_origin(const char *url, const char *top_url,
                       const char *top_origin, const char *method)
@@ -4954,6 +5108,7 @@ ns_net_request_origin(const char *url, const char *top_url,
     return "";
 }
 
+/* Coalescing key for an http(s) GET: URL, partition and extra headers; NULL otherwise. */
 char *
 ns_net_request_key(const char *url, const char *top_url, const char *method,
                    const char *const *extra_headers)
@@ -4972,6 +5127,7 @@ ns_net_request_key(const char *url, const char *top_url, const char *method,
     return g_string_free(key, FALSE);
 }
 
+/* Performs one fetch hop: synthetic schemes, cache, cookies, headers, curl, cache store. */
 static ns_response *
 ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
                   const void *body, gsize body_len, const char *content_type,
@@ -5634,6 +5790,7 @@ ns_fetch_sync_hop(const char *url, const char *top_url, const char *method,
     return resp;
 }
 
+/* TRUE if a request is a navigation: no top_url, or tagged X-ND-Navigate. */
 static gboolean
 ns_fetch_is_navigation(const char *top_url, GPtrArray *extra_headers)
 {
@@ -5647,6 +5804,7 @@ ns_fetch_is_navigation(const char *top_url, GPtrArray *extra_headers)
     return FALSE;
 }
 
+/* Turns a response into a policy refusal: logs the verdict, sets error, clears the body. */
 static void
 ns_fetch_refuse(ns_response *resp, ns_fetch_verdict verdict,
                 ns_fetch_destination dest, const char *url)
@@ -5659,6 +5817,7 @@ ns_fetch_refuse(ns_response *resp, ns_fetch_verdict verdict,
     if (resp->body) g_byte_array_set_size(resp->body, 0);
 }
 
+/* Creates a new refusal response for a blocked fetch; caller frees. */
 static ns_response *
 ns_fetch_refused(ns_fetch_verdict verdict, ns_fetch_destination dest,
                  const char *url)
@@ -5670,6 +5829,7 @@ ns_fetch_refused(ns_fetch_verdict verdict, ns_fetch_destination dest,
     return resp;
 }
 
+/* TRUE if the extra headers carry the internal X-ND-Navigate marker. */
 static gboolean
 ns_headers_mark_navigation(const char *const *extra_headers)
 {
@@ -5679,6 +5839,7 @@ ns_headers_mark_navigation(const char *const *extra_headers)
     return FALSE;
 }
 
+/* TRUE if a request is subject to fetch policy (subresource with a document). */
 static gboolean
 ns_request_is_gated(const char *top_url, const char *const *extra_headers,
                     ns_fetch_destination dest)
@@ -5687,6 +5848,7 @@ ns_request_is_gated(const char *top_url, const char *const *extra_headers,
            !ns_headers_mark_navigation(extra_headers);
 }
 
+/* Re-checks fetch policy on a redirected final URL; refuses if blocked or mixed. */
 static void
 ns_fetch_gate_final_url(ns_response *resp, const char *url,
                         const char *top_url, ns_fetch_destination dest,
@@ -5704,6 +5866,7 @@ ns_fetch_gate_final_url(ns_response *resp, const char *url,
 
 /* ---- CORS preflight (Fetch Standard, "CORS-preflight fetch") ---- */
 
+/* TRUE for CORS-safelisted methods (GET, HEAD, POST). */
 static gboolean
 ns_cors_method_is_simple(const char *method)
 {
@@ -5713,6 +5876,7 @@ ns_cors_method_is_simple(const char *method)
            g_ascii_strcasecmp(method, "POST") == 0;
 }
 
+/* TRUE if a Content-Type is CORS-safelisted (form-urlencoded, multipart, text/plain). */
 static gboolean
 ns_cors_content_type_is_simple(const char *value)
 {
@@ -5746,6 +5910,7 @@ ns_cors_unsafe_header_name(const char *line)
     return name;
 }
 
+/* Comma-joins all values of a header in raw response headers; NULL if absent. */
 static char *
 ns_cors_raw_header(const char *raw, const char *name)
 {
@@ -5766,6 +5931,7 @@ ns_cors_raw_header(const char *raw, const char *name)
     return out ? g_string_free(out, FALSE) : NULL;
 }
 
+/* TRUE if a comma list contains token (case-insensitive) or "*" when allowed. */
 static gboolean
 ns_cors_list_allows(const char *list, const char *token, gboolean wildcard_ok)
 {
@@ -5800,6 +5966,7 @@ ns_fetch_credentials_of(GPtrArray *extra_headers)
     return NULL;
 }
 
+/* TRUE if the response sends Access-Control-Allow-Credentials: true. */
 static gboolean
 ns_cors_credentials_allowed(const char *raw_headers)
 {
@@ -5808,6 +5975,7 @@ ns_cors_credentials_allowed(const char *raw_headers)
     return v && strcmp(g_strstrip(v), "true") == 0;
 }
 
+/* CORS-preflight fetch for non-simple cross-origin requests; NULL if allowed. */
 static ns_response *
 ns_cors_preflight(const char *url, const char *top_url, const char *method,
                   const char *content_type, GPtrArray *extra_headers,
@@ -5893,6 +6061,7 @@ ns_cors_preflight(const char *url, const char *top_url, const char *method,
     return refused;
 }
 
+/* Fetches with manual redirects, applying extensions, CORS, policy and credentials per hop. */
 static ns_response *
 ns_fetch_sync(const char *url, const char *top_url, const char *method,
               const void *body, gsize body_len, const char *content_type,
@@ -6110,6 +6279,7 @@ ns_fetch_ctx_free(gpointer data)
     g_free(ctx);
 }
 
+/* Creates a fetch context holding the URL, document, destination and policy ref. */
 static ns_fetch_ctx *
 ns_fetch_gate_ctx_new(const char *url, const char *top_url,
                       ns_fetch_destination dest, ns_fetch_policy *policy)
@@ -6144,6 +6314,7 @@ static GHashTable *g_preload_expected;
 static GHashTable *g_preload_store;
 static guint       g_preload_bytes;
 
+/* Frees a preloaded response and subtracts its size from the preload byte total. */
 static void
 ns_preload_entry_free(gpointer p)
 {
@@ -6154,6 +6325,7 @@ ns_preload_entry_free(gpointer p)
     ns_response_free(resp);
 }
 
+/* TRUE if the raw response headers contain no-store. */
 static gboolean
 ns_response_forbids_reuse(const ns_response *resp)
 {
@@ -6162,6 +6334,7 @@ ns_response_forbids_reuse(const ns_response *resp)
     return strstr(lowered, "no-store") != NULL;
 }
 
+/* Registers a request key whose response should be kept for a later preload hit. */
 void
 ns_net_preload_expect(const char *key)
 {
@@ -6175,6 +6348,7 @@ ns_net_preload_expect(const char *key)
     g_mutex_unlock(&g_fetch_mutex);
 }
 
+/* Drops all expected and stored preload responses. */
 void
 ns_net_preload_clear(void)
 {
@@ -6185,6 +6359,7 @@ ns_net_preload_clear(void)
     g_mutex_unlock(&g_fetch_mutex);
 }
 
+/* Removes and returns a stored preload response for key; caller owns it. */
 static ns_response *
 ns_preload_take_locked(const char *key)
 {
@@ -6201,6 +6376,7 @@ ns_preload_take_locked(const char *key)
     return resp;
 }
 
+/* Stores a copy of an expected 200 response for later reuse, within size limits. */
 static void
 ns_preload_store_locked(const char *key, const ns_response *resp)
 {
@@ -6225,6 +6401,7 @@ typedef enum {
     NS_FETCH_PRELOADED,
 } ns_fetch_claim;
 
+/* Claims a request key: preloaded hit, join an in-flight fetch, or become the leader. */
 static ns_fetch_claim
 ns_fetch_claim_locked(const char *key, ns_response **preloaded,
                       ns_coalesce_group **group)
@@ -6247,6 +6424,7 @@ ns_fetch_claim_locked(const char *key, ns_response **preloaded,
     return NS_FETCH_LEAD;
 }
 
+/* Joins an in-flight identical fetch or returns a preloaded response; sets *joined. */
 static ns_response *
 ns_fetch_join_async(const char *key, ns_fetch_ctx *gate,
                     GAsyncReadyCallback callback,
@@ -6272,6 +6450,7 @@ ns_fetch_join_async(const char *key, ns_fetch_ctx *gate,
     return preloaded;
 }
 
+/* Blocking variant: waits for an in-flight identical fetch or takes a preload. */
 static ns_response *
 ns_fetch_join_sync(const char *key, gboolean *joined, GError **error)
 {
@@ -6310,6 +6489,7 @@ ns_fetch_join_sync(const char *key, gboolean *joined, GError **error)
     return preloaded;
 }
 
+/* Delivers a leader's result to all joined waiters and tasks and records preloads. */
 static void
 ns_fetch_coalesce_deliver(const char *key, ns_response *resp, const GError *err)
 {
@@ -6352,6 +6532,7 @@ ns_fetch_coalesce_deliver(const char *key, ns_response *resp, const GError *err)
     g_free(grp);
 }
 
+/* Fails any coalesced waiters of a fetch task that will not run. */
 static void
 ns_fetch_task_abandon(GTask *task, const GError *err)
 {
@@ -6382,6 +6563,7 @@ ns_fetch_host_count_locked(const char *host)
     return GPOINTER_TO_INT(g_hash_table_lookup(g_fetch_host_active, host));
 }
 
+/* Adjusts the active fetch count for a host, removing it at zero. */
 static void
 ns_fetch_host_adjust_locked(const char *host, int delta)
 {
@@ -6397,6 +6579,7 @@ ns_fetch_host_adjust_locked(const char *host, int delta)
                              GINT_TO_POINTER(n));
 }
 
+/* Starts queued fetches up to 32 in total and 6 per host. */
 static void
 ns_fetch_throttle_dispatch(void)
 {
@@ -6434,6 +6617,7 @@ ns_fetch_throttle_dispatch(void)
     }
 }
 
+/* Queues a fetch task and dispatches what the throttle allows. */
 static void
 ns_fetch_throttle_submit(GTask *task)
 {
@@ -6443,6 +6627,7 @@ ns_fetch_throttle_submit(GTask *task)
     ns_fetch_throttle_dispatch();
 }
 
+/* Worker thread: runs a fetch, delivers coalesced results, then frees its throttle slot. */
 static void
 ns_fetch_thread(GTask        *task,
                 gpointer      source_object,
@@ -6491,6 +6676,7 @@ ns_fetch_thread(GTask        *task,
     ns_fetch_throttle_dispatch();
 }
 
+/* Opens a connect-only curl transfer to warm DNS, TCP and TLS for a URL. */
 static void
 ns_preconnect_thread(GTask *task, gpointer source_object, gpointer task_data,
                      GCancellable *cancellable)
@@ -6523,6 +6709,7 @@ ns_preconnect_thread(GTask *task, gpointer source_object, gpointer task_data,
     g_task_return_boolean(task, TRUE);
 }
 
+/* Starts a background preconnect to an http(s) URL. */
 void
 ns_net_preconnect_async(const char *url)
 {
@@ -6543,6 +6730,7 @@ ns_net_set_blob_resolver(ns_net_blob_resolver resolver, gpointer user_data)
     g_blob_resolver_ud = user_data;
 }
 
+/* Resolves a blob: URL through the registered resolver; NULL if unknown. */
 GBytes *
 ns_net_resolve_blob(const char *url, char **out_type)
 {
@@ -6565,6 +6753,7 @@ ns_net_blob_origin_allowed(const char *url, const char *top_url)
     return blob_origin && top_origin && strcmp(blob_origin, top_origin) == 0;
 }
 
+/* Resolves a blob: URL only if the requesting document shares its origin. */
 GBytes *
 ns_net_resolve_blob_for(const char *url, const char *top_url, char **out_type)
 {
@@ -6573,6 +6762,7 @@ ns_net_resolve_blob_for(const char *url, const char *top_url, char **out_type)
     return ns_net_resolve_blob(url, out_type);
 }
 
+/* Completes a blob: fetch immediately from the resolver (404 if missing); FALSE otherwise. */
 static gboolean
 ns_net_complete_blob(const char *url, const char *top_url,
                      GCancellable *cancellable,
@@ -6631,6 +6821,7 @@ ns_net_post_async(const char         *url,
                          cancellable, callback, user_data);
 }
 
+/* Completes an async request immediately with a ready response. */
 static void
 ns_net_return_response(ns_response *resp, ns_fetch_ctx *gate,
                        GCancellable *cancellable,
@@ -6643,6 +6834,7 @@ ns_net_return_response(ns_response *resp, ns_fetch_ctx *gate,
     g_object_unref(task);
 }
 
+/* Starts an async request: policy gate, blob shortcut, coalescing, then throttled fetch. */
 void
 ns_net_request_async(const char         *url,
                      const char         *top_url,
@@ -6721,6 +6913,7 @@ ns_net_request_async(const char         *url,
     ns_fetch_throttle_submit(task);
 }
 
+/* Synchronous request with policy gating and coalescing with identical in-flight fetches. */
 ns_response *
 ns_net_request_blocking(const char        *url,
                         const char        *top_url,
@@ -6786,6 +6979,7 @@ ns_net_fetch_blocking(const char *url, GCancellable *cancellable, GError **error
                                    cancellable, error);
 }
 
+/* Finishes an async fetch, re-checking policy on the redirected final URL. */
 ns_response *
 ns_net_fetch_finish(GAsyncResult *result, GError **error)
 {
@@ -6801,6 +6995,7 @@ ns_net_fetch_finish(GAsyncResult *result, GError **error)
     return resp;
 }
 
+/* Generates a random multipart/form-data boundary; caller frees. */
 char *
 ns_multipart_boundary(void)
 {
@@ -6813,6 +7008,7 @@ ns_multipart_boundary(void)
                            r[0], r[1], r[2], r[3]);
 }
 
+/* Appends a multipart field name with quote and CR/LF percent-escaped. */
 void
 ns_multipart_quote_field(GString *out, const char *s)
 {
@@ -6828,6 +7024,7 @@ ns_multipart_quote_field(GString *out, const char *s)
 
 static const ns_encoding *g_form_submission_encoding;
 
+/* Selects the form submission encoding from an accept-charset list. */
 void
 ns_form_set_submission_charset(const char *charset)
 {
@@ -6840,6 +7037,7 @@ ns_form_set_submission_charset(const char *charset)
     g_form_submission_encoding = ns_encoding_output(g_form_submission_encoding);
 }
 
+/* Appends a string form-urlencoded in the submission encoding. */
 static void
 ns_form_urlencoded_append(GString *out, const char *s)
 {
@@ -6848,6 +7046,7 @@ ns_form_urlencoded_append(GString *out, const char *s)
                                NS_PERCENT_URLENCODED, TRUE, out);
 }
 
+/* Appends a name=value pair to an application/x-www-form-urlencoded body. */
 void
 ns_form_urlencoded_append_pair(GString *out, gboolean *first,
                                const char *name, const char *value)

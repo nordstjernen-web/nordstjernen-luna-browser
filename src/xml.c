@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — minimal namespaced XML / XHTML parser to the DOM.
+/* Nordstjernen Web Browser — namespaced XML parser building the DOM, for XHTML and DOMParser.
+ * Checks well-formedness, expands internal entities and reports error line and column.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -42,6 +43,7 @@ xml_skip_space(xml_parser *xp)
     while (xp->p < xp->end && xml_is_space(*xp->p)) xp->p++;
 }
 
+/* Approximate XML NameStartChar/NameChar test; any non-ASCII byte is accepted. */
 static gboolean
 xml_name_char(char c, gboolean first)
 {
@@ -54,6 +56,7 @@ xml_name_char(char c, gboolean first)
     return FALSE;
 }
 
+/* Reads an XML name at the cursor; caller frees, NULL if none. */
 static char *
 xml_read_name(xml_parser *xp)
 {
@@ -64,6 +67,7 @@ xml_read_name(xml_parser *xp)
     return g_strndup(s, (gsize)(xp->p - s));
 }
 
+/* True if name is a valid QName: at most one colon, not at either end. */
 static gboolean
 xml_qname_valid(const char *name)
 {
@@ -79,6 +83,7 @@ xml_skip_space_range(const char *p, const char *end)
     return p;
 }
 
+/* Reads a single- or double-quoted literal, advancing the cursor; caller frees. */
 static char *
 xml_read_quoted_range(const char **cursor, const char *end)
 {
@@ -92,6 +97,7 @@ xml_read_quoted_range(const char **cursor, const char *end)
     return g_strndup(start, (gsize)(p - start));
 }
 
+/* Parses a doctype's PUBLIC/SYSTEM ids up to the internal subset; caller frees ids. */
 static gboolean
 xml_doctype_tail_parse(const char *p, const char *end,
                        char **public_id, char **system_id)
@@ -131,6 +137,7 @@ invalid:
     return FALSE;
 }
 
+/* Appends a code point as UTF-8, substituting U+FFFD for NUL, surrogates or out of range. */
 static void
 xml_append_codepoint(GString *out, guint64 cp)
 {
@@ -143,6 +150,7 @@ xml_append_codepoint(GString *out, guint64 cp)
     g_string_append_len(out, buf, nb);
 }
 
+/* Expands character and entity references (with an expansion cap); clears ok on error. */
 static char *
 xml_decode_text(xml_parser *xp, const char *s, gsize len)
 {
@@ -193,6 +201,7 @@ xml_decode_text(xml_parser *xp, const char *s, gsize len)
     return g_string_free(out, FALSE);
 }
 
+/* Resolves a namespace prefix (NULL for default) through in-scope xmlns bindings. */
 static const char *
 xml_lookup_prefix(xml_parser *xp, const char *prefix)
 {
@@ -207,6 +216,7 @@ xml_lookup_prefix(xml_parser *xp, const char *prefix)
     return NULL;
 }
 
+/* Pushes an in-scope namespace binding for prefix (NULL or empty means default). */
 static void
 xml_push_binding(xml_parser *xp, const char *prefix, const char *uri)
 {
@@ -229,6 +239,7 @@ xml_binding_free(gpointer p)
 
 static gboolean xml_parse_element(xml_parser *xp, ns_node *parent, int depth);
 
+/* Returns the position just after delim, or NULL if not found before end. */
 static const char *
 xml_skip_past(const char *p, const char *end, const char *delim)
 {
@@ -238,6 +249,7 @@ xml_skip_past(const char *p, const char *end, const char *delim)
     return NULL;
 }
 
+/* Finds the closing > of a DOCTYPE, skipping quotes, comments and PIs in the subset. */
 const char *
 ns_xml_doctype_end(const char *p, const char *end)
 {
@@ -267,6 +279,7 @@ ns_xml_doctype_end(const char *p, const char *end)
     return NULL;
 }
 
+/* Collects general internal entity declarations from a DOCTYPE internal subset. */
 static void
 xml_parse_internal_entities(xml_parser *xp, const char *p, const char *end)
 {
@@ -328,6 +341,7 @@ xml_parse_internal_entities(xml_parser *xp, const char *p, const char *end)
     }
 }
 
+/* Parses prolog/epilog misc: PIs, comments and the doctype, adding nodes to doc. */
 static void
 xml_skip_misc_and_doctype(xml_parser *xp, ns_node *doc)
 {
@@ -424,6 +438,7 @@ xml_skip_misc_and_doctype(xml_parser *xp, ns_node *doc)
     }
 }
 
+/* Parses a start tag's attributes, validating and pushing xmlns declarations. */
 static gboolean
 xml_parse_attributes(xml_parser *xp,
                      GPtrArray *names, GPtrArray *values, guint *base)
@@ -497,6 +512,7 @@ xml_parse_attributes(xml_parser *xp,
     }
 }
 
+/* Records an element's namespace URI/prefix and sets SVG or foreign flags. */
 static void
 xml_apply_namespace(ns_node *el, const char *qname, const char *uri)
 {
@@ -519,6 +535,7 @@ xml_apply_namespace(ns_node *el, const char *qname, const char *uri)
         el->flags |= NS_NODE_FOREIGN_NS;
 }
 
+/* Recursively parses an element and its content; FALSE on any well-formedness error. */
 static gboolean
 xml_parse_element(xml_parser *xp, ns_node *parent, int depth)
 {
@@ -676,6 +693,7 @@ xml_parse_element(xml_parser *xp, ns_node *parent, int depth)
     return xp->ok;
 }
 
+/* Converts a byte offset into 1-based line and column numbers. */
 static void
 xml_offset_to_line_column(const char *input, gsize offset, int *line, int *column)
 {
@@ -688,6 +706,7 @@ xml_offset_to_line_column(const char *input, gsize offset, int *line, int *colum
     if (column) *column = col;
 }
 
+/* Parses an XML document; on failure returns NULL and the error line/column. */
 ns_node *
 ns_xml_parse_reporting(const char *input, gssize len, int *line, int *column)
 {

@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — the shell's own icons, drawn by the in-engine SVG renderer.
+ * Loads bundled SVGs from GResources into cached paintables, falling back to the icon theme.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -30,6 +31,7 @@ G_DEFINE_TYPE_WITH_CODE(NsIcon, ns_icon, G_TYPE_OBJECT,
 
 static GHashTable *g_icons;
 
+/* Paints the icon's SVG tree with the engine's SVG renderer at the requested size. */
 static void
 ns_icon_snapshot(GdkPaintable *paintable, GdkSnapshot *snapshot,
                  double width, double height)
@@ -94,6 +96,7 @@ ns_icon_init(NsIcon *self)
     self->height = NS_ICON_DEFAULT_PX;
 }
 
+/* Returns an SVG intrinsic dimension in 1..1024 px, else the default icon size. */
 static int
 intrinsic_px(gboolean has, double value)
 {
@@ -101,6 +104,7 @@ intrinsic_px(gboolean has, double value)
                                                : NS_ICON_DEFAULT_PX;
 }
 
+/* Loads a bundled SVG icon from GResources into a paintable; NULL if missing or invalid. */
 static NsIcon *
 ns_icon_new_from_resource(const char *name)
 {
@@ -130,6 +134,7 @@ ns_icon_new_from_resource(const char *name)
     return icon;
 }
 
+/* Returns the cached paintable for a bundled icon name, loading it on first use. */
 static GdkPaintable *
 ns_icon_lookup(const char *name)
 {
@@ -157,6 +162,7 @@ centered_image(GdkPaintable *paintable)
     return image;
 }
 
+/* Creates an image of a bundled SVG icon, falling back to the icon theme. */
 GtkWidget *
 ns_icon_image_new(const char *name)
 {
@@ -165,6 +171,7 @@ ns_icon_image_new(const char *name)
                      : gtk_image_new_from_icon_name(name);
 }
 
+/* Sets an image to a bundled SVG icon, falling back to the icon theme. */
 void
 ns_icon_image_set(GtkImage *image, const char *name)
 {
@@ -175,6 +182,7 @@ ns_icon_image_set(GtkImage *image, const char *name)
         gtk_image_set_from_icon_name(image, name);
 }
 
+/* Sets an entry icon to a bundled SVG icon, falling back to the icon theme. */
 void
 ns_icon_entry_set(GtkEntry *entry, GtkEntryIconPosition pos, const char *name)
 {
@@ -185,6 +193,7 @@ ns_icon_entry_set(GtkEntry *entry, GtkEntryIconPosition pos, const char *name)
         gtk_entry_set_icon_from_icon_name(entry, pos, name);
 }
 
+/* Returns TRUE if gdk-pixbuf has an SVG loader. */
 static gboolean
 pixbuf_loads_svg(void)
 {
@@ -199,6 +208,7 @@ pixbuf_loads_svg(void)
     return found;
 }
 
+/* Sets the default window icon name only when gdk-pixbuf can load SVG icons. */
 void
 ns_icon_install_window_icon(const char *name)
 {

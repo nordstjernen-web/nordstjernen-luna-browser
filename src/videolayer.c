@@ -1,4 +1,5 @@
 /* Nordstjernen Web Browser — a playing video's picture, presented apart from page painting.
+ * Picks the decoded frame for the media clock so the shell can composite it without repaint.
  * Copyright 2026 Gabriel Ferreira
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -21,6 +22,7 @@ struct ns_video_layer {
     gint64           presented_us;
 };
 
+/* GArray clear func that drops the rect's layer reference. */
 void
 ns_video_layer_rect_clear(gpointer data)
 {
@@ -29,6 +31,7 @@ ns_video_layer_rect_clear(gpointer data)
     rect->layer = NULL;
 }
 
+/* Creates a paused video layer with refcount 1 and no frame shown. */
 ns_video_layer *
 ns_video_layer_new(void)
 {
@@ -47,6 +50,7 @@ ns_video_layer_ref(ns_video_layer *layer)
     return layer;
 }
 
+/* Drops a reference; frees the layer and its current texture at zero. */
 void
 ns_video_layer_unref(ns_video_layer *layer)
 {
@@ -65,6 +69,7 @@ ns_video_layer_attach(ns_video_layer *layer, ns_video_worker *worker)
     g_mutex_unlock(&layer->lock);
 }
 
+/* Disconnects the decode worker and marks the layer detached and not composited. */
 void
 ns_video_layer_detach(ns_video_layer *layer)
 {
@@ -95,6 +100,7 @@ ns_video_layer_set_clock(ns_video_layer *layer, const ns_video_clock *clock)
     g_mutex_unlock(&layer->lock);
 }
 
+/* Playback position in seconds from the clock: paused, clamped or looped. */
 static double
 clock_position(const ns_video_clock *clock, gint64 now_us)
 {
@@ -106,6 +112,7 @@ clock_position(const ns_video_clock *clock, gint64 now_us)
     return (elapsed_ms % clock->total_ms) / 1000.0;
 }
 
+/* Takes the worker's frame for time t, ignoring older frames unless a seek happened. */
 static gboolean
 layer_present_locked(ns_video_layer *layer, double t)
 {
@@ -125,6 +132,7 @@ layer_present_locked(ns_video_layer *layer, double t)
     return TRUE;
 }
 
+/* Locks and presents the decoded frame for time t; TRUE if the picture changed. */
 gboolean
 ns_video_layer_present(ns_video_layer *layer, double t)
 {
@@ -135,6 +143,7 @@ ns_video_layer_present(ns_video_layer *layer, double t)
     return changed;
 }
 
+/* Presents the frame for the clock position at now_us when composited; traces the pick. */
 gboolean
 ns_video_layer_present_now(ns_video_layer *layer, gint64 now_us)
 {
@@ -156,6 +165,7 @@ ns_video_layer_present_now(ns_video_layer *layer, gint64 now_us)
     return changed;
 }
 
+/* PTS of the shown frame for the current seek generation, or -1. */
 double
 ns_video_layer_shown_pts(ns_video_layer *layer)
 {
@@ -168,6 +178,7 @@ ns_video_layer_shown_pts(ns_video_layer *layer)
     return pts;
 }
 
+/* Returns a new reference to the current frame texture and its PTS. */
 ns_texture *
 ns_video_layer_texture(ns_video_layer *layer, double *shown_pts)
 {
@@ -179,6 +190,7 @@ ns_video_layer_texture(ns_video_layer *layer, double *shown_pts)
     return texture;
 }
 
+/* Marks whether the compositor presents this layer (never when detached). */
 void
 ns_video_layer_set_composited(ns_video_layer *layer, gboolean composited)
 {
@@ -190,6 +202,7 @@ ns_video_layer_set_composited(ns_video_layer *layer, gboolean composited)
     g_mutex_unlock(&layer->lock);
 }
 
+/* True if composited and presented within the last 250 ms. */
 gboolean
 ns_video_layer_composited(ns_video_layer *layer, gint64 now_us)
 {

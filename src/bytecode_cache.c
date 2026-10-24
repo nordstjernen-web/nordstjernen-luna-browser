@@ -1,4 +1,5 @@
-/* Nordstjernen Web Browser — JavaScript bytecode cache.
+/* Nordstjernen Web Browser — QuickJS bytecode cache in memory and in an on-disk LRU directory.
+ * SHA-256 keys per site, script and source; background precompiles large classic scripts.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -63,6 +64,7 @@ ns_bytecode_cache_entry_free(gpointer data)
     g_free(e);
 }
 
+/* Creates the in-memory cache and, if caching is enabled, the on-disk jsbc directory. */
 void
 ns_bytecode_cache_init(void)
 {
@@ -81,6 +83,7 @@ ns_bytecode_cache_init(void)
     g_mutex_unlock(&g_lock);
 }
 
+/* Joins precompile workers and frees the memory cache and pending set. */
 void
 ns_bytecode_cache_shutdown(void)
 {
@@ -99,6 +102,7 @@ ns_bytecode_cache_shutdown(void)
     g_mutex_unlock(&g_lock);
 }
 
+/* SHA-256 key over top-level site partition, script name and source text. */
 static void
 hash_source(const char *top_url, const char *name,
             const char *src, gsize len, char out[65])
@@ -123,6 +127,7 @@ cache_bypassed(void)
     return cfg && cfg->private_mode;
 }
 
+/* On-disk path for a key, sharded by its first two hex chars; caller frees. */
 static char *
 disk_path_for(const char *key)
 {
@@ -139,6 +144,7 @@ disk_path_for(const char *key)
     return file;
 }
 
+/* Reads a cached bytecode file, checking magic and format version; caller frees. */
 static guint8 *
 read_disk(const char *key, gsize *out_len)
 {
@@ -183,6 +189,7 @@ typedef struct {
     gint64  mtime;
 } disk_file;
 
+/* Sorts disk cache files by modification time, oldest first. */
 static gint
 disk_file_older_first(gconstpointer a, gconstpointer b)
 {
@@ -190,6 +197,7 @@ disk_file_older_first(gconstpointer a, gconstpointer b)
     return x->mtime < y->mtime ? -1 : x->mtime > y->mtime ? 1 : 0;
 }
 
+/* Deletes least recently used cache files until the disk cache fits its cap. */
 static void
 prune_disk(void)
 {
@@ -236,6 +244,7 @@ prune_disk(void)
     g_array_free(files, TRUE);
 }
 
+/* Atomically writes headered bytecode via temp file and rename; prunes after big writes. */
 static void
 write_disk(const char *key, const guint8 *bc, gsize bc_len)
 {
@@ -267,6 +276,7 @@ write_disk(const char *key, const guint8 *bc, gsize bc_len)
     if (bc_len >= NS_BYTECODE_CACHE_PRUNE_MIN_BYTES) prune_disk();
 }
 
+/* Evicts least recently used memory entries until want_bytes fits the cap. */
 static void
 evict_until_fits(gsize want_bytes)
 {
@@ -292,6 +302,7 @@ evict_until_fits(gsize want_bytes)
     }
 }
 
+/* Looks up bytecode in memory then disk, waiting for a pending precompile; caller frees. */
 guint8 *
 ns_bytecode_cache_get(const char *top_url, const char *name,
                       const char *src, gsize src_len, gsize *out_len)
@@ -340,6 +351,7 @@ ns_bytecode_cache_get(const char *top_url, const char *name,
     return disk;
 }
 
+/* Stores compiled bytecode in memory and on disk unless already cached. */
 void
 ns_bytecode_cache_put(const char *top_url, const char *name,
                       const char *src, gsize src_len,
@@ -377,6 +389,7 @@ typedef struct {
     GBytes *source;
 } precompile_job;
 
+/* Clears a job's pending mark, wakes waiters and frees the job. */
 static void
 precompile_job_finish(precompile_job *job)
 {
@@ -390,6 +403,7 @@ precompile_job_finish(precompile_job *job)
     g_free(job);
 }
 
+/* Worker: compiles a script in a throwaway runtime and caches its bytecode. */
 static void
 precompile_run(gpointer data, gpointer user_data)
 {
@@ -422,6 +436,7 @@ precompile_run(gpointer data, gpointer user_data)
     precompile_job_finish(job);
 }
 
+/* Queues background compilation of a large classic script not yet cached. */
 void
 ns_bytecode_cache_precompile(const char *top_url, const char *url,
                              const guint8 *src, gsize len)

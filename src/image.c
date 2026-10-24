@@ -1,10 +1,12 @@
 /* Nordstjernen Web Browser — image cache and the decode chain (Wuffs, ICO, AVIF, SVG, MPEG-1).
+ * Async fetch and worker decode, retry, animation timelines, video streams, LRU memory budget.
  * Copyright 2026 Andreas Røsdal
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "image.h"
 
+/* True if a lowercased bare MIME type is decodable by the built-in decoders. */
 static gboolean
 ns_image_builtin_supports_mime(const char *bare)
 {
@@ -33,6 +35,7 @@ ns_image_builtin_supports_mime(const char *bare)
 #include "video.h"
 
 #ifdef G_OS_WIN32
+/* Windows: true for AVIF/HEIF/HEIC/JXL MIME types, which are not decoded there. */
 static gboolean
 ns_image_mime_blocked_on_platform(const char *bare)
 {
@@ -44,6 +47,7 @@ ns_image_mime_blocked_on_platform(const char *bare)
            g_str_equal(bare, "image/jxl");
 }
 
+/* Windows: sniffs JPEG XL and ISO-BMFF AVIF/HEIF brands so they are refused. */
 static gboolean
 ns_image_bytes_blocked_on_platform(const guchar *data, gsize len)
 {
@@ -94,6 +98,7 @@ ns_image_pixel_frame_clear(gpointer data)
     if (f) g_free(f->pixels);
 }
 
+/* Frees a cache entry including its frames, video stream or texture. */
 static void
 ns_image_free(gpointer p)
 {
@@ -110,6 +115,7 @@ ns_image_free(gpointer p)
     g_free(img);
 }
 
+/* Estimates decoded memory: video stream size or 4 bytes/pixel per frame. */
 static gint64
 ns_image_decoded_bytes(const ns_image *img)
 {
@@ -135,6 +141,7 @@ ns_image_decoded_bytes(const ns_image *img)
     return 0;
 }
 
+/* Charges a newly loaded image's decoded size to the cache budget once. */
 static void
 ns_image_cache_account(ns_image_cache *cache, ns_image *img)
 {
@@ -144,6 +151,7 @@ ns_image_cache_account(ns_image_cache *cache, ns_image *img)
     cache->total_bytes += img->bytes;
 }
 
+/* True if a live pending request exists for img. */
 static gboolean
 ns_image_has_pending(const ns_image_cache *cache, const ns_image *img)
 {
@@ -154,6 +162,7 @@ ns_image_has_pending(const ns_image_cache *cache, const ns_image *img)
     return FALSE;
 }
 
+/* Drops an image's decoded pixels to reclaim budget; it refetches on next get. */
 static void
 ns_image_cache_purge(ns_image_cache *cache, ns_image *img)
 {
@@ -190,6 +199,7 @@ ns_image_cache_new(void)
     return c;
 }
 
+/* Frees the cache, marking outstanding requests dead so callbacks are dropped. */
 void
 ns_image_cache_free(ns_image_cache *cache)
 {
@@ -203,6 +213,7 @@ ns_image_cache_free(ns_image_cache *cache)
     g_free(cache);
 }
 
+/* Removes every pending request for the image and invokes their callbacks. */
 static void
 ns_image_fire_pending(ns_pending *pending)
 {
@@ -226,6 +237,7 @@ ns_image_fire_pending(ns_pending *pending)
     g_ptr_array_free(fire, TRUE);
 }
 
+/* True if a Content-Type (parameters ignored) is a decodable image type. */
 gboolean
 ns_image_supports_mime(const char *mime)
 {
@@ -246,6 +258,7 @@ ns_image_supports_mime(const char *mime)
     return ok;
 }
 
+/* Decodes a still image by sniffing: ICO, Wuffs formats, AVIF, then SVG; NULL if none. */
 static ns_texture *
 ns_image_decode_bytes(const guchar *data, gsize len, int *out_w, int *out_h)
 {
@@ -281,6 +294,7 @@ ns_image_decode_bytes(const guchar *data, gsize len, int *out_w, int *out_h)
     return NULL;
 }
 
+/* Downloads a texture to a new tightly packed BGRA buffer and unrefs it; caller frees. */
 static guint8 *
 ns_image_texture_to_pixels(ns_texture *tex, int w, int h,
                            gsize *out_stride, gsize *out_buf_len)
@@ -308,6 +322,7 @@ ns_image_texture_to_pixels(ns_texture *tex, int w, int h,
     return pixels;
 }
 
+/* Decodes image bytes to a new pixel buffer, reporting size, stride and format. */
 guint8 *
 ns_image_decode_bytes_to_pixels(const guchar *data, gsize len,
                                 int *out_w, int *out_h,
@@ -355,6 +370,7 @@ ns_image_decode_bytes_to_pixels(const guchar *data, gsize len,
     return pixels;
 }
 
+/* Turns decoded pixel frames into texture frames (100 ms default delay); takes pixels. */
 static GArray *
 ns_image_anim_frames_from_pixels(GArray *pixel_frames,
                                  int *out_w, int *out_h,
@@ -402,6 +418,7 @@ ns_image_anim_frames_from_pixels(GArray *pixel_frames,
     return frames;
 }
 
+/* Decodes animation frames for GIF or animated PNG data; NULL otherwise. */
 static GArray *
 ns_image_pixel_frames_for(const guchar *data, gsize len, int *out_w, int *out_h)
 {
@@ -419,6 +436,7 @@ typedef struct {
     int              h;
 } ns_img_decoded;
 
+/* Releases whatever a decode result holds (frames, video or texture). */
 static void
 ns_img_decoded_clear(ns_img_decoded *d)
 {
@@ -430,6 +448,7 @@ ns_img_decoded_clear(ns_img_decoded *d)
     if (d->tex) ns_texture_unref(d->tex);
 }
 
+/* Decodes a response body as MPEG-1 video, animated GIF/APNG, or a still image. */
 static ns_img_decoded
 ns_image_decode_body(const guchar *data, gsize len)
 {
@@ -463,6 +482,7 @@ ns_image_decode_body(const guchar *data, gsize len)
     return d;
 }
 
+/* Moves a decode result into the image and sets loaded/animation state or failure. */
 static void
 ns_image_apply_decoded_state(ns_image *img, ns_img_decoded *d,
                              const char *content_type, gsize body_len)
@@ -525,6 +545,7 @@ ns_decode_job_free(ns_decode_job *job)
     g_free(job);
 }
 
+/* GTask worker decoding an image body off the main thread. */
 static void
 image_decode_worker(GTask *task, gpointer source, gpointer task_data,
                     GCancellable *cancellable)
@@ -539,6 +560,7 @@ image_decode_worker(GTask *task, gpointer source, gpointer task_data,
     g_task_return_pointer(task, d, g_free);
 }
 
+/* Applies a worker decode result to its image and fires callbacks unless cancelled. */
 static void
 on_image_decoded(GObject *src, GAsyncResult *res, gpointer user_data)
 {
@@ -567,6 +589,7 @@ on_image_decoded(GObject *src, GAsyncResult *res, gpointer user_data)
     ns_decode_job_free(job);
 }
 
+/* Image fetch completion: records status/CORS, then decodes inline or in a worker. */
 static void
 on_image_fetched(GObject *src, GAsyncResult *result, gpointer user_data)
 {
@@ -632,6 +655,7 @@ on_image_fetched(GObject *src, GAsyncResult *result, gpointer user_data)
     ns_image_fire_pending(pending);
 }
 
+/* True if a failed load may retry: under 3 attempts, transient status, backoff elapsed. */
 static gboolean
 ns_image_should_retry(const ns_image *img, gint64 now_us)
 {
@@ -653,6 +677,7 @@ ns_image_should_retry(const ns_image *img, gint64 now_us)
     return img->failed_at_us == 0 || now_us - img->failed_at_us >= wait_us;
 }
 
+/* Registers a pending callback and starts the async image fetch. */
 static void
 ns_image_cache_start_request(ns_image_cache *cache,
                              ns_image *img,
@@ -675,6 +700,7 @@ ns_image_cache_start_request(ns_image_cache *cache,
         policy, NULL, on_image_fetched, pending);
 }
 
+/* Returns the cached image for url, starting, retrying or refetching a load as needed. */
 ns_image *
 ns_image_cache_get(ns_image_cache *cache,
                    const char *url,
@@ -747,6 +773,7 @@ ns_image_cache_get(ns_image_cache *cache,
     return img;
 }
 
+/* Detaches callbacks registered with user_data so they never fire. */
 void
 ns_image_cache_cancel_cb(ns_image_cache *cache, gpointer user_data)
 {
@@ -760,6 +787,7 @@ ns_image_cache_cancel_cb(ns_image_cache *cache, gpointer user_data)
     }
 }
 
+/* Looks up a cached image without fetching, marking it used this generation. */
 ns_image *
 ns_image_cache_peek(ns_image_cache *cache, const char *url)
 {
@@ -769,6 +797,7 @@ ns_image_cache_peek(ns_image_cache *cache, const char *url)
     return img;
 }
 
+/* True for loaded videos or multi-frame animated images. */
 gboolean
 ns_image_is_animation(const ns_image *img)
 {
@@ -795,6 +824,7 @@ ns_image_anim_duration(const ns_image *img)
     return ns_image_is_animation(img) ? img->anim_total_ms / 1000.0 : 0.0;
 }
 
+/* Pushes the image's playback clock state into its MSE video stream. */
 static void
 image_sync_video_clock(const ns_image *img)
 {
@@ -810,6 +840,7 @@ image_sync_video_clock(const ns_image *img)
     ns_video_stream_set_clock(img->video, &clock);
 }
 
+/* Current playback position in ms, frozen when paused and wrapped when looping. */
 static int
 ns_image_anim_phase_ms(const ns_image *img, gint64 now_us)
 {
@@ -822,6 +853,7 @@ ns_image_anim_phase_ms(const ns_image *img, gint64 now_us)
     return (int)(elapsed_ms % img->anim_total_ms);
 }
 
+/* True if a non-looping animation has reached its end. */
 gboolean
 ns_image_anim_ended(const ns_image *img, gint64 now_us)
 {
@@ -829,6 +861,7 @@ ns_image_anim_ended(const ns_image *img, gint64 now_us)
            ns_image_anim_phase_ms(img, now_us) >= img->anim_total_ms;
 }
 
+/* Changes looping while preserving the current playback position. */
 void
 ns_image_anim_set_loop(ns_image *img, gboolean loop, gint64 now_us)
 {
@@ -847,6 +880,7 @@ ns_image_anim_position(const ns_image *img, gint64 now_us)
     return ns_image_anim_phase_ms(img, now_us) / 1000.0;
 }
 
+/* Pauses or resumes playback, preserving the current position. */
 void
 ns_image_anim_set_paused(ns_image *img, gboolean paused, gint64 now_us)
 {
@@ -862,6 +896,7 @@ ns_image_anim_set_paused(ns_image *img, gboolean paused, gint64 now_us)
     image_sync_video_clock(img);
 }
 
+/* Seeks playback to seconds, clamped or wrapped to the duration; bumps seek generation. */
 void
 ns_image_anim_seek(ns_image *img, double seconds, gint64 now_us)
 {
@@ -878,6 +913,7 @@ ns_image_anim_seek(ns_image *img, double seconds, gint64 now_us)
     image_sync_video_clock(img);
 }
 
+/* Shifts the start time of a playing animation by delta_us. */
 void
 ns_image_anim_shift(ns_image *img, gint64 delta_us)
 {
@@ -886,6 +922,7 @@ ns_image_anim_shift(ns_image *img, gint64 delta_us)
     image_sync_video_clock(img);
 }
 
+/* Shows the video frame or animation frame for phase; TRUE if the texture changed. */
 static gboolean
 ns_image_apply_phase(ns_image *img, int phase)
 {
@@ -921,6 +958,7 @@ ns_image_cache_tick(ns_image_cache *cache, gint64 now_us)
     return ns_image_cache_tick_collect(cache, now_us, NULL);
 }
 
+/* Advances all animations to now, collecting images whose frame changed. */
 gboolean
 ns_image_cache_tick_collect(ns_image_cache *cache, gint64 now_us,
                             GPtrArray *changed)
@@ -941,6 +979,7 @@ ns_image_cache_tick_collect(ns_image_cache *cache, gint64 now_us,
     return any;
 }
 
+/* True if any animation is playing or a video is waiting for data. */
 gboolean
 ns_image_cache_animating(const ns_image_cache *cache)
 {
@@ -969,6 +1008,7 @@ struct ns_image_decoding {
     ns_img_decoded decoded;
 };
 
+/* Decodes encoded bytes into a standalone decoding result; caller frees or inserts. */
 ns_image_decoding *
 ns_image_decode_encoded(const guchar *data, gsize len)
 {
@@ -985,6 +1025,7 @@ ns_image_decoding_free(ns_image_decoding *decoding)
     g_free(decoding);
 }
 
+/* Inserts a decode result under url unless present or empty; consumes decoding. */
 ns_image *
 ns_image_cache_insert_decoding(ns_image_cache *cache, const char *url,
                                ns_image_decoding *decoding)
@@ -1008,6 +1049,7 @@ ns_image_cache_insert_decoding(ns_image_cache *cache, const char *url,
     return img;
 }
 
+/* Installs a video stream as url's image, replacing any prior content; takes stream. */
 ns_image *
 ns_image_cache_insert_stream(ns_image_cache *cache, const char *url,
                              ns_video_stream *stream)
@@ -1041,6 +1083,7 @@ ns_image_cache_insert_stream(ns_image_cache *cache, const char *url,
     return img;
 }
 
+/* Decodes and inserts bytes under url, or returns the existing entry. */
 ns_image *
 ns_image_cache_insert_encoded(ns_image_cache *cache, const char *url,
                               const guchar *data, gsize len)
@@ -1058,6 +1101,7 @@ ns_image_cache_begin_generation(ns_image_cache *cache)
     if (cache) cache->gen++;
 }
 
+/* Purges least-recently-used images from older generations until under the 256 MiB budget. */
 void
 ns_image_cache_collect(ns_image_cache *cache)
 {
