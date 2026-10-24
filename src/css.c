@@ -35072,6 +35072,26 @@ css_parse_recording_media(const char *css, gssize len, const char *layer_name,
     return sh;
 }
 
+static int g_css_relayout_depth;
+static GPtrArray *g_evicted_sheets;
+
+/* Frees a sheet the caches dropped. A style pass may still hold it in its
+ * sheet list (a frame at another viewport re-parses the same URL), so during
+ * a pass it is kept until the outermost pass ends. */
+static void
+ns_cached_stylesheet_free(gpointer data)
+{
+    ns_css_stylesheet *sh = data;
+    if (!sh) return;
+    if (g_css_relayout_depth > 0) {
+        if (!g_evicted_sheets) g_evicted_sheets = g_ptr_array_new();
+        g_ptr_array_add(g_evicted_sheets, sh);
+        return;
+    }
+    sh->cached = FALSE;
+    ns_css_stylesheet_free(sh);
+}
+
 static GHashTable *g_style_el_cache;
 static GHashTable *g_merged_style_cache;
 static GHashTable *g_link_sheet_cache;
@@ -35084,10 +35104,7 @@ ns_style_el_cached_free(gpointer data)
     ns_style_el_cached *e = data;
     if (!e) return;
     g_free(e->css);
-    if (e->sheet) {
-        e->sheet->cached = FALSE;
-        ns_css_stylesheet_free(e->sheet);
-    }
+    ns_cached_stylesheet_free(e->sheet);
     if (e->media) g_ptr_array_unref(e->media);
     g_free(e);
 }
@@ -35140,22 +35157,11 @@ ns_merged_style_cached_free(gpointer data)
 {
     ns_merged_style_cached *e = data;
     if (!e) return;
-    if (e->sheet) {
-        e->sheet->cached = FALSE;
-        ns_css_stylesheet_free(e->sheet);
-    }
+    ns_cached_stylesheet_free(e->sheet);
     if (e->media) g_ptr_array_unref(e->media);
     g_free(e);
 }
 
-static void
-ns_cached_stylesheet_free(gpointer data)
-{
-    ns_css_stylesheet *sh = data;
-    if (!sh) return;
-    sh->cached = FALSE;
-    ns_css_stylesheet_free(sh);
-}
 
 static void
 ns_import_sheet_cached_free(gpointer data)
@@ -35202,8 +35208,6 @@ ns_merged_style_cache_trim(void)
     }
 }
 
-static int g_css_relayout_depth;
-
 void
 ns_css_relayout_enter(void)
 {
@@ -35214,6 +35218,10 @@ void
 ns_css_relayout_leave(void)
 {
     if (g_css_relayout_depth > 0) g_css_relayout_depth--;
+    if (g_css_relayout_depth > 0 || !g_evicted_sheets) return;
+    for (guint i = 0; i < g_evicted_sheets->len; i++)
+        ns_cached_stylesheet_free(g_ptr_array_index(g_evicted_sheets, i));
+    g_ptr_array_set_size(g_evicted_sheets, 0);
 }
 
 /* Empties all parsed stylesheet caches, e.g. after media preferences change. */
