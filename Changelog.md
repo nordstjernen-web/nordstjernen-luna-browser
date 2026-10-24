@@ -60,6 +60,12 @@ Significant changes in each release:
   display's frame times jitter around that value, so about every other
   frame was dropped and an animation ran at around 40 frames a second.
   The cap now allows a quarter frame of slack.
+* HTTPS connections no longer re-read the CA bundle each time on
+  distributions whose libcurl has a default CA path (Debian, Ubuntu).
+  libcurl caches the parsed CA store only when it comes from a CA file
+  alone, so every new connection re-parsed all ~150 certificates on its
+  handshake's critical path. The browser now clears the CA path next to
+  the bundle it sets.
 
 1.0.16:
 =======
