@@ -12,6 +12,14 @@ Significant changes in each release:
   is `subprojects/packagefiles/lexbor-named-charref-bound.patch`.
   Builds against a system lexbor need the same fix from their
   distribution.
+* Security: a module graph in which a dependency failed to load, and
+  other modules reached the failed module through an import cycle, no
+  longer crashes the page. The bundled quickjs-ng freed the failed module
+  while the cycle still pointed at it, and the next script that imported
+  into the graph used the freed memory. Such a module now stays
+  registered, and every later import of it, static or `import()`,
+  rejects with a `TypeError`. The patch is
+  `subprojects/packagefiles/quickjs-ng-module-resolve-failed.patch`.
 
 1.0.16:
 =======
