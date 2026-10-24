@@ -333,7 +333,7 @@ rdrv_run_actions(ns_page_session *s, const char *spec, int vw, int vh,
         if (!*a) continue;
         if (g_str_has_prefix(a, "click ")) {
             double x = 0, y = 0;
-            if (sscanf(a + 6, "%lf , %lf", &x, &y) != 2) continue;
+            if (!rdrv_point(s, a + 6, &x, &y)) continue;
             fprintf(stderr, "[headless] click %g,%g\n", x, y);
             char *h = ns_page_session_click(s, (int)x, (int)y, 0);
             g_free(h);
@@ -367,7 +367,7 @@ rdrv_run_actions(ns_page_session *s, const char *spec, int vw, int vh,
             g_free(text);
         } else if (g_str_has_prefix(a, "rightclick ")) {
             double x = 0, y = 0;
-            if (sscanf(a + 11, "%lf , %lf", &x, &y) != 2) continue;
+            if (!rdrv_point(s, a + 11, &x, &y)) continue;
             int prevented = 0;
             prevented = ns_page_session_contextmenu(s, (int)x, (int)y);
             fprintf(stderr, "[headless] rightclick %g,%g prevented=%d\n",

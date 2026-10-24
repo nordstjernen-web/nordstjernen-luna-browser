@@ -73,6 +73,9 @@ Significant changes in each release:
   the caches drop during a style pass is now freed when the pass ends.
   Linked sheets and `@import`ed sheets were both affected (1.0.14 to
   1.0.16).
+* Headless `--act`: `click` and `rightclick` now take a `sel=CSS` point,
+  as `docs/building.md` documents and `move` and `down` already did.
+  They used to ignore any point that was not `X,Y`.
 
 1.0.16:
 =======
