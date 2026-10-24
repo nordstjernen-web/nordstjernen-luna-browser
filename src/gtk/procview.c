@@ -23,6 +23,11 @@
 #endif
 
 #define NS_PROC_CARET_BLINK_US (530 * 1000)
+/* Page animations run at most at 60 fps. A 60 Hz display's frame times
+ * jitter around 1/60 s, so the cap allows a quarter frame of slack: a tick
+ * that comes a few microseconds early must not be dropped. */
+#define NS_PROC_ANIM_FRAME_US  (G_USEC_PER_SEC / 60)
+#define NS_PROC_ANIM_FRAME_SLACK_US (NS_PROC_ANIM_FRAME_US / 4)
 
 #ifndef G_OS_WIN32
 #include <sys/mman.h>
@@ -1181,8 +1186,9 @@ anim_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data)
     gint64 now = clock ? gdk_frame_clock_get_frame_time(clock) : 0;
     if (now <= 0) now = g_get_monotonic_time();
     present_video_layers(v, now);
-    gint64 interval = v->page_animating ? G_USEC_PER_SEC / 60
-                                         : NS_PROC_CARET_BLINK_US;
+    gint64 interval = v->page_animating
+                          ? NS_PROC_ANIM_FRAME_US - NS_PROC_ANIM_FRAME_SLACK_US
+                          : NS_PROC_CARET_BLINK_US;
     if (v->last_anim_frame_us > 0 && now - v->last_anim_frame_us < interval)
         return G_SOURCE_CONTINUE;
     v->last_anim_frame_us = now;
