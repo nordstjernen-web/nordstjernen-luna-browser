@@ -25,6 +25,12 @@ Significant changes in each release:
   linking the tree into a cycle that hung the page. An argument that is
   neither an `<option>` nor an `<optgroup>` throws `TypeError`, and adding
   an option before itself does nothing.
+* Security: Safe Browsing now checks every redirect hop of a page
+  navigation and the target of a form POST. A link to a clean URL that
+  redirected to a listed host used to load the listed page without a
+  warning, and a form posted to a listed host sent its data. The
+  navigation now stops at the hop that would reach the listed host,
+  without contacting it, and shows the warning page.
 
 1.0.16:
 =======

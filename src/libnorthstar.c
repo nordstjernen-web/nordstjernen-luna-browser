@@ -1626,6 +1626,21 @@ ns_browser_set_next_navigation(const char *referrer, int user_activated)
     g_pending_user_activated = user_activated != 0;
 }
 
+/* Builds the Safe Browsing warning page shown in place of a blocked URL. */
+static ns_browser *
+browser_open_blocked(const char *url, const char *host, int viewport_width,
+                     double viewport_height, int settle_ms)
+{
+    char *html = ns_safebrowsing_interstitial(url, host);
+    ns_node *doc = ns_html_parse(html, html ? (gssize)strlen(html) : 0);
+    g_free(html);
+    ns_browser *warning = browser_build_from_doc(doc, g_strdup(url),
+        viewport_width, viewport_height, settle_ms, FALSE,
+        NULL, NULL, NULL, g_strdup("UTF-8"), url, "text/html", NULL);
+    if (warning) warning->safebrowsing_interstitial = TRUE;
+    return warning;
+}
+
 /* Loads a URL (Safe Browsing, HTTPS-First, error pages) and builds the page browser. */
 static ns_browser *
 browser_open_common(const char *url, int viewport_width, double viewport_height,
@@ -1656,17 +1671,13 @@ browser_open_common(const char *url, int viewport_width, double viewport_height,
         return b;
     }
 
-    if (!body) {
+    /* A form POST is checked too: it would send its data to the host. */
+    {
         char *host = ns_url_host_from(url);
         if (host && ns_safebrowsing_blocked(host)) {
-            char *html = ns_safebrowsing_interstitial(url, host);
+            ns_browser *warning = browser_open_blocked(url, host,
+                viewport_width, viewport_height, settle_ms);
             g_free(host);
-            ns_node *doc = ns_html_parse(html, html ? (gssize)strlen(html) : 0);
-            g_free(html);
-            ns_browser *warning = browser_build_from_doc(doc, g_strdup(url),
-                viewport_width, viewport_height, settle_ms, FALSE,
-                NULL, NULL, NULL, g_strdup("UTF-8"), url, "text/html", NULL);
-            if (warning) warning->safebrowsing_interstitial = TRUE;
             return warning;
         }
         g_free(host);
@@ -1702,6 +1713,24 @@ browser_open_common(const char *url, int viewport_width, double viewport_height,
             : ns_engine_fetch_blocking(fetch_url, referrer, &err);
     }
     ns_net_set_navigation_fetch(FALSE, FALSE);
+    /* ns_fetch_sync stops at a redirect hop to a blocked host and reports
+     * that hop as the final URL, so a clean link cannot launder one. */
+    char *landed_host = resp && resp->final_url
+        ? ns_url_host_from(resp->final_url) : NULL;
+    if (landed_host && ns_safebrowsing_blocked(landed_host)) {
+        char *landed = g_strdup(resp->final_url);
+        ns_response_free(resp);
+        g_clear_error(&err);
+        g_free(file_url);
+        g_free(stripped_url);
+        g_free(https_url);
+        ns_browser *warning = browser_open_blocked(landed, landed_host,
+            viewport_width, viewport_height, settle_ms);
+        g_free(landed);
+        g_free(landed_host);
+        return warning;
+    }
+    g_free(landed_host);
     if (resp && !body && (resp->error || resp->status >= 400) &&
         (!resp->body || resp->body->len == 0)) {
         gboolean tls_failure = resp->error &&
