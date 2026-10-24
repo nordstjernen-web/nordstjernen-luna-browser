@@ -44333,7 +44333,17 @@ ns_select_add(JSContext *ctx, JSValueConst this_val,
     ns_node *sel = ns_unwrap_element_mut(this_val);
     if (!sel) return JS_UNDEFINED;
     ns_node *opt = ns_unwrap_element_mut(argv[0]);
-    if (!opt) return JS_UNDEFINED;
+    if (!opt || !(ns_node_is_element_named(opt, "option") ||
+                  ns_node_is_element_named(opt, "optgroup")))
+        return JS_ThrowTypeError(ctx, "HTMLSelectElement.add: argument 1 is "
+                                      "not an option or optgroup element");
+    /* Moving an ancestor of the select under it would link the tree into
+     * a cycle that every later ancestor walk spins on. */
+    for (const ns_node *a = sel; a; a = a->parent)
+        if (a == opt)
+            return ns_throw_dom_exception(ctx, "HierarchyRequestError", 3,
+                "HTMLSelectElement.add: the element is an ancestor of the "
+                "select");
     ns_js *_j = js_from_ctx(ctx);
     ns_node *before = NULL;
     if (argc >= 2 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
@@ -44353,6 +44363,7 @@ ns_select_add(JSContext *ctx, JSValueConst this_val,
                     "of the select");
         }
     }
+    if (before == opt) return JS_UNDEFINED;
     if (opt->parent) ns_node_remove(opt);
     if (before && before->parent) {
         ns_element_insert_before_single(_j, before->parent, opt, before);

@@ -20,6 +20,11 @@ Significant changes in each release:
   registered, and every later import of it, static or `import()`,
   rejects with a `TypeError`. The patch is
   `subprojects/packagefiles/quickjs-ng-module-resolve-failed.patch`.
+* Security: `select.add()` of an element that contains the select, such
+  as the `<option>` around it, throws `HierarchyRequestError` instead of
+  linking the tree into a cycle that hung the page. An argument that is
+  neither an `<option>` nor an `<optgroup>` throws `TypeError`, and adding
+  an option before itself does nothing.
 
 1.0.16:
 =======
