@@ -3,4 +3,4 @@
 url = https://github.com/lexbor/lexbor.git
 revision = 7e278c0188489bfce6b71ced0cc900cbb31e6244
 depth = 1
-diff_files = lexbor-conv-buffer-bound.patch
+diff_files = lexbor-conv-buffer-bound.patch, lexbor-named-charref-bound.patch

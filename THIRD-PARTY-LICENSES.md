@@ -354,6 +354,9 @@ and separable:
 
 - `subprojects/packagefiles/lexbor-conv-buffer-bound.patch` — a bounds
   check in lexbor's integer-to-string conversion (`core/conv.c`).
+- `subprojects/packagefiles/lexbor-named-charref-bound.patch` — grows
+  the HTML tokenizer's temporary buffer before a named character
+  reference is written into it (`html/tokenizer/state.c`).
 - `subprojects/packagefiles/quickjs-ng-windows-link.patch` — build-only:
   on Windows, drops the threads dependency and builds the `qjs` and
   `qjsc` tools without PIE.
