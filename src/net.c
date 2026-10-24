@@ -2338,8 +2338,16 @@ ns_net_apply_curl_tls(void *curl_handle)
         }
     }
 #endif
-    if (g_ca_bundle)
+    if (g_ca_bundle) {
         curl_easy_setopt(curl, CURLOPT_CAINFO, g_ca_bundle);
+#ifndef G_OS_WIN32
+        /* libcurl caches the parsed CA store across connections only when
+         * the trust anchors come from a CA file alone; a distro libcurl
+         * built with a default CA path (Debian, Ubuntu) would otherwise
+         * re-read the whole bundle for every new TLS connection. */
+        curl_easy_setopt(curl, CURLOPT_CAPATH, NULL);
+#endif
+    }
 #ifdef G_OS_WIN32
     curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
 #endif
