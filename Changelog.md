@@ -41,6 +41,12 @@ Significant changes in each release:
   stylesheet pinned by hash on a third-party CDN was applied whatever it
   contained. A sheet that does not match is now skipped, logged as
   "SRI mismatch: stylesheet", and kept out of CSSOM.
+* Security: nested blocks whose `min-width` or `max-width` is an
+  intrinsic keyword (`min-content`, `max-content`, `fit-content`) no
+  longer take exponential time to lay out. Each level measured its
+  subtree twice, so 24 nested `min-width: min-content` blocks in a float
+  took 10 seconds and a few more levels stalled the page for minutes.
+  The measurement is now reused; layout results are unchanged.
 
 1.0.16:
 =======
