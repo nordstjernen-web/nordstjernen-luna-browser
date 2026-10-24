@@ -1076,6 +1076,7 @@ ns_engine_load_keyframes(ns_anim *anim, ns_node *doc, const char *base_url,
                          GHashTable *css_cache)
 {
     if (!anim) return;
+    ns_css_relayout_enter();
     GPtrArray *sheets = g_ptr_array_new();
     ns_engine_collect_stylesheets(doc, base_url, sheets, NULL, css_cache);
     for (guint i = 0; i < sheets->len; i++) {
@@ -1085,6 +1086,7 @@ ns_engine_load_keyframes(ns_anim *anim, ns_node *doc, const char *base_url,
     for (guint i = 0; i < sheets->len; i++)
         ns_css_stylesheet_free(g_ptr_array_index(sheets, i));
     g_ptr_array_free(sheets, TRUE);
+    ns_css_relayout_leave();
 }
 
 void

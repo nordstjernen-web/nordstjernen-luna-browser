@@ -66,6 +66,13 @@ Significant changes in each release:
   alone, so every new connection re-parsed all ~150 certificates on its
   handshake's critical path. The browser now clears the CA path next to
   the bundle it sets.
+* Security: a page and a frame that load the same stylesheet no longer
+  crash the browser. The stylesheet caches re-parse a sheet when the
+  frame's viewport changes which of its media queries match, and the
+  re-parse freed the copy the page's style pass was still using. A sheet
+  the caches drop during a style pass is now freed when the pass ends.
+  Linked sheets and `@import`ed sheets were both affected (1.0.14 to
+  1.0.16).
 
 1.0.16:
 =======
