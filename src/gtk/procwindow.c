@@ -1090,10 +1090,6 @@ pw_set_status(ProcWindow *pw, const char *text)
 {
     if (pw->status_timer)
         g_source_remove(pw->status_timer);
-    GtkSettings *settings = gtk_settings_get_default();
-    for (int i = 0; settings && i < 2; i++)
-        if (pw->theme_watch[i])
-            g_signal_handler_disconnect(settings, pw->theme_watch[i]);
     g_free(pw->status_base);
     pw->status_base = g_strdup(text ? text : "");
     pw_render_status(pw);
