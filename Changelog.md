@@ -36,6 +36,11 @@ Significant changes in each release:
   host that once sent `Strict-Transport-Security` was forced to HTTPS,
   and refused the certificate-warning override, for as long as its line
   stayed in the file.
+* Security: `<link rel=stylesheet integrity=...>` is now checked. Only
+  scripts were verified against their Subresource Integrity hash, so a
+  stylesheet pinned by hash on a third-party CDN was applied whatever it
+  contained. A sheet that does not match is now skipped, logged as
+  "SRI mismatch: stylesheet", and kept out of CSSOM.
 
 1.0.16:
 =======
