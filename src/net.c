@@ -14,6 +14,7 @@
 #include "ext.h"
 #include "html.h"
 #include "image.h"
+#include "safebrowsing.h"
 #include "security.h"
 
 #include <curl/curl.h>
@@ -6171,6 +6172,18 @@ ns_fetch_sync(const char *url, const char *top_url, const char *method,
             resp->error = g_strdup("redirect to a disallowed URL blocked");
             g_free(next);
             break;
+        }
+        /* Stop a navigation before it reaches a Safe Browsing listed host;
+         * the caller shows the warning page for the hop in final_url. */
+        if (navigation & NS_NAV_TOP_LEVEL) {
+            g_autofree char *next_host = ns_url_host_from(next);
+            if (next_host && ns_safebrowsing_blocked(next_host)) {
+                g_free(resp->error);
+                resp->error = g_strdup("redirect to a blocked site stopped");
+                g_free(resp->final_url);
+                resp->final_url = next;
+                break;
+            }
         }
         if (ns_request_is_gated(top_url, NULL, dest)) {
             char *upgraded = NULL;
